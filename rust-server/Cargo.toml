@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.8.1"
+axum = "0.8.4"
 axum-extra = "0.10.0"
 tokio = { version = "1.43.0", features = ["full"] }
 tower = "0.5.2"
@@ -13,17 +13,15 @@ serde_with = "3.12.0"
 time = "0.3.37"
 validator = "0.20.0"
 jsonwebtoken = "9.3.0"
-# rbatis
-rbs = { version = "4.5.25" }
-rbatis = { version = "4.5.49" }
-rbdc-pg = { version = "4.5.17" }
+# sqlx
+sqlx = { version = "0.8.3", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "time", "uuid"] }
 
 chrono = "0.4.39"
 image = "0.25.5"
 ffmpeg-cli = "0.1.0"
 ammonia = "4.0.0"
 ua-parser = "0.2.0"
-uuid = { version = "1.12.1", features = ["v4"] }
+uuid = { version = "1.12.1", features = ["serde", "v4", "v7"] }
 mime = "0.3.17"
 serde_json = "1.0.137"
 
@@ -35,3 +33,16 @@ config = "0.15.6"
 bb8 = "0.9.0"
 bb8-redis = "0.20.0"
 redis = "0.28.2"
+async-trait = "0.1.85"
+thiserror = "2.0.11"
+
+#bcrypt
+bcrypt = "0.16.0"
+
+#crypto
+rand = "0.8.5"
+base64 = "0.22.1"
+sha2 = "0.10"
+
+#user_agent_parser
+user-agent-parser = "0.3.6"

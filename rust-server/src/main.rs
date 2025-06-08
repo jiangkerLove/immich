@@ -1,9 +1,11 @@
-use axum::Router;
+use axum::routing::post;
+use axum::{middleware, Router};
 use config::{Case, Config};
 use dotenv::dotenv;
 use rust_server::app_state::AppState;
+use rust_server::controllers::auth::login;
 use rust_server::dtos::env_dto::EnvDto;
-use std::sync::Arc;
+use rust_server::middleware::user_agent;
 
 #[tokio::main]
 async fn main() {
@@ -17,13 +19,12 @@ async fn main() {
         .try_deserialize()
         .unwrap();
 
-    let app_state = Arc::new(AppState::new(settings).await);
+    let app_state = AppState::new(settings).await;
     let app = Router::new()
-        // .route_layer(middleware::from_fn_with_state(Arc::clone(&app_state), auth::auth))
+        .route("/api/auth/login", post(login))
+        .route_layer(middleware::from_fn(user_agent::user_agent))
         // .route_layer(middleware::from_fn(cors::cors))
         .with_state(app_state);
-
-
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();

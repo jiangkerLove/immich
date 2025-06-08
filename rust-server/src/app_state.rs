@@ -1,14 +1,18 @@
-use bb8::Pool;
+use std::time::Duration;
+use bb8::Pool as RedisPool;
 use crate::dtos::env_dto::EnvDto;
 use bb8_redis::RedisConnectionManager;
-use rbatis::RBatis;
+use sqlx::{Pool as SqlPool, Postgres};
+use sqlx::postgres::PgPoolOptions;
+use crate::service::auth::AuthService;
 
 pub const OFFSET_TIME: i32 = 8 * 60 * 60;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub rb: RBatis,
-    pub redis_pool: Pool<RedisConnectionManager>,
+    pub sql_pool: SqlPool<Postgres>,
+    pub redis_pool: RedisPool<RedisConnectionManager>,
+    pub auth_service: AuthService,
 }
 fn is_none_or_empty(opt: &Option<String>) -> bool {
     opt.as_deref().map_or(true, |s| s.is_empty())
@@ -27,10 +31,9 @@ impl AppState {
             format!("redis://{}:{}", settings.redis_hostname, settings.redis_port)
         };
         let manager = RedisConnectionManager::new(redis_url).unwrap();
-        let pool = Pool::builder().build(manager).await.unwrap();
+        let redis_pool = RedisPool::builder().build(manager).await.unwrap();
 
-        let batis = RBatis::new();
-        let string = format!(
+        let db_connection_str = format!(
             "postgres://{}:{}@{}:{}/{}",
             settings.db_username,
             settings.db_password,
@@ -38,10 +41,18 @@ impl AppState {
             settings.db_port,
             settings.db_database_name,
         );
-        batis.link(rbdc_pg::driver::PgDriver {}, string.as_str()).await.unwrap();
+
+        // set up connection pool
+        let sql_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(Duration::from_secs(3))
+            .connect(&db_connection_str.as_str())
+            .await
+            .expect("can't connect to database");
         AppState {
-            rb: batis,
-            redis_pool: pool,
+            sql_pool,
+            redis_pool,
+            auth_service: AuthService::new(),
         }
     }
 }
