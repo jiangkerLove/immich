@@ -6,7 +6,7 @@ use axum::http::{StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use user_agent_parser::UserAgentParser;
-use crate::dtos::auth::LoginDetails;
+use crate::dtos::auth_dto::LoginDetails;
 
 pub async fn user_agent(mut req: Request, next: Next) -> Result<Response, StatusCode> {
     let path = req.uri().path();
@@ -50,7 +50,7 @@ fn paras_user_agent(req: &Request) -> LoginDetails {
 
     let user_agent = req.headers()
         .get(http::header::USER_AGENT)
-        .and_then(|header| header.to_str().ok()).unwrap();
+        .and_then(|header| header.to_str().ok()).unwrap_or("");
 
     let ua_parser = UserAgentParser::from_path("regexes.yaml").unwrap();
     let os_str = ua_parser.parse_os(user_agent).name.unwrap_or(Cow::from(""));

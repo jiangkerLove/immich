@@ -10,13 +10,12 @@ tokio = { version = "1.43.0", features = ["full"] }
 tower = "0.5.2"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_with = "3.12.0"
-time = "0.3.37"
 validator = "0.20.0"
 jsonwebtoken = "9.3.0"
 # sqlx
-sqlx = { version = "0.8.3", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "time", "uuid"] }
+sqlx = { version = "0.8.3", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "chrono"] }
 
-chrono = "0.4.39"
+chrono = { version = "0.4.39", features = ["serde"] }
 image = "0.25.5"
 ffmpeg-cli = "0.1.0"
 ammonia = "4.0.0"

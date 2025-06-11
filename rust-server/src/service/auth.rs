@@ -1,8 +1,9 @@
 use sqlx::{Pool, Postgres};
-use crate::db::sessions::NewSession;
-use crate::db::users::UserPO;
-use crate::dtos::auth::{LoginCredentialDto, LoginDetails, LoginResponseDto};
-use crate::dtos::response::{ErrorDto};
+use crate::db::sessions::{AuthSession, NewSession, SessionPO};
+use crate::db::users::{AuthUser, UserPO};
+use crate::dtos::auth_dto::{AuthDto, LoginCredentialDto, LoginDetails, LoginResponseDto};
+use crate::dtos::response_dto::{ErrorDto};
+use crate::dtos::user_dto::UserAdminResponseDto;
 use crate::ext::bcrypt::BcryptCompare;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
 
@@ -33,6 +34,36 @@ impl AuthService {
         }
     }
 
+    pub async fn get_me(&self, pool: &Pool<Postgres>, auth: &AuthDto) -> Result<UserAdminResponseDto, ErrorDto> {
+        let user_opt = UserPO::select_full_by_id(pool, &auth.user.id).await.map_err(ErrorDto::from)?;
+        match user_opt {
+            None => {
+                Err(ErrorDto::ServerError("User not found".to_string()))
+            }
+            Some(user) => {
+                Ok(UserAdminResponseDto {
+                    id: String::from(user.id),
+                    email: user.email,
+                    name: user.name,
+                    profile_image_path: user.profile_image_path,
+                    avatar_color: user.avatar_color.unwrap_or("".to_string()),
+                    profile_changed_at: user.profile_changed_at,
+                    storage_label: user.storage_label.unwrap_or("".to_string()),
+                    should_change_password: user.should_change_password,
+                    is_admin: user.is_admin,
+                    created_at: user.created_at,
+                    deleted_at: user.deleted_at,
+                    updated_at: user.updated_at,
+                    oauth_id: user.oauth_id,
+                    quota_size_in_bytes: user.quota_size_in_bytes,
+                    quota_usage_in_bytes: user.quota_usage_in_bytes,
+                    status: user.status.as_str().to_string(),
+                    license: None,
+                })
+            }
+        }
+    }
+
     async fn create_login_response(&self, pool: &Pool<Postgres>, user_po: UserPO, login_details: &LoginDetails) -> Result<LoginResponseDto, ErrorDto> {
         let token = random_bytes_as_text(32);
         let hash_token = hash_sha256(&token);
@@ -44,7 +75,7 @@ impl AuthService {
             user_id: user_po.id.clone(),
         };
 
-        let _ = NewSession::insert(pool, &session).await.map_err(ErrorDto::from)?;
+        let _ = session.insert(pool).await.map_err(ErrorDto::from)?;
 
         Ok(LoginResponseDto {
             access_token: token,
@@ -55,5 +86,31 @@ impl AuthService {
             profile_image_path: user_po.profile_image_path.clone(),
             should_change_password: user_po.should_change_password,
         })
+    }
+
+    pub(crate) async fn validate_session(&self, pool: &Pool<Postgres>, token_value: &String) -> Result<AuthDto, ErrorDto> {
+        let token = hash_sha256(token_value.as_str());
+        let session_opt = SessionPO::query_by_token(pool, &token).await.map_err(ErrorDto::from)?;
+        match session_opt {
+            None => {
+                Err(ErrorDto::Unauthorized(String::from("Authentication required")))
+            }
+            Some(session) => {
+                let auth_user = AuthUser::select_user_by_id(pool, &session.user_id).await.map_err(ErrorDto::from)?;
+                match auth_user {
+                    None => {
+                        Err(ErrorDto::Unauthorized(String::from("Authentication required")))
+                    }
+                    Some(user) => {
+                        Ok(AuthDto {
+                            user,
+                            api_key: None,
+                            session: AuthSession { id: "".to_string(), has_elevated_permission: false }.into(),
+                            shared_link: None,
+                        })
+                    }
+                }
+            }
+        }
     }
 }

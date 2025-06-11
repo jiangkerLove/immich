@@ -3,6 +3,10 @@ use axum::http::Response;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::db::api_key::AuthApiKey;
+use crate::db::sessions::AuthSession;
+use crate::db::shared_links::AuthSharedLink;
+use crate::db::users::AuthUser;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +24,7 @@ pub struct LoginCredentialDto {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginResponseDto {
     pub access_token: String,
     pub user_id: Uuid,
@@ -28,6 +33,14 @@ pub struct LoginResponseDto {
     pub is_admin: bool,
     pub profile_image_path: String,
     pub should_change_password: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuthDto {
+    pub user: AuthUser,
+    pub api_key: Option<AuthApiKey>,
+    pub session: Option<AuthSession>,
+    pub shared_link: Option<AuthSharedLink>,
 }
 
 impl IntoResponse for LoginResponseDto {

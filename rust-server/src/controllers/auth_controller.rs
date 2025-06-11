@@ -1,10 +1,16 @@
 use crate::app_state::AppState;
-use crate::dtos::auth::{LoginCredentialDto, LoginDetails, LoginResponseDto};
-use crate::dtos::response::ErrorDto;
+use crate::dtos::auth_dto::{LoginCredentialDto, LoginDetails, LoginResponseDto};
+use crate::dtos::response_dto::ErrorDto;
 use axum::extract::State;
-use axum::{Extension, Json};
+use axum::routing::post;
+use axum::{Extension, Json, Router};
 
-pub async fn login(
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/auth/login", post(login))
+}
+
+async fn login(
     State(state): State<AppState>,
     Extension(login_details): Extension<LoginDetails>,
     Json(login_credential): Json<LoginCredentialDto>,

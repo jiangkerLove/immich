@@ -1,3 +1,4 @@
 pub mod env_dto;
-pub mod auth;
-pub mod response;
+pub mod auth_dto;
+pub mod response_dto;
+pub mod user_dto;

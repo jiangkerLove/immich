@@ -18,6 +18,10 @@ pub enum ErrorDto {
     ServerError(String),
 }
 
+pub fn handler_err(error_dto: ErrorDto) -> Response {
+    error_dto.into_response()
+}
+
 impl IntoResponse for ErrorDto {
     fn into_response(self) -> Response {
         let (code, msg, error) = match self {
