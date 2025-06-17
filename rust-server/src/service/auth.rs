@@ -1,11 +1,13 @@
-use sqlx::{Pool, Postgres};
 use crate::db::sessions::{AuthSession, NewSession, SessionPO};
+use crate::db::user_metadata::{UserMetadataKey, UserMetadataPO, UserPreferencePO};
 use crate::db::users::{AuthUser, UserPO};
 use crate::dtos::auth_dto::{AuthDto, LoginCredentialDto, LoginDetails, LoginResponseDto};
-use crate::dtos::response_dto::{ErrorDto};
+use crate::dtos::response_dto::ErrorDto;
 use crate::dtos::user_dto::UserAdminResponseDto;
+use crate::dtos::user_preferences_response_dto::UserPreferenceResponseDto;
 use crate::ext::bcrypt::BcryptCompare;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
+use sqlx::{Pool, Postgres};
 
 #[derive(Clone)]
 pub struct AuthService {}
@@ -60,6 +62,20 @@ impl AuthService {
                     status: user.status.as_str().to_string(),
                     license: None,
                 })
+            }
+        }
+    }
+
+    pub async fn get_me_preferences(&self, pool: &Pool<Postgres>, auth: &AuthDto) -> Result<UserPreferenceResponseDto, ErrorDto> {
+        let mut user_meta = UserMetadataPO::get_meta_data_by_uid(pool, &auth.user.id).await?;
+        let index_opt = user_meta.iter().position(|x| { x.key == UserMetadataKey::PREFERENCES.as_str() });
+        match index_opt {
+            None => {
+                Ok(UserPreferencePO::default().into())
+            }
+            Some(index) => {
+                let po = user_meta.remove(index);
+                Ok(po.value.0.into())
             }
         }
     }
