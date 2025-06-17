@@ -7,18 +7,21 @@ use crate::dtos::user_dto::UserAdminResponseDto;
 use crate::dtos::user_preferences_response_dto::UserPreferenceResponseDto;
 use crate::ext::bcrypt::BcryptCompare;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
-use sqlx::{Pool, Postgres};
 
 #[derive(Clone)]
-pub struct AuthService {}
+pub struct AuthService {
+    db_pool: sqlx::PgPool,
+}
 
 impl AuthService {
-    pub fn new() -> AuthService {
-        AuthService {}
+    pub fn new(db_pool: sqlx::PgPool) -> AuthService {
+        AuthService {
+            db_pool,
+        }
     }
 
-    pub async fn login(&self, pool: &Pool<Postgres>, login_credential: &LoginCredentialDto, login_details: &LoginDetails) -> Result<LoginResponseDto, ErrorDto> {
-        let user_option = UserPO::select_full_by_email(pool, &login_credential.email).await.map_err(ErrorDto::from)?;
+    pub async fn login(&self, login_credential: &LoginCredentialDto, login_details: &LoginDetails) -> Result<LoginResponseDto, ErrorDto> {
+        let user_option = UserPO::select_full_by_email(&self.db_pool, &login_credential.email).await.map_err(ErrorDto::from)?;
         match user_option {
             None => {
                 Err(ErrorDto::Unauthorized(String::from("Incorrect email or password")))
@@ -28,7 +31,7 @@ impl AuthService {
                     .compare_bcrypt(user_po.password.as_str())
                     .is_ok_and(|ok| ok);
                 if is_valid {
-                    self.create_login_response(pool, user_po, login_details).await
+                    self.create_login_response(user_po, login_details).await
                 } else {
                     Err(ErrorDto::Unauthorized(String::from("Incorrect email or password")))
                 }
@@ -36,8 +39,8 @@ impl AuthService {
         }
     }
 
-    pub async fn get_me(&self, pool: &Pool<Postgres>, auth: &AuthDto) -> Result<UserAdminResponseDto, ErrorDto> {
-        let user_opt = UserPO::select_full_by_id(pool, &auth.user.id).await.map_err(ErrorDto::from)?;
+    pub async fn get_me(&self, auth: &AuthDto) -> Result<UserAdminResponseDto, ErrorDto> {
+        let user_opt = UserPO::select_full_by_id(&self.db_pool, &auth.user.id).await.map_err(ErrorDto::from)?;
         match user_opt {
             None => {
                 Err(ErrorDto::ServerError("User not found".to_string()))
@@ -66,8 +69,8 @@ impl AuthService {
         }
     }
 
-    pub async fn get_me_preferences(&self, pool: &Pool<Postgres>, auth: &AuthDto) -> Result<UserPreferenceResponseDto, ErrorDto> {
-        let mut user_meta = UserMetadataPO::get_meta_data_by_uid(pool, &auth.user.id).await?;
+    pub async fn get_me_preferences(&self, auth: &AuthDto) -> Result<UserPreferenceResponseDto, ErrorDto> {
+        let mut user_meta = UserMetadataPO::get_meta_data_by_uid(&self.db_pool, &auth.user.id).await?;
         let index_opt = user_meta.iter().position(|x| { x.key == UserMetadataKey::PREFERENCES.as_str() });
         match index_opt {
             None => {
@@ -80,7 +83,7 @@ impl AuthService {
         }
     }
 
-    async fn create_login_response(&self, pool: &Pool<Postgres>, user_po: UserPO, login_details: &LoginDetails) -> Result<LoginResponseDto, ErrorDto> {
+    async fn create_login_response(&self, user_po: UserPO, login_details: &LoginDetails) -> Result<LoginResponseDto, ErrorDto> {
         let token = random_bytes_as_text(32);
         let hash_token = hash_sha256(&token);
 
@@ -91,7 +94,7 @@ impl AuthService {
             user_id: user_po.id.clone(),
         };
 
-        let _ = session.insert(pool).await.map_err(ErrorDto::from)?;
+        let _ = session.insert(&self.db_pool).await.map_err(ErrorDto::from)?;
 
         Ok(LoginResponseDto {
             access_token: token,
@@ -104,15 +107,15 @@ impl AuthService {
         })
     }
 
-    pub(crate) async fn validate_session(&self, pool: &Pool<Postgres>, token_value: &String) -> Result<AuthDto, ErrorDto> {
+    pub(crate) async fn validate_session(&self, token_value: &String) -> Result<AuthDto, ErrorDto> {
         let token = hash_sha256(token_value.as_str());
-        let session_opt = SessionPO::query_by_token(pool, &token).await.map_err(ErrorDto::from)?;
+        let session_opt = SessionPO::query_by_token(&self.db_pool, &token).await.map_err(ErrorDto::from)?;
         match session_opt {
             None => {
                 Err(ErrorDto::Unauthorized(String::from("Authentication required")))
             }
             Some(session) => {
-                let auth_user = AuthUser::select_user_by_id(pool, &session.user_id).await.map_err(ErrorDto::from)?;
+                let auth_user = AuthUser::select_user_by_id(&self.db_pool, &session.user_id).await.map_err(ErrorDto::from)?;
                 match auth_user {
                     None => {
                         Err(ErrorDto::Unauthorized(String::from("Authentication required")))

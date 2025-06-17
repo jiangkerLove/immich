@@ -29,7 +29,7 @@ pub async fn auth(State(app_state): State<AppState>, mut req: Request, next: Nex
                     let cookies = parse_immich_cookies(cookie);
 
                     if let Some(token) = cookies.get(&ImmichCookie::AccessToken) {
-                        let auth_dto_opt = app_state.auth_service.validate_session(&app_state.sql_pool, &token).await.map_err(ErrorDto::from);
+                        let auth_dto_opt = app_state.auth_service.validate_session(&token).await.map_err(ErrorDto::from);
                         match auth_dto_opt {
                             Ok(auth_dto) => {
                                 req.extensions_mut().insert(auth_dto);

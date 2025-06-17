@@ -50,9 +50,9 @@ impl AppState {
             .await
             .expect("can't connect to database");
         AppState {
-            sql_pool,
+            sql_pool: sql_pool.clone(),
             redis_pool,
-            auth_service: AuthService::new(),
+            auth_service: AuthService::new(sql_pool),
         }
     }
 }
