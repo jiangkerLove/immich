@@ -5,14 +5,14 @@ use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NewUserPO {
+pub struct NewUserDb {
     pub email: String,
     pub password: String,
     pub is_admin: bool,
 }
 
 #[derive(Debug, FromRow)]
-pub struct UserPO {
+pub struct UserDb {
     pub id: Uuid,
     pub created_at: DateTime<Utc>,
     pub profile_image_path: String,
@@ -36,7 +36,7 @@ pub struct UserPO {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct AuthUser {
+pub struct AuthUserDb {
     pub id: Uuid,
     pub is_admin: bool,
     pub name: String,
@@ -45,8 +45,8 @@ pub struct AuthUser {
     pub quota_size_in_bytes: Option<i64>,
 }
 
-impl UserPO {
-    pub async fn select_full_by_email(pool: &Pool<Postgres>, user_email: &String) -> Result<Option<UserPO>, sqlx::Error> {
+impl UserDb {
+    pub async fn select_full_by_email(pool: &Pool<Postgres>, user_email: &String) -> Result<Option<UserDb>, sqlx::Error> {
         let maybe_user = sqlx::query_as::<_, Self>(
             r#"
                     SELECT
@@ -76,7 +76,7 @@ impl UserPO {
         Ok(maybe_user)
     }
 
-    pub async fn select_full_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<UserPO>, sqlx::Error> {
+    pub async fn select_full_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<UserDb>, sqlx::Error> {
         let maybe_user = sqlx::query_as::<_, Self>(
             r#"
                     SELECT
@@ -107,8 +107,8 @@ impl UserPO {
     }
 }
 
-impl AuthUser {
-    pub async fn select_user_by_id(pool: &Pool<Postgres>, uuid: &Uuid) -> Result<Option<AuthUser>, sqlx::Error> {
+impl AuthUserDb {
+    pub async fn select_user_by_id(pool: &Pool<Postgres>, uuid: &Uuid) -> Result<Option<AuthUserDb>, sqlx::Error> {
         let maybe_user = sqlx::query_as::<_, Self>(
             r#"
                     SELECT

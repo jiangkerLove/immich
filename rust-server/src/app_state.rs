@@ -1,6 +1,6 @@
 use std::time::Duration;
 use bb8::Pool as RedisPool;
-use crate::dtos::env_dto::EnvDto;
+use crate::models::dto::env::EnvDto;
 use bb8_redis::RedisConnectionManager;
 use sqlx::{Pool as SqlPool, Postgres};
 use sqlx::postgres::PgPoolOptions;

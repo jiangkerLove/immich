@@ -6,7 +6,7 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserAdminResponseDto {
+pub struct UserAdminResponse {
     pub id: String,
     pub email: String,
     pub name: String,
@@ -26,7 +26,7 @@ pub struct UserAdminResponseDto {
     pub license: Option<String>,
 }
 
-impl IntoResponse for UserAdminResponseDto {
+impl IntoResponse for UserAdminResponse {
     fn into_response(self) -> Response<Body> {
         Response::new(Body::from(serde_json::to_string(&self).unwrap()))
     }

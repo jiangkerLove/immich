@@ -1,4 +1,4 @@
-use crate::dtos::response_dto::ErrorDto;
+use crate::models::response::response::ErrorResp;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Pool, Postgres};
@@ -238,7 +238,7 @@ impl Default for CastPO {
 
 
 impl UserMetadataPO {
-    pub async fn get_meta_data_by_uid(pool: &Pool<Postgres>, id: &Uuid) -> Result<Vec<UserMetadataPO>, ErrorDto> {
+    pub async fn get_meta_data_by_uid(pool: &Pool<Postgres>, id: &Uuid) -> Result<Vec<UserMetadataPO>, ErrorResp> {
         let maybe_user = sqlx::query_as::<_, Self>(
             r#"
                     SELECT

@@ -2,7 +2,7 @@ use axum::{middleware, Router};
 use config::{Case, Config};
 use dotenv::dotenv;
 use rust_server::app_state::AppState;
-use rust_server::dtos::env_dto::EnvDto;
+use rust_server::models::dto::env::EnvDto;
 use rust_server::middleware::{auth, user_agent};
 use rust_server::routes::{auth as auth_routes, user as user_routes};
 

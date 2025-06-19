@@ -4,7 +4,7 @@ use serde_json::json;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum ErrorDto {
+pub enum ErrorResp {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
@@ -18,17 +18,17 @@ pub enum ErrorDto {
     ServerError(String),
 }
 
-pub fn handler_err(error_dto: ErrorDto) -> Response {
+pub fn handler_err(error_dto: ErrorResp) -> Response {
     error_dto.into_response()
 }
 
-impl IntoResponse for ErrorDto {
+impl IntoResponse for ErrorResp {
     fn into_response(self) -> Response {
         let (code, msg, error) = match self {
-            ErrorDto::Unauthorized(err) => (StatusCode::UNAUTHORIZED, err, "Unauthorized"),
-            ErrorDto::ReqParamError(err) => (StatusCode::BAD_REQUEST, err, ""),
-            ErrorDto::DatabaseError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string(), ""),
-            ErrorDto::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err, ""),
+            ErrorResp::Unauthorized(err) => (StatusCode::UNAUTHORIZED, err, "Unauthorized"),
+            ErrorResp::ReqParamError(err) => (StatusCode::BAD_REQUEST, err, ""),
+            ErrorResp::DatabaseError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string(), ""),
+            ErrorResp::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err, ""),
         };
         (
             code,

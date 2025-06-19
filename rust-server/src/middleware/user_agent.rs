@@ -6,7 +6,7 @@ use axum::http::{StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use user_agent_parser::UserAgentParser;
-use crate::dtos::auth_dto::LoginDetails;
+use crate::models::request::auth::LoginReq;
 
 pub async fn user_agent(mut req: Request, next: Next) -> Result<Response, StatusCode> {
     let path = req.uri().path();
@@ -23,7 +23,7 @@ pub async fn user_agent(mut req: Request, next: Next) -> Result<Response, Status
     }
 }
 
-fn paras_user_agent(req: &Request) -> LoginDetails {
+fn paras_user_agent(req: &Request) -> LoginReq {
     let addr_ip = if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
         addr.ip().to_string()
     } else {
@@ -55,7 +55,7 @@ fn paras_user_agent(req: &Request) -> LoginDetails {
     let ua_parser = UserAgentParser::from_path("regexes.yaml").unwrap();
     let os_str = ua_parser.parse_os(user_agent).name.unwrap_or(Cow::from(""));
     let device_type = ua_parser.parse_product(user_agent).name.unwrap_or(Cow::from(""));
-    LoginDetails {
+    LoginReq {
         client_ip,
         is_secure,
         device_type: device_type.to_string(),

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
-pub struct AuthSharedLink {
+pub struct AuthSharedLinkDb {
     pub id: String,
     #[sqlx(default)]
     pub expires_at: Option<DateTime<Utc>>,

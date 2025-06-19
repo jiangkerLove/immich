@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::db::auth_permission::Permission;
+use crate::models::db::auth_permission::Permission;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthApiKey {

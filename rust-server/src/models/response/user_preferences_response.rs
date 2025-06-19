@@ -1,12 +1,12 @@
-use crate::db::user_metadata::UserPreferencePO;
+use crate::models::db::user_metadata::UserPreferencePO;
 use axum::body::Body;
 use axum::http::Response;
 use axum::response::IntoResponse;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserPreferenceResponseDto {
+pub struct UserPreferenceResponse {
     pub folders: FoldersResponse,
     pub memories: MemoriesResponse,
     pub people: PeopleResponse,
@@ -18,9 +18,9 @@ pub struct UserPreferenceResponseDto {
     pub purchase: PurchaseResponse,
 }
 
-impl From<UserPreferencePO> for UserPreferenceResponseDto {
+impl From<UserPreferencePO> for UserPreferenceResponse {
     fn from(po: UserPreferencePO) -> Self {
-        UserPreferenceResponseDto {
+        UserPreferenceResponse {
             folders: FoldersResponse {
                 enabled: po.folders.enabled,
                 sidebar_web: po.folders.sidebar_web,
@@ -60,47 +60,47 @@ impl From<UserPreferencePO> for UserPreferenceResponseDto {
     }
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FoldersResponse {
     pub enabled: bool,
     pub sidebar_web: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoriesResponse {
     pub enabled: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeopleResponse {
     pub enabled: bool,
     pub sidebar_web: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingsResponse {
     pub enabled: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedLinksResponse {
     pub enabled: bool,
     pub sidebar_web: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagsResponse {
     pub enabled: bool,
     pub sidebar_web: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailNotificationsResponse {
     pub enabled: bool,
@@ -108,21 +108,21 @@ pub struct EmailNotificationsResponse {
     pub album_update: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadResponse {
     pub archive_size: i64,
     pub include_embedded_videos: bool,
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PurchaseResponse {
     pub show_support_badge: bool,
     pub hide_buy_button_until: String,
 }
 
-impl IntoResponse for UserPreferenceResponseDto {
+impl IntoResponse for UserPreferenceResponse {
     fn into_response(self) -> Response<Body> {
         Response::new(Body::from(serde_json::to_string(&self).unwrap()))
     }

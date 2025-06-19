@@ -5,7 +5,7 @@ use axum::response::Response;
 use axum::http;
 
 use crate::app_state::AppState;
-use crate::dtos::response_dto::{handler_err, ErrorDto};
+use crate::models::response::response::{handler_err, ErrorResp};
 use crate::utils::cookie::{parse_immich_cookies, ImmichCookie};
 
 pub async fn auth(State(app_state): State<AppState>, mut req: Request, next: Next) -> Result<Response, StatusCode> {
@@ -29,10 +29,10 @@ pub async fn auth(State(app_state): State<AppState>, mut req: Request, next: Nex
                     let cookies = parse_immich_cookies(cookie);
 
                     if let Some(token) = cookies.get(&ImmichCookie::AccessToken) {
-                        let auth_dto_opt = app_state.auth_service.validate_session(&token).await.map_err(ErrorDto::from);
+                        let auth_dto_opt = app_state.auth_service.validate_session(&token).await.map_err(ErrorResp::from);
                         match auth_dto_opt {
-                            Ok(auth_dto) => {
-                                req.extensions_mut().insert(auth_dto);
+                            Ok(auth_req) => {
+                                req.extensions_mut().insert(auth_req);
                                 Ok(next.run(req).await)
                             }
                             Err(err) => {
@@ -40,7 +40,7 @@ pub async fn auth(State(app_state): State<AppState>, mut req: Request, next: Nex
                             }
                         }
                     } else {
-                        Ok(handler_err(ErrorDto::Unauthorized(String::from("Authentication required"))))
+                        Ok(handler_err(ErrorResp::Unauthorized(String::from("Authentication required"))))
                     }
                 }
             }
