@@ -4,6 +4,8 @@ use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::utils::response::json_response;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserAdminResponse {
@@ -28,6 +30,6 @@ pub struct UserAdminResponse {
 
 impl IntoResponse for UserAdminResponse {
     fn into_response(self) -> Response<Body> {
-        Response::new(Body::from(serde_json::to_string(&self).unwrap()))
+        json_response(&self)
     }
 }

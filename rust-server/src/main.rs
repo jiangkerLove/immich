@@ -1,36 +1,44 @@
-use axum::{middleware, Router};
+use axum::middleware;
+use axum::Router;
 use config::{Case, Config};
 use dotenv::dotenv;
+
 use rust_server::app_state::AppState;
+use rust_server::middleware::{auth, cors, user_agent};
 use rust_server::models::dto::env::EnvDto;
-use rust_server::middleware::{auth, user_agent};
-use rust_server::routes::{auth as auth_routes, user as user_routes};
+use rust_server::routes;
 
 #[tokio::main]
 async fn main() {
-    // 读取 .env 文件
     dotenv().ok();
 
     let settings: EnvDto = Config::builder()
-        .add_source(config::Environment::with_convert_case(Case::UpperSnake).try_parsing(true)) // 解析 ENV 变量
+        .add_source(config::Environment::with_convert_case(Case::UpperSnake).try_parsing(true))
         .build()
         .unwrap()
         .try_deserialize()
         .unwrap();
 
+    let port = settings.immich_port.unwrap_or(2283);
+
     let app_state = AppState::new(settings).await;
+
+    let protected_routes = routes::protected_router().route_layer(middleware::from_fn_with_state(
+        app_state.clone(),
+        auth::require_auth,
+    ));
+
     let app = Router::new()
-        .merge(user_routes::router())
-        .merge(auth_routes::router())
+        .merge(routes::public_router())
+        .merge(protected_routes)
         .route_layer(middleware::from_fn(user_agent::user_agent))
-        .route_layer(middleware::from_fn_with_state(app_state.clone(), auth::auth))
-        // .route_layer(middleware::from_fn(cors::cors))
+        .route_layer(middleware::from_fn(cors::cors))
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .unwrap();
+
+    println!("rust-server listening on 0.0.0.0:{port}");
     axum::serve(listener, app).await.unwrap();
 }
-
-
-
-

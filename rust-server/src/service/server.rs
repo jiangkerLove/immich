@@ -1,0 +1,508 @@
+use std::path::PathBuf;
+
+use axum::body::Body;
+use axum::http::Response;
+use axum::response::IntoResponse;
+use serde::Serialize;
+use sqlx::PgPool;
+use tokio::sync::OnceCell;
+
+use crate::constants::SERVER_VERSION;
+use crate::models::db::system_metadata;
+use crate::models::db::version_history;
+use crate::models::dto::env::EnvDto;
+use crate::models::response::response::ErrorResp;
+use crate::utils::bytes::as_human_readable;
+use crate::utils::disk::check_disk_usage;
+use crate::utils::response::json_response;
+
+#[derive(Clone)]
+pub struct ServerBuildConfig {
+    pub build: Option<String>,
+    pub build_url: Option<String>,
+    pub build_image: Option<String>,
+    pub build_image_url: Option<String>,
+    pub repository: Option<String>,
+    pub repository_url: Option<String>,
+    pub source_ref: Option<String>,
+    pub source_commit: Option<String>,
+    pub source_url: Option<String>,
+    pub third_party_source_url: Option<String>,
+    pub third_party_bug_feature_url: Option<String>,
+    pub third_party_documentation_url: Option<String>,
+    pub third_party_support_url: Option<String>,
+}
+
+impl ServerBuildConfig {
+    pub fn from_env(env: &EnvDto) -> Self {
+        Self {
+            build: env.immich_build.clone(),
+            build_url: env.immich_build_url.clone(),
+            build_image: env.immich_build_image.clone(),
+            build_image_url: env.immich_build_image_url.clone(),
+            repository: env
+                .immich_repository
+                .clone()
+                .or_else(|| Some("immich-app/immich".to_string())),
+            repository_url: env
+                .immich_repository_url
+                .clone()
+                .or_else(|| Some("https://github.com/immich-app/immich".to_string())),
+            source_ref: env.immich_source_ref.clone(),
+            source_commit: env.immich_source_commit.clone(),
+            source_url: env.immich_source_url.clone(),
+            third_party_source_url: env.immich_third_party_source_url.clone(),
+            third_party_bug_feature_url: env.immich_third_party_bug_feature_url.clone(),
+            third_party_documentation_url: env.immich_third_party_documentation_url.clone(),
+            third_party_support_url: env.immich_third_party_support_url.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ServerService {
+    pool: PgPool,
+    build_config: ServerBuildConfig,
+    tool_versions: std::sync::Arc<OnceCell<ToolVersions>>,
+    library_path: PathBuf,
+}
+
+#[derive(Clone, Default)]
+struct ToolVersions {
+    ffmpeg: String,
+    imagemagick: String,
+    libvips: String,
+    exiftool: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerAboutResponse {
+    pub version: String,
+    pub version_url: String,
+    pub licensed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ffmpeg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imagemagick: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub libvips: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exiftool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub third_party_source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub third_party_bug_feature_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub third_party_documentation_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub third_party_support_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ServerPingResponse {
+    pub res: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerVersionResponse {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+    pub prerelease: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerVersionHistoryResponse {
+    pub id: uuid::Uuid,
+    pub created_at: String,
+    pub version: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerFeaturesResponse {
+    pub smart_search: bool,
+    pub facial_recognition: bool,
+    pub duplicate_detection: bool,
+    pub map: bool,
+    pub reverse_geocoding: bool,
+    pub import_faces: bool,
+    pub sidecar: bool,
+    pub search: bool,
+    pub trash: bool,
+    pub oauth: bool,
+    pub oauth_auto_launch: bool,
+    pub ocr: bool,
+    pub password_login: bool,
+    pub config_file: bool,
+    pub email: bool,
+    pub realtime_transcoding: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerConfigResponse {
+    pub login_page_message: String,
+    pub trash_days: i32,
+    pub user_delete_delay: i32,
+    pub oauth_button_text: String,
+    pub is_initialized: bool,
+    pub is_onboarded: bool,
+    pub external_domain: String,
+    pub public_users: bool,
+    pub map_dark_style_url: String,
+    pub map_light_style_url: String,
+    pub maintenance_mode: bool,
+    pub min_faces: i32,
+}
+
+#[derive(Serialize)]
+pub struct ServerMediaTypesResponse {
+    pub image: Vec<String>,
+    pub video: Vec<String>,
+    pub audio: Vec<String>,
+    pub sidecar: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStorageResponse {
+    pub disk_size: String,
+    pub disk_use: String,
+    pub disk_available: String,
+    pub disk_size_raw: i64,
+    pub disk_use_raw: i64,
+    pub disk_available_raw: i64,
+    pub disk_usage_percentage: f64,
+}
+
+#[derive(Serialize)]
+pub struct WellKnownResponse {
+    pub api: WellKnownApi,
+}
+
+#[derive(Serialize)]
+pub struct WellKnownApi {
+    pub endpoint: String,
+}
+
+impl ServerService {
+    pub fn new(pool: PgPool, build_config: ServerBuildConfig, library_path: PathBuf) -> Self {
+        Self {
+            pool,
+            build_config,
+            tool_versions: std::sync::Arc::new(OnceCell::new()),
+            library_path,
+        }
+    }
+
+    pub fn ping() -> ServerPingResponse {
+        ServerPingResponse {
+            res: "pong".to_string(),
+        }
+    }
+
+    pub fn version() -> ServerVersionResponse {
+        let mut parts = SERVER_VERSION.split('.');
+        let major = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let minor = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let patch_part = parts.next().unwrap_or("0");
+        let patch = patch_part
+            .split('-')
+            .next()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+
+        ServerVersionResponse {
+            major,
+            minor,
+            patch,
+            prerelease: None,
+        }
+    }
+
+    pub async fn get_version_history(&self) -> Result<Vec<ServerVersionHistoryResponse>, ErrorResp> {
+        let rows = version_history::get_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ServerVersionHistoryResponse {
+                id: row.id,
+                created_at: row
+                    .created_at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                version: row.version,
+            })
+            .collect())
+    }
+
+    pub async fn get_features(&self) -> Result<ServerFeaturesResponse, ErrorResp> {
+        Ok(ServerFeaturesResponse {
+            smart_search: true,
+            facial_recognition: true,
+            duplicate_detection: true,
+            map: true,
+            reverse_geocoding: true,
+            import_faces: false,
+            sidecar: true,
+            search: true,
+            trash: true,
+            oauth: false,
+            oauth_auto_launch: false,
+            ocr: false,
+            password_login: true,
+            config_file: false,
+            email: false,
+            realtime_transcoding: false,
+        })
+    }
+
+    pub async fn get_config(&self) -> Result<ServerConfigResponse, ErrorResp> {
+        let has_admin: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(SELECT 1 FROM "user" WHERE "isAdmin" = true AND "deletedAt" IS NULL)"#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let admin_onboarding = system_metadata::get_admin_onboarding(&self.pool).await?;
+
+        Ok(ServerConfigResponse {
+            login_page_message: String::new(),
+            trash_days: 30,
+            user_delete_delay: 7,
+            oauth_button_text: String::new(),
+            is_initialized: has_admin,
+            is_onboarded: admin_onboarding.is_onboarded,
+            external_domain: String::new(),
+            public_users: false,
+            map_dark_style_url: String::new(),
+            map_light_style_url: String::new(),
+            maintenance_mode: false,
+            min_faces: 3,
+        })
+    }
+
+    pub async fn get_about(&self) -> Result<ServerAboutResponse, ErrorResp> {
+        let version = format!("v{SERVER_VERSION}");
+        let version_url =
+            format!("https://github.com/immich-app/immich/releases/tag/{version}");
+
+        let license = system_metadata::get_json(&self.pool, "license").await?;
+        let licensed = license.is_some();
+
+        let tools = self.get_tool_versions().await;
+        let cfg = &self.build_config;
+
+        Ok(ServerAboutResponse {
+            version,
+            version_url,
+            licensed,
+            repository: cfg.repository.clone(),
+            repository_url: cfg.repository_url.clone(),
+            source_ref: cfg.source_ref.clone(),
+            source_commit: cfg.source_commit.clone(),
+            source_url: cfg.source_url.clone(),
+            build: cfg.build.clone(),
+            build_url: cfg.build_url.clone(),
+            build_image: cfg.build_image.clone(),
+            build_image_url: cfg.build_image_url.clone(),
+            ffmpeg: non_empty(tools.ffmpeg),
+            imagemagick: non_empty(tools.imagemagick),
+            libvips: non_empty(tools.libvips),
+            exiftool: non_empty(tools.exiftool),
+            third_party_source_url: cfg.third_party_source_url.clone(),
+            third_party_bug_feature_url: cfg.third_party_bug_feature_url.clone(),
+            third_party_documentation_url: cfg.third_party_documentation_url.clone(),
+            third_party_support_url: cfg.third_party_support_url.clone(),
+        })
+    }
+
+    pub async fn get_custom_css(&self) -> Result<String, ErrorResp> {
+        system_metadata::get_custom_css(&self.pool)
+            .await
+            .map_err(ErrorResp::from)
+    }
+
+    async fn get_tool_versions(&self) -> ToolVersions {
+        self.tool_versions
+            .get_or_init(probe_tool_versions)
+            .await
+            .clone()
+    }
+
+    pub fn get_storage(&self, auth: &crate::models::dto::auth::AuthDto) -> Result<ServerStorageResponse, ErrorResp> {
+        if !auth.user.is_admin {
+            return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+        }
+
+        let disk = check_disk_usage(&self.library_path).ok_or_else(|| {
+            ErrorResp::ServerError("Failed to read disk usage".to_string())
+        })?;
+
+        let disk_use_raw = disk.used;
+        let usage_percentage = if disk.total == 0 {
+            0.0
+        } else {
+            ((disk_use_raw as f64 / disk.total as f64) * 10000.0).round() / 100.0
+        };
+
+        Ok(ServerStorageResponse {
+            disk_size: as_human_readable(disk.total, 1),
+            disk_use: as_human_readable(disk_use_raw, 1),
+            disk_available: as_human_readable(disk.available, 1),
+            disk_size_raw: disk.total as i64,
+            disk_use_raw: disk_use_raw as i64,
+            disk_available_raw: disk.available as i64,
+            disk_usage_percentage: usage_percentage,
+        })
+    }
+
+    pub fn get_media_types() -> ServerMediaTypesResponse {
+        ServerMediaTypesResponse {
+            image: vec![
+                "image/jpeg".into(),
+                "image/png".into(),
+                "image/webp".into(),
+                "image/gif".into(),
+                "image/heic".into(),
+                "image/heif".into(),
+            ],
+            video: vec![
+                "video/mp4".into(),
+                "video/webm".into(),
+                "video/quicktime".into(),
+            ],
+            audio: vec!["audio/mpeg".into(), "audio/wav".into()],
+            sidecar: vec!["application/xml".into(), "text/xml".into()],
+        }
+    }
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+async fn probe_tool_versions() -> ToolVersions {
+    ToolVersions {
+        ffmpeg: probe_ffmpeg().await,
+        imagemagick: probe_imagemagick().await,
+        libvips: probe_libvips().await,
+        exiftool: probe_exiftool().await,
+    }
+}
+
+async fn command_first_line(program: &str, args: &[&str]) -> String {
+    tokio::process::Command::new(program)
+        .args(args)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+async fn probe_ffmpeg() -> String {
+    let line = command_first_line("ffmpeg", &["-version"]).await;
+    line.strip_prefix("ffmpeg version ")
+        .unwrap_or(&line)
+        .to_string()
+}
+
+async fn probe_imagemagick() -> String {
+    let line = command_first_line("magick", &["--version"]).await;
+    if line.is_empty() {
+        return String::new();
+    }
+    line.strip_prefix("Version: ImageMagick ")
+        .unwrap_or(&line)
+        .to_string()
+}
+
+async fn probe_libvips() -> String {
+    command_first_line("vips", &["--version"]).await
+}
+
+async fn probe_exiftool() -> String {
+    command_first_line("exiftool", &["-ver"]).await
+}
+
+impl IntoResponse for ServerPingResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for ServerVersionResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for ServerFeaturesResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for ServerConfigResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for ServerMediaTypesResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for ServerAboutResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for ServerStorageResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}
+
+impl IntoResponse for WellKnownResponse {
+    fn into_response(self) -> Response<Body> {
+        json_response(&self)
+    }
+}

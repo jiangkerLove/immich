@@ -1,4 +1,9 @@
 pub mod auth;
 pub mod response;
+pub mod search;
+pub mod shared_link;
+pub mod asset;
+pub mod memory;
+pub mod notification;
 pub mod user;
 pub mod user_preferences_response;

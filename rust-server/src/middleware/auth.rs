@@ -1,49 +1,58 @@
-use axum::extract::{Request, State};
-use axum::http::StatusCode;
+use axum::extract::State;
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::http;
 
 use crate::app_state::AppState;
-use crate::models::response::response::{handler_err, ErrorResp};
-use crate::utils::cookie::{parse_immich_cookies, ImmichCookie};
+use crate::models::response::response::handler_err;
+use crate::utils::headers::{extract_auth_tokens, get_shared_link_tokens, parse_query_params};
 
-pub async fn auth(State(app_state): State<AppState>, mut req: Request, next: Next) -> Result<Response, StatusCode> {
-    let path = req.uri().path();
-    match path {
-        "/api/auth/register" => {
-            Ok(next.run(req).await)
-        }
-        "/api/auth/login" => {
-            Ok(next.run(req).await)
-        }
-        _ => {
-            let cookie_header = req.headers()
-                .get(http::header::COOKIE)
-                .and_then(|header| header.to_str().ok());
-            match cookie_header {
-                None => {
-                    Ok(next.run(req).await)
-                }
-                Some(cookie) => {
-                    let cookies = parse_immich_cookies(cookie);
+const PUBLIC_ROUTES: &[&str] = &[
+    "/api/auth/login",
+    "/api/auth/admin-sign-up",
+    "/api/oauth/mobile-redirect",
+    "/api/oauth/authorize",
+    "/api/oauth/callback",
+    "/api/oauth/backchannel-logout",
+    "/api/server/ping",
+    "/api/server/version",
+    "/api/server/version-history",
+    "/api/server/features",
+    "/api/server/config",
+    "/api/server/media-types",
+    "/api/admin/maintenance/status",
+    "/api/admin/maintenance/login",
+    "/api/admin/database-backups/start-restore",
+    "/.well-known/immich",
+    "/custom.css",
+];
 
-                    if let Some(token) = cookies.get(&ImmichCookie::AccessToken) {
-                        let auth_dto_opt = app_state.auth_service.validate_session(&token).await.map_err(ErrorResp::from);
-                        match auth_dto_opt {
-                            Ok(auth_req) => {
-                                req.extensions_mut().insert(auth_req);
-                                Ok(next.run(req).await)
-                            }
-                            Err(err) => {
-                                Ok(handler_err(err))
-                            }
-                        }
-                    } else {
-                        Ok(handler_err(ErrorResp::Unauthorized(String::from("Authentication required"))))
-                    }
-                }
-            }
+fn is_public_route(path: &str) -> bool {
+    PUBLIC_ROUTES.contains(&path)
+}
+
+pub async fn require_auth(
+    State(app_state): State<AppState>,
+    mut req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    if is_public_route(&path) {
+        return next.run(req).await;
+    }
+
+    let query_params = parse_query_params(req.uri().to_string().as_str());
+    let tokens = extract_auth_tokens(req.headers(), &query_params);
+    let shared_link_tokens = get_shared_link_tokens(req.headers());
+
+    match app_state
+        .services
+        .auth
+        .authenticate(&tokens, &path, &shared_link_tokens)
+        .await {
+        Ok(auth) => {
+            req.extensions_mut().insert(auth);
+            next.run(req).await
         }
+        Err(err) => handler_err(err),
     }
 }

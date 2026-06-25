@@ -1,7 +1,9 @@
-use crate::models::db::user_metadata::UserPreferencePO;
 use axum::body::Body;
 use axum::http::Response;
 use axum::response::IntoResponse;
+
+use crate::models::db::user_metadata::UserPreferencePO;
+use crate::utils::response::json_response;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -37,7 +39,7 @@ impl From<UserPreferencePO> for UserPreferenceResponse {
                 sidebar_web: po.shared_links.sidebar_web,
             },
             ratings: RatingsResponse {
-                enabled: po.ratings.enabled
+                enabled: po.ratings.enabled,
             },
             tags: TagsResponse {
                 enabled: po.tags.enabled,
@@ -124,6 +126,6 @@ pub struct PurchaseResponse {
 
 impl IntoResponse for UserPreferenceResponse {
     fn into_response(self) -> Response<Body> {
-        Response::new(Body::from(serde_json::to_string(&self).unwrap()))
+        json_response(&self)
     }
 }

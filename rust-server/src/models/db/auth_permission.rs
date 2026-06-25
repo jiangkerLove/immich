@@ -23,6 +23,7 @@ pub enum Permission {
     AssetView,
     AssetDownload,
     AssetUpload,
+    AssetStatistics,
 
     AlbumCreate,
     AlbumRead,
@@ -107,6 +108,20 @@ pub enum Permission {
     AdminUserRead,
     AdminUserUpdate,
     AdminUserDelete,
+
+    UserRead,
+    UserUpdate,
+    UserPreferenceRead,
+    UserPreferenceUpdate,
+    UserLicenseRead,
+    UserLicenseUpdate,
+    UserLicenseDelete,
+    UserOnboardingRead,
+    UserOnboardingUpdate,
+    UserOnboardingDelete,
+    UserProfileImageRead,
+    UserProfileImageUpdate,
+    UserProfileImageDelete,
 }
 
 impl Permission {
@@ -132,6 +147,7 @@ impl Permission {
             Permission::AssetView => "asset.view",
             Permission::AssetDownload => "asset.download",
             Permission::AssetUpload => "asset.upload",
+            Permission::AssetStatistics => "asset.statistics",
 
             Permission::AlbumCreate => "album.create",
             Permission::AlbumRead => "album.read",
@@ -216,6 +232,20 @@ impl Permission {
             Permission::AdminUserRead => "admin.user.read",
             Permission::AdminUserUpdate => "admin.user.update",
             Permission::AdminUserDelete => "admin.user.delete",
+
+            Permission::UserRead => "user.read",
+            Permission::UserUpdate => "user.update",
+            Permission::UserPreferenceRead => "userPreference.read",
+            Permission::UserPreferenceUpdate => "userPreference.update",
+            Permission::UserLicenseRead => "userLicense.read",
+            Permission::UserLicenseUpdate => "userLicense.update",
+            Permission::UserLicenseDelete => "userLicense.delete",
+            Permission::UserOnboardingRead => "userOnboarding.read",
+            Permission::UserOnboardingUpdate => "userOnboarding.update",
+            Permission::UserOnboardingDelete => "userOnboarding.delete",
+            Permission::UserProfileImageRead => "userProfileImage.read",
+            Permission::UserProfileImageUpdate => "userProfileImage.update",
+            Permission::UserProfileImageDelete => "userProfileImage.delete",
         }
     }
 
@@ -241,6 +271,7 @@ impl Permission {
             "asset.view" => Some(Permission::AssetView),
             "asset.download" => Some(Permission::AssetDownload),
             "asset.upload" => Some(Permission::AssetUpload),
+            "asset.statistics" => Some(Permission::AssetStatistics),
 
             "album.create" => Some(Permission::AlbumCreate),
             "album.read" => Some(Permission::AlbumRead),
@@ -325,6 +356,20 @@ impl Permission {
             "admin.user.read" => Some(Permission::AdminUserRead),
             "admin.user.update" => Some(Permission::AdminUserUpdate),
             "admin.user.delete" => Some(Permission::AdminUserDelete),
+
+            "user.read" => Some(Permission::UserRead),
+            "user.update" => Some(Permission::UserUpdate),
+            "userPreference.read" => Some(Permission::UserPreferenceRead),
+            "userPreference.update" => Some(Permission::UserPreferenceUpdate),
+            "userLicense.read" => Some(Permission::UserLicenseRead),
+            "userLicense.update" => Some(Permission::UserLicenseUpdate),
+            "userLicense.delete" => Some(Permission::UserLicenseDelete),
+            "userOnboarding.read" => Some(Permission::UserOnboardingRead),
+            "userOnboarding.update" => Some(Permission::UserOnboardingUpdate),
+            "userOnboarding.delete" => Some(Permission::UserOnboardingDelete),
+            "userProfileImage.read" => Some(Permission::UserProfileImageRead),
+            "userProfileImage.update" => Some(Permission::UserProfileImageUpdate),
+            "userProfileImage.delete" => Some(Permission::UserProfileImageDelete),
 
             _ => None,
         }

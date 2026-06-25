@@ -7,7 +7,7 @@ import { defineConfig, type ProxyOptions, type UserConfig } from 'vite';
 import path from 'node:path';
 
 const upstream = {
-  target: process.env.IMMICH_SERVER_URL || 'http://immich-server:2283/',
+  target: process.env.IMMICH_SERVER_URL || 'http://127.0.0.1:2283/',
   secure: true,
   changeOrigin: true,
   logLevel: 'info',

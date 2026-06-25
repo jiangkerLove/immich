@@ -8,6 +8,12 @@ pub enum ErrorResp {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
     #[error("Request parameter error: {0}")]
     ReqParamError(String),
 
@@ -16,6 +22,9 @@ pub enum ErrorResp {
 
     #[error("Server error: {0}")]
     ServerError(String),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 pub fn handler_err(error_dto: ErrorResp) -> Response {
@@ -26,9 +35,12 @@ impl IntoResponse for ErrorResp {
     fn into_response(self) -> Response {
         let (code, msg, error) = match self {
             ErrorResp::Unauthorized(err) => (StatusCode::UNAUTHORIZED, err, "Unauthorized"),
+            ErrorResp::Forbidden(err) => (StatusCode::FORBIDDEN, err, "Forbidden"),
+            ErrorResp::BadRequest(err) => (StatusCode::BAD_REQUEST, err, "Bad Request"),
             ErrorResp::ReqParamError(err) => (StatusCode::BAD_REQUEST, err, ""),
             ErrorResp::DatabaseError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string(), ""),
             ErrorResp::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err, ""),
+            ErrorResp::NotImplemented(err) => (StatusCode::NOT_IMPLEMENTED, err, "Not Implemented"),
         };
         (
             code,
@@ -37,7 +49,9 @@ impl IntoResponse for ErrorResp {
                 "error": error,
                 "statusCode": code.as_u16(),
                 "correlationId": "tp700cb8"
-            }).to_string()
-        ).into_response()
+            })
+            .to_string(),
+        )
+            .into_response()
     }
 }

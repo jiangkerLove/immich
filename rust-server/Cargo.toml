@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.8.4"
+axum = { version = "0.8.4", features = ["multipart"] }
 axum-extra = "0.10.0"
 tokio = { version = "1.43.0", features = ["full"] }
 tower = "0.5.2"
@@ -42,6 +42,18 @@ bcrypt = "0.16.0"
 rand = "0.8.5"
 base64 = "0.22.1"
 sha2 = "0.10"
+sha1 = "0.10"
+hex = "0.4.3"
+
+# http / oauth / files
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+openidconnect = { version = "3.5", default-features = false, features = ["reqwest", "rustls-tls"] }
+mime_guess = "2.0.5"
+urlencoding = "2.1.3"
+url = "2.5"
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 
 #user_agent_parser
 user-agent-parser = "0.3.6"
+bullmq-rs = "2.2.0"

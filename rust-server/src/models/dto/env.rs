@@ -35,7 +35,6 @@ pub struct EnvDto {
     pub db_hostname: String,
     pub db_password: String,
     pub db_port: u16,
-    pub db_skip_migrations: Option<bool>,
     pub db_ssl_mode: Option<DatabaseSslMode>,
     pub db_url: String,
     pub db_username: String,
@@ -50,6 +49,9 @@ pub struct EnvDto {
     pub redis_password: Option<String>,
     pub redis_socket: Option<String>,
     pub redis_url: Option<String>,
+
+    pub upload_location: Option<String>,
+    pub immich_media_location: Option<String>,
 }
 
 impl Default for EnvDto {
@@ -86,7 +88,6 @@ impl Default for EnvDto {
             db_hostname: "database".into(),
             db_password: "postgres".into(),
             db_port: 5432,
-            db_skip_migrations: None,
             db_ssl_mode: None,
             db_url: "localhost".into(),
             db_username: "postgres".into(),
@@ -99,6 +100,8 @@ impl Default for EnvDto {
             redis_password: None,
             redis_socket: None,
             redis_url: None,
+            upload_location: None,
+            immich_media_location: None,
         }
     }
 }

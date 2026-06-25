@@ -1,6 +1,16 @@
 pub mod users;
 pub mod sessions;
-mod auth_permission;
+pub mod auth_permission;
 pub mod api_key;
 pub mod shared_links;
 pub mod user_metadata;
+pub mod assets;
+pub mod system_metadata;
+pub mod search;
+pub mod smart_search;
+pub mod memory;
+pub mod notification;
+pub mod person;
+pub mod trash;
+pub mod timeline;
+pub mod version_history;

@@ -13,34 +13,17 @@ pub struct UserMetadataPO {
 
 #[derive(Debug, Serialize)]
 pub enum UserMetadataKey {
-    PREFERENCES,
-    LICENSE,
-    ONBOARDING,
-}
-
-
-pub enum UserStatus {
-    Active,
-    Inactive,
-    Pending,
-    Suspended,
+    Preferences,
+    License,
+    Onboarding,
 }
 
 impl UserMetadataKey {
     pub fn as_str(&self) -> &'static str {
         match self {
-            UserMetadataKey::PREFERENCES => "preferences",
-            UserMetadataKey::LICENSE => "license",
-            UserMetadataKey::ONBOARDING => "onboarding"
-        }
-    }
-
-    pub fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "preferences" => Ok(Self::PREFERENCES),
-            "license" => Ok(Self::LICENSE),
-            "onboarding" => Ok(Self::ONBOARDING),
-            _ => Err(format!("Invalid status: {}", s)),
+            UserMetadataKey::Preferences => "preferences",
+            UserMetadataKey::License => "license",
+            UserMetadataKey::Onboarding => "onboarding",
         }
     }
 }
@@ -237,18 +220,72 @@ impl Default for CastPO {
 }
 
 
+#[derive(Clone, Serialize, Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OnboardingPO {
+    pub is_onboarded: bool,
+}
+
 impl UserMetadataPO {
-    pub async fn get_meta_data_by_uid(pool: &Pool<Postgres>, id: &Uuid) -> Result<Vec<UserMetadataPO>, ErrorResp> {
+    pub async fn get_meta_data_by_uid(
+        pool: &Pool<Postgres>,
+        id: &Uuid,
+    ) -> Result<Vec<UserMetadataPO>, ErrorResp> {
         let maybe_user = sqlx::query_as::<_, Self>(
             r#"
-                    SELECT
-                        key,
-                        "userId" as "user_id",
-                        value
-                    FROM user_metadata
-                    WHERE "userId" = $1
-                "#,
-        ).bind(id).fetch_all(pool).await?;
+                SELECT
+                    key,
+                    "userId" as "user_id",
+                    value
+                FROM user_metadata
+                WHERE "userId" = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_all(pool)
+        .await?;
         Ok(maybe_user)
+    }
+
+    pub async fn is_onboarded(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<bool, sqlx::Error> {
+        Ok(Self::get_onboarding(pool, user_id).await?.is_onboarded)
+    }
+
+    pub async fn get_onboarding(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+    ) -> Result<OnboardingPO, sqlx::Error> {
+        let row: Option<(sqlx::types::Json<OnboardingPO>,)> = sqlx::query_as(
+            r#"
+                SELECT value
+                FROM user_metadata
+                WHERE "userId" = $1 AND key = 'onboarding'
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|(value,)| value.0).unwrap_or_default())
+    }
+
+    pub async fn upsert_onboarding(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+        onboarding: &OnboardingPO,
+    ) -> Result<(), sqlx::Error> {
+        let value = serde_json::to_value(onboarding).unwrap_or_default();
+        sqlx::query(
+            r#"
+            INSERT INTO user_metadata ("userId", key, value)
+            VALUES ($1, 'onboarding', $2)
+            ON CONFLICT ("userId", key) DO UPDATE SET value = EXCLUDED.value
+            "#,
+        )
+        .bind(user_id)
+        .bind(value)
+        .execute(pool)
+        .await?;
+        Ok(())
     }
 }

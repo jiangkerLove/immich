@@ -10,8 +10,16 @@ pub struct LoginReq {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginCredentialReq {
     pub email: String,
     pub password: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignUpReq {
+    pub email: String,
+    pub password: String,
+    pub name: String,
+}
