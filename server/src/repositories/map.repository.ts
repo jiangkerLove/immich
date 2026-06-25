@@ -5,13 +5,15 @@ import { InjectKysely } from 'nestjs-kysely';
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import readLine from 'node:readline';
-import { citiesFile } from 'src/constants';
-import { DB, GeodataPlaces, NaturalearthCountries } from 'src/db';
+import { citiesFile, reverseGeocodeMaxDistance } from 'src/constants';
 import { DummyValue, GenerateSql } from 'src/decorators';
 import { AssetVisibility, SystemMetadataKey } from 'src/enum';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { LoggingRepository } from 'src/repositories/logging.repository';
 import { SystemMetadataRepository } from 'src/repositories/system-metadata.repository';
+import { DB } from 'src/schema';
+import { GeodataPlacesTable } from 'src/schema/tables/geodata-places.table';
+import { NaturalEarthCountriesTable } from 'src/schema/tables/natural-earth-countries.table';
 
 export interface MapMarkerSearchOptions {
   isArchived?: boolean;
@@ -31,15 +33,9 @@ export interface ReverseGeocodeResult {
   city: string | null;
 }
 
-export interface MapMarker extends ReverseGeocodeResult {
-  id: string;
-  lat: number;
-  lon: number;
-}
-
 interface MapDB extends DB {
-  geodata_places_tmp: GeodataPlaces;
-  naturalearth_countries_tmp: NaturalearthCountries;
+  geodata_places_tmp: GeodataPlacesTable;
+  naturalearth_countries_tmp: NaturalEarthCountriesTable;
 }
 
 @Injectable()
@@ -59,14 +55,14 @@ export class MapRepository {
     const geodataDate = await readFile(resourcePaths.geodata.dateFile, 'utf8');
 
     // TODO move to service init
-    const geocodingMetadata = await this.metadataRepository.get(SystemMetadataKey.REVERSE_GEOCODING_STATE);
+    const geocodingMetadata = await this.metadataRepository.get(SystemMetadataKey.ReverseGeocodingState);
     if (geocodingMetadata?.lastUpdate === geodataDate) {
       return;
     }
 
     await Promise.all([this.importGeodata(), this.importNaturalEarthCountries()]);
 
-    await this.metadataRepository.set(SystemMetadataKey.REVERSE_GEOCODING_STATE, {
+    await this.metadataRepository.set(SystemMetadataKey.ReverseGeocodingState, {
       lastUpdate: geodataDate,
       lastImportFileName: citiesFile,
     });
@@ -74,37 +70,36 @@ export class MapRepository {
     this.logger.log('Geodata import completed');
   }
 
-  @GenerateSql({ params: [[DummyValue.UUID], [DummyValue.UUID]] })
+  @GenerateSql({ params: [DummyValue.UUID] })
+  getAlbumMapMarkers(albumId: string) {
+    return this.mapMarkersQuery()
+      .innerJoin('album_asset', 'asset.id', 'album_asset.assetId')
+      .where('album_asset.albumId', '=', albumId)
+      .execute();
+  }
+
+  @GenerateSql({ params: [DummyValue.UUID, [DummyValue.UUID], [DummyValue.UUID]] })
   getMapMarkers(
+    authUserId: string,
     ownerIds: string[],
     albumIds: string[],
     { isArchived, isFavorite, fileCreatedAfter, fileCreatedBefore }: MapMarkerSearchOptions = {},
   ) {
-    return this.db
-      .selectFrom('assets')
-      .innerJoin('exif', (builder) =>
-        builder
-          .onRef('assets.id', '=', 'exif.assetId')
-          .on('exif.latitude', 'is not', null)
-          .on('exif.longitude', 'is not', null),
-      )
-      .select(['id', 'exif.latitude as lat', 'exif.longitude as lon', 'exif.city', 'exif.state', 'exif.country'])
-      .$narrowType<{ lat: NotNull; lon: NotNull }>()
+    return this.mapMarkersQuery()
       .$if(isArchived === true, (qb) =>
         qb.where((eb) =>
           eb.or([
-            eb('assets.visibility', '=', AssetVisibility.TIMELINE),
-            eb('assets.visibility', '=', AssetVisibility.ARCHIVE),
+            eb('asset.visibility', '=', AssetVisibility.Timeline),
+            eb.and([eb('asset.ownerId', '=', authUserId), eb('asset.visibility', '=', AssetVisibility.Archive)]),
           ]),
         ),
       )
       .$if(isArchived === false || isArchived === undefined, (qb) =>
-        qb.where('assets.visibility', '=', AssetVisibility.TIMELINE),
+        qb.where('asset.visibility', '=', AssetVisibility.Timeline),
       )
       .$if(isFavorite !== undefined, (q) => q.where('isFavorite', '=', isFavorite!))
       .$if(fileCreatedAfter !== undefined, (q) => q.where('fileCreatedAt', '>=', fileCreatedAfter!))
       .$if(fileCreatedBefore !== undefined, (q) => q.where('fileCreatedAt', '<=', fileCreatedBefore!))
-      .where('deletedAt', 'is', null)
       .where((eb) => {
         const expression: Expression<SqlBool>[] = [];
 
@@ -116,17 +111,38 @@ export class MapRepository {
           expression.push(
             eb.exists((eb) =>
               eb
-                .selectFrom('albums_assets_assets')
-                .whereRef('assets.id', '=', 'albums_assets_assets.assetsId')
-                .where('albums_assets_assets.albumsId', 'in', albumIds),
+                .selectFrom('album_asset')
+                .whereRef('asset.id', '=', 'album_asset.assetId')
+                .where('album_asset.albumId', 'in', albumIds),
             ),
           );
         }
 
         return eb.or(expression);
       })
-      .orderBy('fileCreatedAt', 'desc')
       .execute();
+  }
+
+  private mapMarkersQuery() {
+    return this.db
+      .selectFrom('asset')
+      .innerJoin('asset_exif', (builder) =>
+        builder
+          .onRef('asset.id', '=', 'asset_exif.assetId')
+          .on('asset_exif.latitude', 'is not', null)
+          .on('asset_exif.longitude', 'is not', null),
+      )
+      .where('asset.deletedAt', 'is', null)
+      .orderBy('fileCreatedAt', 'desc')
+      .select([
+        'id',
+        'asset_exif.latitude as lat',
+        'asset_exif.longitude as lon',
+        'asset_exif.city',
+        'asset_exif.state',
+        'asset_exif.country',
+      ])
+      .$narrowType<{ lat: NotNull; lon: NotNull }>();
   }
 
   async reverseGeocode(point: GeoPoint): Promise<ReverseGeocodeResult> {
@@ -136,7 +152,7 @@ export class MapRepository {
       .selectFrom('geodata_places')
       .selectAll()
       .where(
-        sql`earth_box(ll_to_earth_public(${point.latitude}, ${point.longitude}), 25000)`,
+        sql`earth_box(ll_to_earth_public(${point.latitude}, ${point.longitude}), ${reverseGeocodeMaxDistance})`,
         '@>',
         sql`ll_to_earth_public(latitude, longitude)`,
       )
@@ -156,8 +172,8 @@ export class MapRepository {
       return { country, state, city };
     }
 
-    this.logger.warn(
-      `Response from database for reverse geocoding latitude: ${point.latitude}, longitude: ${point.longitude} was null`,
+    this.logger.log(
+      `Empty response from database for city reverse geocoding lat: ${point.latitude}, lon: ${point.longitude}. Likely cause: no nearby large populated place (500+ within ${reverseGeocodeMaxDistance / 1000}km). Falling back to country boundaries.`,
     );
 
     const ne_response = await this.db
@@ -168,8 +184,8 @@ export class MapRepository {
       .executeTakeFirst();
 
     if (!ne_response) {
-      this.logger.warn(
-        `Response from database for natural earth reverse geocoding latitude: ${point.latitude}, longitude: ${point.longitude} was null`,
+      this.logger.log(
+        `Empty response from database for natural earth country reverse geocoding lat: ${point.latitude}, lon: ${point.longitude}`,
       );
 
       return { country: null, state: null, city: null };
@@ -193,11 +209,11 @@ export class MapRepository {
       return;
     }
 
-    const entities: Insertable<NaturalearthCountries>[] = [];
+    const entities: Insertable<NaturalEarthCountriesTable>[] = [];
     for (const feature of geoJSONData.features) {
       for (const entry of feature.geometry.coordinates) {
         const coordinates: number[][][] = feature.geometry.type === 'MultiPolygon' ? entry[0] : entry;
-        const featureRecord: Insertable<NaturalearthCountries> = {
+        const featureRecord: Insertable<NaturalEarthCountriesTable> = {
           admin: feature.properties.ADMIN,
           admin_a3: feature.properties.ADM0_A3,
           type: feature.properties.TYPE,
@@ -230,6 +246,7 @@ export class MapRepository {
       this.loadAdmin(resourcePaths.geodata.admin2),
     ]);
 
+    await this.db.schema.dropTable('geodata_places_tmp').ifExists().execute();
     await this.db.transaction().execute(async (manager) => {
       await sql`CREATE TABLE geodata_places_tmp
                 (
@@ -238,7 +255,12 @@ export class MapRepository {
       await manager.schema.dropTable('geodata_places').execute();
       await manager.schema.alterTable('geodata_places_tmp').renameTo('geodata_places').execute();
     });
-
+    await this.db.schema
+      .createIndex('IDX_geodata_gist_earthcoord')
+      .on('geodata_places')
+      .using('gist')
+      .expression(sql`ll_to_earth_public(latitude, longitude)`)
+      .execute();
     await this.loadCities500(admin1, admin2);
     await this.createGeodataIndices();
   }
@@ -249,6 +271,9 @@ export class MapRepository {
     if (!existsSync(cities500)) {
       throw new Error(`Geodata file ${cities500} not found`);
     }
+
+    this.logger.log(`Starting geodata import`);
+    const startTime = performance.now();
 
     const input = createReadStream(cities500, { highWaterMark: 512 * 1024 * 1024 });
     let bufferGeodata = [];
@@ -299,7 +324,20 @@ export class MapRepository {
       }
     }
 
-    await this.db.insertInto('geodata_places').values(bufferGeodata).execute();
+    if (bufferGeodata.length > 0) {
+      await this.db.insertInto('geodata_places').values(bufferGeodata).execute();
+      count += bufferGeodata.length;
+    }
+
+    await Promise.all(futures);
+
+    const duration = performance.now() - startTime;
+    const seconds = duration / 1000;
+    const recordsPerSecond = Math.round(count / seconds);
+
+    this.logger.log(
+      `Successfully imported ${count} geodata records in ${seconds.toFixed(2)}s (${recordsPerSecond} records/second)`,
+    );
   }
 
   private async loadAdmin(filePath: string) {
@@ -323,12 +361,6 @@ export class MapRepository {
   private createGeodataIndices() {
     return Promise.all([
       sql`ALTER TABLE geodata_places ADD PRIMARY KEY (id) WITH (FILLFACTOR = 100)`.execute(this.db),
-      sql`
-        CREATE INDEX IDX_geodata_gist_earthcoord
-                ON geodata_places
-                USING gist (ll_to_earth_public(latitude, longitude))
-                WITH (fillfactor = 100)
-      `.execute(this.db),
       this.db.schema
         .createIndex(`idx_geodata_places_alternate_names`)
         .on('geodata_places')

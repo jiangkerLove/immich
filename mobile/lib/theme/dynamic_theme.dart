@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 
 import 'package:immich_mobile/theme/theme_data.dart';
+import 'package:immich_mobile/utils/debug_print.dart';
 
 abstract final class DynamicTheme {
-  DynamicTheme._();
+  const DynamicTheme._();
 
   static ImmichTheme? _theme;
   // Method to fetch dynamic system colors
@@ -13,7 +14,7 @@ abstract final class DynamicTheme {
       final corePalette = await DynamicColorPlugin.getCorePalette();
       if (corePalette != null) {
         final primaryColor = corePalette.toColorScheme().primary;
-        debugPrint('dynamic_color: Core palette detected.');
+        dPrint(() => 'dynamic_color: Core palette detected.');
 
         // Some palettes do not generate surface container colors accurately,
         // so we regenerate all colors using the primary color
@@ -21,15 +22,17 @@ abstract final class DynamicTheme {
           light: ColorScheme.fromSeed(
             seedColor: primaryColor,
             brightness: Brightness.light,
+            dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
           ),
           dark: ColorScheme.fromSeed(
             seedColor: primaryColor,
             brightness: Brightness.dark,
+            dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
           ),
         );
       }
     } catch (error) {
-      debugPrint('dynamic_color: Failed to obtain core palette: $error');
+      dPrint(() => 'dynamic_color: Failed to obtain core palette: $error');
     }
   }
 

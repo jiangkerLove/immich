@@ -27,7 +27,8 @@
   <a href="README_ko_KR.md">한국어</a>
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_tr_TR.md">Türkçe</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_uk_UA.md">Українська</a>
   <a href="README_ru_RU.md">Русский</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
@@ -36,26 +37,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## Disclaimer
+> [!WARNING]
+> ⚠️ Volg altijd het [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) backup plan voor je kostbare foto's en video's!
+>
 
-- ⚠️ Het project wordt momenteel **zeer actief** ontwikkeld.
-- ⚠️ Verwacht bugs en ingrijpende wijzigingen.
-- ⚠️ **Gebruik de app niet als de enige manier om uw foto's en video's op te slaan.**
-- ⚠️ Volg altijd het [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) backup plan voor je kostbare foto's en video's!
+> [!NOTE]
+> De belangrijkste documentatie, inclusief installatie handleidingen, zijn te vinden op https://immich.app/.
 
 ## Inhoud
 
-- [Officiële documentatie](https://immich.app/docs)
-- [Toekomstplannen](https://github.com/orgs/immich-app/projects/1)
+- [Officiële documentatie](https://docs.immich.app/)
+- [Introductie](https://docs.immich.app/overview/introduction)
+- [Installatie](https://docs.immich.app/install/requirements)
+- [Toekomstplannen](https://immich.app/roadmap)
 - [Demo](#demo)
 - [Functies](#functies)
-- [Introductie](https://immich.app/docs/overview/introduction)
-- [Installatie](https://immich.app/docs/install/requirements)
-- [Richtlijnen voor bijdragen](https://immich.app/docs/overview/support-the-project)
-
-## Documentatie
-
-De belangrijkste documentatie, inclusief installatie handleidingen, zijn te vinden op https://immich.app/.
+- [Vertalingen](https://docs.immich.app/developer/translations)
+- [Richtlijnen voor bijdragen](https://docs.immich.app/overview/support-the-project)
 
 ## Demo
 
@@ -102,7 +100,7 @@ Je kunt de demo [hier](https://demo.immich.app/) bekijken. Voor de mobiele app k
 
 ## Vertalingen
 
-Je kunt [hier](https://immich.app/docs/developer/translations) meer over vertalingen lezen.
+Je kunt [hier](https://docs.immich.app/developer/translations) meer over vertalingen lezen.
 
 ## Repository activiteit
 

@@ -27,7 +27,8 @@
   <a href="README_ko_KR.md">한국어</a>
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_nl_NL.md">Nederlands</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_uk_UA.md">Українська</a>
   <a href="README_ru_RU.md">Русский</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
@@ -36,25 +37,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## Feragatname
+> [!WARNING]
+> ⚠️ Değerli fotoğraflarınız ve videolarınız için daima [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) yedekleme planını uygulayın!
+> 
 
-- ⚠️ Proje **çok aktif** bir şekilde geliştirilmektedir.
-- ⚠️ Hatalar ve uygulama yapısını bozan değişiklikler olabilir.
-- ⚠️ **Uygulamayı, fotoğraflarınızı ve videolarınızı saklamanın tek yöntemi olarak kullanmayın!**
+> [!NOTE]
+> Kurulum dahil olmak üzere resmi belgeleri https://immich.app/ adresinde bulabilirsiniz.
 
-## Content
+## Bağlantılar
 
-- [Resmi Belgeler](https://immich.app/docs)
-- [Yol Haritası](https://github.com/orgs/immich-app/projects/1)
+- [Resmi Belgeler](https://docs.immich.app/)
+- [Giriş](https://docs.immich.app/overview/introduction)
+- [Kurulum](https://docs.immich.app/install/requirements)
+- [Yol Haritası](https://immich.app/roadmap)
 - [Demo](#demo)
 - [Özellikler](#özellikler)
-- [Giriş](https://immich.app/docs/overview/introduction)
-- [Kurulum](https://immich.app/docs/install/requirements)
-- [Katkı Sağlama Rehberi](https://immich.app/docs/overview/support-the-project)
-
-## Belgeler
-
-Kurulum dahil olmak üzere resmi belgeleri https://immich.app/ adresinde bulabilirsiniz.
+- [Çeviriler](https://docs.immich.app/developer/translations)
+- [Katkı Sağlama Rehberi](https://docs.immich.app/overview/support-the-project)
 
 ## Demo
 

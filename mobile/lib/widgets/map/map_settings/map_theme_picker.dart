@@ -1,6 +1,6 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/extensions/translate_extensions.dart';
 import 'package:immich_mobile/widgets/map/map_thumbnail.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -8,11 +8,7 @@ class MapThemePicker extends StatelessWidget {
   final ThemeMode themeMode;
   final Function(ThemeMode) onThemeChange;
 
-  const MapThemePicker({
-    super.key,
-    required this.themeMode,
-    required this.onThemeChange,
-  });
+  const MapThemePicker({super.key, required this.themeMode, required this.onThemeChange});
 
   @override
   Widget build(BuildContext context) {
@@ -22,10 +18,9 @@ class MapThemePicker extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 20),
           child: Center(
             child: Text(
-              "map_settings_theme_settings",
-              style: context.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.bold),
-            ).tr(),
+              "map_settings_theme_settings".t(context: context),
+              style: context.textTheme.bodyLarge!.copyWith(fontWeight: FontWeight.w500, height: 1.5),
+            ),
           ),
         ),
         Row(
@@ -77,12 +72,7 @@ class _BorderedMapThumbnail extends StatelessWidget {
         Container(
           decoration: BoxDecoration(
             border: Border.fromBorderSide(
-              BorderSide(
-                width: 4,
-                color: shouldHighlight
-                    ? context.colorScheme.onSurface
-                    : Colors.transparent,
-              ),
+              BorderSide(width: 4, color: shouldHighlight ? context.colorScheme.onSurface : Colors.transparent),
             ),
             borderRadius: const BorderRadius.all(Radius.circular(20)),
           ),
@@ -98,9 +88,7 @@ class _BorderedMapThumbnail extends StatelessWidget {
           padding: const EdgeInsets.only(top: 10),
           child: Text(
             name,
-            style: context.textTheme.bodyMedium?.copyWith(
-              fontWeight: shouldHighlight ? FontWeight.bold : null,
-            ),
+            style: context.textTheme.bodyMedium?.copyWith(fontWeight: shouldHighlight ? FontWeight.bold : null),
           ),
         ),
       ],

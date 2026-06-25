@@ -1,6 +1,11 @@
+import type { AlbumResponseDto } from '@immich/sdk';
+import * as sdk from '@immich/sdk';
+import { orderBy } from 'lodash-es';
+import { t } from 'svelte-i18n';
+import { get } from 'svelte/store';
 import { goto } from '$app/navigation';
-import { AppRoute } from '$lib/constants';
-import { modalManager } from '$lib/managers/modal-manager.svelte';
+import { eventManager } from '$lib/managers/event-manager.svelte';
+import { Route } from '$lib/route';
 import {
   AlbumFilter,
   AlbumGroupBy,
@@ -11,11 +16,6 @@ import {
   type AlbumViewSettings,
 } from '$lib/stores/preferences.store';
 import { handleError } from '$lib/utils/handle-error';
-import type { AlbumResponseDto } from '@immich/sdk';
-import * as sdk from '@immich/sdk';
-import { orderBy } from 'lodash-es';
-import { t } from 'svelte-i18n';
-import { get } from 'svelte/store';
 
 /**
  * -------------------------
@@ -30,6 +30,7 @@ export const createAlbum = async (name?: string, assetIds?: string[]) => {
         assetIds,
       },
     });
+    eventManager.emit('AlbumCreate', newAlbum);
     return newAlbum;
   } catch (error) {
     const $t = get(t);
@@ -40,7 +41,7 @@ export const createAlbum = async (name?: string, assetIds?: string[]) => {
 export const createAlbumAndRedirect = async (name?: string, assetIds?: string[]) => {
   const newAlbum = await createAlbum(name, assetIds);
   if (newAlbum) {
-    await goto(`${AppRoute.ALBUMS}/${newAlbum.id}`);
+    await goto(Route.viewAlbum(newAlbum));
   }
 };
 
@@ -201,19 +202,6 @@ export const collapseAllAlbumGroups = (groupIds: string[]) => {
 
 export const expandAllAlbumGroups = () => {
   collapseAllAlbumGroups([]);
-};
-
-export const confirmAlbumDelete = async (album: AlbumResponseDto) => {
-  const $t = get(t);
-  const confirmation =
-    album.albumName.length > 0
-      ? $t('album_delete_confirmation', { values: { album: album.albumName } })
-      : $t('unnamed_album_delete_confirmation');
-
-  const description = $t('album_delete_confirmation_description');
-  const prompt = `${confirmation} ${description}`;
-
-  return modalManager.showDialog({ prompt });
 };
 
 interface AlbumSortOption {

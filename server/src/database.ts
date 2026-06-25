@@ -1,11 +1,11 @@
-import { Selectable } from 'kysely';
-import { Albums, Exif as DatabaseExif } from 'src/db';
+import { Selectable, ShallowDehydrateObject } from 'kysely';
 import { MapAsset } from 'src/dtos/asset-response.dto';
 import {
   AlbumUserRole,
   AssetFileType,
   AssetType,
   AssetVisibility,
+  ChecksumAlgorithm,
   MemoryType,
   Permission,
   SharedLinkType,
@@ -13,7 +13,11 @@ import {
   UserAvatarColor,
   UserStatus,
 } from 'src/enum';
-import { OnThisDayData, UserMetadataItem } from 'src/types';
+import { AlbumTable } from 'src/schema/tables/album.table';
+import { AssetExifTable } from 'src/schema/tables/asset-exif.table';
+import { AssetTable } from 'src/schema/tables/asset.table';
+import { PluginTable } from 'src/schema/tables/plugin.table';
+import { UserMetadataItem } from 'src/types';
 
 export type AuthUser = {
   id: string;
@@ -25,7 +29,7 @@ export type AuthUser = {
 };
 
 export type AlbumUser = {
-  user: User;
+  user: ShallowDehydrateObject<User>;
   role: AlbumUserRole;
 };
 
@@ -33,6 +37,7 @@ export type AssetFile = {
   id: string;
   type: AssetFileType;
   path: string;
+  isEdited: boolean;
 };
 
 export type Library = {
@@ -60,7 +65,7 @@ export type Activity = {
   updatedAt: Date;
   albumId: string;
   userId: string;
-  user: User;
+  user: ShallowDehydrateObject<User>;
   assetId: string | null;
   comment: string | null;
   isLiked: boolean;
@@ -95,17 +100,16 @@ export type Memory = {
   showAt: Date | null;
   hideAt: Date | null;
   type: MemoryType;
-  data: OnThisDayData;
+  data: Record<string, unknown>;
   ownerId: string;
   isSaved: boolean;
-  assets: MapAsset[];
+  assets: ShallowDehydrateObject<MapAsset>[];
 };
 
 export type Asset = {
   id: string;
   checksum: Buffer<ArrayBufferLike>;
-  deviceAssetId: string;
-  deviceId: string;
+  checksumAlgorithm: ChecksumAlgorithm;
   fileCreatedAt: Date;
   fileModifiedAt: Date;
   isExternal: boolean;
@@ -116,7 +120,6 @@ export type Asset = {
   originalFileName: string;
   originalPath: string;
   ownerId: string;
-  sidecarPath: string | null;
   type: AssetType;
 };
 
@@ -147,22 +150,14 @@ export type StorageAsset = {
   id: string;
   ownerId: string;
   files: AssetFile[];
-  encodedVideoPath: string | null;
-};
-
-export type SidecarWriteAsset = {
-  id: string;
-  sidecarPath: string | null;
-  originalPath: string;
-  tags: Array<{ value: string }>;
 };
 
 export type Stack = {
   id: string;
   primaryAssetId: string;
-  owner?: User;
+  owner?: ShallowDehydrateObject<User>;
   ownerId: string;
-  assets: MapAsset[];
+  assets: ShallowDehydrateObject<MapAsset>[];
   assetCount?: number;
 };
 
@@ -170,6 +165,7 @@ export type AuthSharedLink = {
   id: string;
   expiresAt: Date | null;
   userId: string;
+  albumId: string | null;
   showExif: boolean;
   allowUpload: boolean;
   allowDownload: boolean;
@@ -178,11 +174,11 @@ export type AuthSharedLink = {
 
 export type SharedLink = {
   id: string;
-  album?: Album | null;
+  album?: ShallowDehydrateObject<Album> | null;
   albumId: string | null;
   allowDownload: boolean;
   allowUpload: boolean;
-  assets: MapAsset[];
+  assets: ShallowDehydrateObject<MapAsset>[];
   createdAt: Date;
   description: string | null;
   expiresAt: Date | null;
@@ -191,11 +187,11 @@ export type SharedLink = {
   showExif: boolean;
   type: SharedLinkType;
   userId: string;
+  slug: string | null;
 };
 
-export type Album = Selectable<Albums> & {
-  owner: User;
-  assets: MapAsset[];
+export type Album = Selectable<AlbumTable> & {
+  assets: ShallowDehydrateObject<Selectable<AssetTable>>[];
 };
 
 export type AuthSession = {
@@ -205,10 +201,11 @@ export type AuthSession = {
 
 export type Partner = {
   sharedById: string;
-  sharedBy: User;
+  sharedBy: ShallowDehydrateObject<User>;
   sharedWithId: string;
-  sharedWith: User;
+  sharedWith: ShallowDehydrateObject<User>;
   createdAt: Date;
+  createId: string;
   updatedAt: Date;
   updateId: string;
   inTimeline: boolean;
@@ -235,10 +232,12 @@ export type Session = {
   expiresAt: Date | null;
   deviceOS: string;
   deviceType: string;
+  appVersion: string | null;
   pinExpiresAt: Date | null;
+  isPendingSyncReset: boolean;
 };
 
-export type Exif = Omit<Selectable<DatabaseExif>, 'updatedAt' | 'updateId'>;
+export type Exif = Omit<Selectable<AssetExifTable>, 'updatedAt' | 'updateId' | 'lockedProperties'>;
 
 export type Person = {
   createdAt: Date;
@@ -267,58 +266,82 @@ export type AssetFace = {
   imageWidth: number;
   personId: string | null;
   sourceType: SourceType;
-  person?: Person | null;
+  person?: ShallowDehydrateObject<Person> | null;
+  updatedAt: Date;
+  updateId: string;
+  isVisible: boolean;
 };
+
+export type Plugin = Selectable<PluginTable>;
 
 const userColumns = ['id', 'name', 'email', 'avatarColor', 'profileImagePath', 'profileChangedAt'] as const;
 const userWithPrefixColumns = [
-  'users.id',
-  'users.name',
-  'users.email',
-  'users.avatarColor',
-  'users.profileImagePath',
-  'users.profileChangedAt',
+  'user2.id',
+  'user2.name',
+  'user2.email',
+  'user2.avatarColor',
+  'user2.profileImagePath',
+  'user2.profileChangedAt',
 ] as const;
 
 export const columns = {
   asset: [
-    'assets.id',
-    'assets.checksum',
-    'assets.deviceAssetId',
-    'assets.deviceId',
-    'assets.fileCreatedAt',
-    'assets.fileModifiedAt',
-    'assets.isExternal',
-    'assets.visibility',
-    'assets.libraryId',
-    'assets.livePhotoVideoId',
-    'assets.localDateTime',
-    'assets.originalFileName',
-    'assets.originalPath',
-    'assets.ownerId',
-    'assets.sidecarPath',
-    'assets.type',
+    'asset.id',
+    'asset.checksum',
+    'asset.checksumAlgorithm',
+    'asset.fileCreatedAt',
+    'asset.fileModifiedAt',
+    'asset.isExternal',
+    'asset.visibility',
+    'asset.libraryId',
+    'asset.livePhotoVideoId',
+    'asset.localDateTime',
+    'asset.originalFileName',
+    'asset.originalPath',
+    'asset.ownerId',
+    'asset.type',
+    'asset.width',
+    'asset.height',
+    'asset.isEdited',
   ],
-  assetFiles: ['asset_files.id', 'asset_files.path', 'asset_files.type'],
-  authUser: [
-    'users.id',
-    'users.name',
-    'users.email',
-    'users.isAdmin',
-    'users.quotaUsageInBytes',
-    'users.quotaSizeInBytes',
+  workflowAssetV1: [
+    'asset.id',
+    'asset.ownerId',
+    'asset.stackId',
+    'asset.livePhotoVideoId',
+    'asset.libraryId',
+    'asset.duplicateId',
+    'asset.createdAt',
+    'asset.updatedAt',
+    'asset.deletedAt',
+    'asset.fileCreatedAt',
+    'asset.fileModifiedAt',
+    'asset.localDateTime',
+    'asset.type',
+    'asset.status',
+    'asset.visibility',
+    'asset.duration',
+    'asset.checksum',
+    'asset.originalPath',
+    'asset.originalFileName',
+    'asset.isOffline',
+    'asset.isFavorite',
+    'asset.isExternal',
+    'asset.isEdited',
+    'asset.isFavorite',
   ],
-  authApiKey: ['api_keys.id', 'api_keys.permissions'],
-  authSession: ['sessions.id', 'sessions.updatedAt', 'sessions.pinExpiresAt'],
-  authSharedLink: [
-    'shared_links.id',
-    'shared_links.userId',
-    'shared_links.expiresAt',
-    'shared_links.showExif',
-    'shared_links.allowUpload',
-    'shared_links.allowDownload',
-    'shared_links.password',
+  assetFiles: ['asset_file.id', 'asset_file.path', 'asset_file.type', 'asset_file.isEdited'],
+  assetFilesForThumbnail: [
+    'asset_file.id',
+    'asset_file.path',
+    'asset_file.type',
+    'asset_file.isEdited',
+    'asset_file.isProgressive',
+    'asset_file.isTransparent',
   ],
+  authUser: ['user.id', 'user.name', 'user.email', 'user.isAdmin', 'user.quotaUsageInBytes', 'user.quotaSizeInBytes'],
+  authApiKey: ['api_key.id', 'api_key.permissions'],
+  authSession: ['session.id', 'session.updatedAt', 'session.pinExpiresAt', 'session.appVersion'],
   user: userColumns,
   userWithPrefix: userWithPrefixColumns,
   userAdmin: [
@@ -335,82 +358,178 @@ export const columns = {
     'quotaSizeInBytes',
     'quotaUsageInBytes',
   ],
-  tag: ['tags.id', 'tags.value', 'tags.createdAt', 'tags.updatedAt', 'tags.color', 'tags.parentId'],
+  tag: ['tag.id', 'tag.value', 'tag.createdAt', 'tag.updatedAt', 'tag.color', 'tag.parentId'],
   apiKey: ['id', 'name', 'userId', 'createdAt', 'updatedAt', 'permissions'],
   notification: ['id', 'createdAt', 'level', 'type', 'title', 'description', 'data', 'readAt'],
-  syncAsset: [
-    'id',
-    'ownerId',
-    'originalFileName',
-    'thumbhash',
-    'checksum',
-    'fileCreatedAt',
-    'fileModifiedAt',
-    'localDateTime',
-    'type',
-    'deletedAt',
-    'isFavorite',
-    'visibility',
-    'updateId',
+  pluginMethod: [
+    'plugin_method.name',
+    'plugin_method.title',
+    'plugin_method.description',
+    'plugin_method.types',
+    'plugin_method.schema',
+    'plugin_method.hostFunctions',
+    'plugin_method.uiHints',
   ],
+  syncAsset: [
+    'asset.id',
+    'asset.ownerId',
+    'asset.originalFileName',
+    'asset.thumbhash',
+    'asset.checksum',
+    'asset.fileCreatedAt',
+    'asset.fileModifiedAt',
+    'asset.createdAt',
+    'asset.localDateTime',
+    'asset.type',
+    'asset.deletedAt',
+    'asset.isFavorite',
+    'asset.visibility',
+    'asset.duration',
+    'asset.livePhotoVideoId',
+    'asset.stackId',
+    'asset.libraryId',
+    'asset.width',
+    'asset.height',
+    'asset.isEdited',
+  ],
+  syncAlbumAsset: [
+    'asset.id',
+    'asset.ownerId',
+    'asset.originalFileName',
+    'asset.thumbhash',
+    'asset.checksum',
+    'asset.fileCreatedAt',
+    'asset.fileModifiedAt',
+    'asset.createdAt',
+    'asset.localDateTime',
+    'asset.type',
+    'asset.deletedAt',
+    'asset.visibility',
+    'asset.duration',
+    'asset.livePhotoVideoId',
+    'asset.stackId',
+    'asset.libraryId',
+    'asset.width',
+    'asset.height',
+    'asset.isEdited',
+  ],
+  syncPartnerAsset: [
+    'asset.id',
+    'asset.ownerId',
+    'asset.originalFileName',
+    'asset.thumbhash',
+    'asset.checksum',
+    'asset.fileCreatedAt',
+    'asset.fileModifiedAt',
+    'asset.localDateTime',
+    'asset.createdAt',
+    'asset.type',
+    'asset.deletedAt',
+    'asset.visibility',
+    'asset.duration',
+    'asset.livePhotoVideoId',
+    'asset.stackId',
+    'asset.libraryId',
+    'asset.width',
+    'asset.height',
+    'asset.isEdited',
+  ],
+  syncAlbumUser: ['album_user.albumId as albumId', 'album_user.userId as userId', 'album_user.role'],
+  syncStack: ['stack.id', 'stack.createdAt', 'stack.updatedAt', 'stack.primaryAssetId', 'stack.ownerId'],
+  syncUser: ['id', 'name', 'email', 'avatarColor', 'deletedAt', 'updateId', 'profileImagePath', 'profileChangedAt'],
   stack: ['stack.id', 'stack.primaryAssetId', 'ownerId'],
   syncAssetExif: [
-    'exif.assetId',
-    'exif.description',
-    'exif.exifImageWidth',
-    'exif.exifImageHeight',
-    'exif.fileSizeInByte',
-    'exif.orientation',
-    'exif.dateTimeOriginal',
-    'exif.modifyDate',
-    'exif.timeZone',
-    'exif.latitude',
-    'exif.longitude',
-    'exif.projectionType',
-    'exif.city',
-    'exif.state',
-    'exif.country',
-    'exif.make',
-    'exif.model',
-    'exif.lensModel',
-    'exif.fNumber',
-    'exif.focalLength',
-    'exif.iso',
-    'exif.exposureTime',
-    'exif.profileDescription',
-    'exif.rating',
-    'exif.fps',
-    'exif.updateId',
+    'asset_exif.assetId',
+    'asset_exif.description',
+    'asset_exif.exifImageWidth',
+    'asset_exif.exifImageHeight',
+    'asset_exif.fileSizeInByte',
+    'asset_exif.orientation',
+    'asset_exif.dateTimeOriginal',
+    'asset_exif.modifyDate',
+    'asset_exif.timeZone',
+    'asset_exif.latitude',
+    'asset_exif.longitude',
+    'asset_exif.projectionType',
+    'asset_exif.city',
+    'asset_exif.state',
+    'asset_exif.country',
+    'asset_exif.make',
+    'asset_exif.model',
+    'asset_exif.lensModel',
+    'asset_exif.fNumber',
+    'asset_exif.focalLength',
+    'asset_exif.iso',
+    'asset_exif.exposureTime',
+    'asset_exif.profileDescription',
+    'asset_exif.rating',
+    'asset_exif.fps',
+  ],
+  syncAssetOcr: [
+    'asset_ocr.id',
+    'asset_ocr.assetId',
+    'asset_ocr.x1',
+    'asset_ocr.y1',
+    'asset_ocr.x2',
+    'asset_ocr.y2',
+    'asset_ocr.x3',
+    'asset_ocr.y3',
+    'asset_ocr.x4',
+    'asset_ocr.y4',
+    'asset_ocr.text',
+    'asset_ocr.boxScore',
+    'asset_ocr.textScore',
+    'asset_ocr.updateId',
+    'asset_ocr.isVisible',
+  ],
+  syncAssetEdit: [
+    'asset_edit.id',
+    'asset_edit.assetId',
+    'asset_edit.sequence',
+    'asset_edit.action',
+    'asset_edit.parameters',
   ],
   exif: [
-    'exif.assetId',
-    'exif.autoStackId',
-    'exif.bitsPerSample',
-    'exif.city',
-    'exif.colorspace',
-    'exif.country',
-    'exif.dateTimeOriginal',
-    'exif.description',
-    'exif.exifImageHeight',
-    'exif.exifImageWidth',
-    'exif.exposureTime',
-    'exif.fileSizeInByte',
-    'exif.fNumber',
-    'exif.focalLength',
-    'exif.fps',
-    'exif.iso',
-    'exif.latitude',
-    'exif.lensModel',
-    'exif.livePhotoCID',
-    'exif.longitude',
-    'exif.make',
-    'exif.model',
-    'exif.modifyDate',
-    'exif.orientation',
-    'exif.profileDescription',
-    'exif.projectionType',
-    'exif.rating',
-    'exif.state',
-    'exif.timeZone',
+    'asset_exif.assetId',
+    'asset_exif.autoStackId',
+    'asset_exif.bitsPerSample',
+    'asset_exif.city',
+    'asset_exif.colorspace',
+    'asset_exif.country',
+    'asset_exif.dateTimeOriginal',
+    'asset_exif.description',
+    'asset_exif.exifImageHeight',
+    'asset_exif.exifImageWidth',
+    'asset_exif.exposureTime',
+    'asset_exif.fileSizeInByte',
+    'asset_exif.fNumber',
+    'asset_exif.focalLength',
+    'asset_exif.fps',
+    'asset_exif.iso',
+    'asset_exif.latitude',
+    'asset_exif.lensModel',
+    'asset_exif.livePhotoCID',
+    'asset_exif.longitude',
+    'asset_exif.make',
+    'asset_exif.model',
+    'asset_exif.modifyDate',
+    'asset_exif.orientation',
+    'asset_exif.profileDescription',
+    'asset_exif.projectionType',
+    'asset_exif.rating',
+    'asset_exif.state',
+    'asset_exif.tags',
+    'asset_exif.timeZone',
   ],
 } as const;
+
+export type LockableProperty = (typeof lockableProperties)[number];
+export const lockableProperties = [
+  'description',
+  'dateTimeOriginal',
+  'latitude',
+  'longitude',
+  'rating',
+  'timeZone',
+  'tags',
+] as const;

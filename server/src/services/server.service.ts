@@ -19,15 +19,20 @@ import { UserStatsQueryResponse } from 'src/repositories/user.repository';
 import { BaseService } from 'src/services/base.service';
 import { asHumanReadable } from 'src/utils/bytes';
 import { mimeTypes } from 'src/utils/mime-types';
-import { isDuplicateDetectionEnabled, isFacialRecognitionEnabled, isSmartSearchEnabled } from 'src/utils/misc';
+import {
+  isDuplicateDetectionEnabled,
+  isFacialRecognitionEnabled,
+  isOcrEnabled,
+  isSmartSearchEnabled,
+} from 'src/utils/misc';
 
 @Injectable()
 export class ServerService extends BaseService {
-  @OnEvent({ name: 'app.bootstrap' })
+  @OnEvent({ name: 'AppBootstrap' })
   async onBootstrap(): Promise<void> {
     const featureFlags = await this.getFeatures();
     if (featureFlags.configFile) {
-      await this.systemMetadataRepository.set(SystemMetadataKey.ADMIN_ONBOARDING, {
+      await this.systemMetadataRepository.set(SystemMetadataKey.AdminOnboarding, {
         isOnboarded: true,
       });
     }
@@ -38,7 +43,7 @@ export class ServerService extends BaseService {
     const version = `v${serverVersion.toString()}`;
     const { buildMetadata } = this.configRepository.getEnv();
     const buildVersions = await this.serverInfoRepository.getBuildVersions();
-    const licensed = await this.systemMetadataRepository.get(SystemMetadataKey.LICENSE);
+    const licensed = await this.systemMetadataRepository.get(SystemMetadataKey.License);
 
     return {
       version,
@@ -60,7 +65,7 @@ export class ServerService extends BaseService {
   }
 
   async getStorage(): Promise<ServerStorageResponseDto> {
-    const libraryBase = StorageCore.getBaseFolder(StorageFolder.LIBRARY);
+    const libraryBase = StorageCore.getBaseFolder(StorageFolder.Library);
     const diskInfo = await this.storageRepository.checkDiskUsage(libraryBase);
 
     const usagePercentage = (((diskInfo.total - diskInfo.free) / diskInfo.total) * 100).toFixed(2);
@@ -81,7 +86,7 @@ export class ServerService extends BaseService {
   }
 
   async getFeatures(): Promise<ServerFeaturesDto> {
-    const { reverseGeocoding, metadata, map, machineLearning, trash, oauth, passwordLogin, notifications } =
+    const { reverseGeocoding, metadata, map, machineLearning, trash, oauth, passwordLogin, notifications, ffmpeg } =
       await this.getConfig({ withCache: false });
     const { configFile } = this.configRepository.getEnv();
 
@@ -97,21 +102,19 @@ export class ServerService extends BaseService {
       trash: trash.enabled,
       oauth: oauth.enabled,
       oauthAutoLaunch: oauth.autoLaunch,
+      ocr: isOcrEnabled(machineLearning),
       passwordLogin: passwordLogin.enabled,
       configFile: !!configFile,
       email: notifications.smtp.enabled,
+      realtimeTranscoding: ffmpeg.realtime.enabled,
     };
   }
 
-  async getTheme() {
-    const { theme } = await this.getConfig({ withCache: false });
-    return theme;
-  }
-
   async getSystemConfig(): Promise<ServerConfigDto> {
+    const { setup } = this.configRepository.getEnv();
     const config = await this.getConfig({ withCache: false });
-    const isInitialized = await this.userRepository.hasAdmin();
-    const onboarding = await this.systemMetadataRepository.get(SystemMetadataKey.ADMIN_ONBOARDING);
+    const isInitialized = !setup.allow || (await this.userRepository.hasAdmin());
+    const onboarding = await this.systemMetadataRepository.get(SystemMetadataKey.AdminOnboarding);
 
     return {
       loginPageMessage: config.server.loginPageMessage,
@@ -124,12 +127,20 @@ export class ServerService extends BaseService {
       publicUsers: config.server.publicUsers,
       mapDarkStyleUrl: config.map.darkStyle,
       mapLightStyleUrl: config.map.lightStyle,
+      maintenanceMode: false,
+      minFaces: config.machineLearning.facialRecognition.minFaces,
     };
   }
 
   async getStatistics(): Promise<ServerStatsResponseDto> {
     const userStats: UserStatsQueryResponse[] = await this.userRepository.getUserStats();
     const serverStats = new ServerStatsResponseDto();
+    serverStats.photos ??= 0;
+    serverStats.videos ??= 0;
+    serverStats.usage ??= 0;
+    serverStats.usagePhotos ??= 0;
+    serverStats.usageVideos ??= 0;
+    serverStats.usageByUser ??= [];
 
     for (const user of userStats) {
       const usage = new UsageByUserDto();
@@ -163,11 +174,11 @@ export class ServerService extends BaseService {
   }
 
   async deleteLicense(): Promise<void> {
-    await this.systemMetadataRepository.delete(SystemMetadataKey.LICENSE);
+    await this.systemMetadataRepository.delete(SystemMetadataKey.License);
   }
 
   async getLicense(): Promise<LicenseResponseDto> {
-    const license = await this.systemMetadataRepository.get(SystemMetadataKey.LICENSE);
+    const license = await this.systemMetadataRepository.get(SystemMetadataKey.License);
     if (!license) {
       throw new NotFoundException();
     }
@@ -186,7 +197,7 @@ export class ServerService extends BaseService {
 
     const licenseData = { ...dto, activatedAt: new Date() };
 
-    await this.systemMetadataRepository.set(SystemMetadataKey.LICENSE, licenseData);
+    await this.systemMetadataRepository.set(SystemMetadataKey.License, licenseData);
 
     return licenseData;
   }

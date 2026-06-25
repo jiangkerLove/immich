@@ -75,7 +75,6 @@ alt="Select Plugins > Compose.Manager > Add New Stack > Label it Immich"
 5.  Click "**Save Changes**", you will be prompted to edit stack UI labels, just leave this blank and click "**Ok**"
 6.  Select the cog ⚙️ next to Immich, click "**Edit Stack**", then click "**Env File**"
 7.  Paste the entire contents of the [Immich example.env](https://github.com/immich-app/immich/releases/latest/download/example.env) file into the Unraid editor, then **before saving** edit the following:
-
     - `UPLOAD_LOCATION`: Create a folder in your Images Unraid share and place the **absolute** location here > For example my _"images"_ share has a folder within it called _"immich"_. If I browse to this directory in the terminal and type `pwd` the output is `/mnt/user/images/immich`. This is the exact value I need to enter as my `UPLOAD_LOCATION`
     - `DB_DATA_LOCATION`: Change this to use an Unraid share (preferably a cache pool, e.g. `/mnt/user/appdata/postgresql/data`). This uses the `appdata` share. Do also create the `postgresql` folder, by running `mkdir /mnt/user/{share_location}/postgresql/data`. If left at default it will try to use Unraid's `/boot/config/plugins/compose.manager/projects/[stack_name]/postgres` folder which it doesn't have permissions to, resulting in this container continuously restarting.
 
@@ -126,13 +125,13 @@ alt="Go to Docker Tab and visit the address listed next to immich-web"
 </details>
 
 :::tip
-For more information on how to use the application once installed, please refer to the [Post Install](/docs/install/post-install.mdx) guide.
+For more information on how to use the application once installed, please refer to the [Post Install](/install/post-install.mdx) guide.
 :::
 
 ## Updating Steps
 
 :::danger
-Make sure to read the general [upgrade instructions](/docs/install/upgrading.md).
+Make sure to read the general [upgrade instructions](/install/upgrading.md).
 :::
 
 Updating is extremely easy however it's important to be aware that containers managed via the Docker Compose Manager plugin do not integrate with Unraid's native dockerman UI, the label "_update ready_" will always be present on containers installed via the Docker Compose Manager.

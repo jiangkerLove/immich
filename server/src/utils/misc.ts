@@ -1,22 +1,28 @@
 import { INestApplication } from '@nestjs/common';
 import {
+  ApiBodyOptions,
   DocumentBuilder,
   OpenAPIObject,
   SwaggerCustomOptions,
   SwaggerDocumentOptions,
   SwaggerModule,
 } from '@nestjs/swagger';
-import { ReferenceObject, SchemaObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
 import _ from 'lodash';
+import { cleanupOpenApiDoc } from 'nestjs-zod';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import picomatch from 'picomatch';
 import parse from 'picomatch/lib/parse';
 import { SystemConfig } from 'src/config';
-import { CLIP_MODEL_INFO, serverVersion } from 'src/constants';
-import { extraSyncModels } from 'src/dtos/sync.dto';
-import { ImmichCookie, ImmichHeader, MetadataKey } from 'src/enum';
+import { CLIP_MODEL_INFO, endpointTags, serverVersion } from 'src/constants';
+import { extraModels } from 'src/decorators';
+import { ApiCustomExtension, ImmichCookie, ImmichHeader, MetadataKey } from 'src/enum';
 import { LoggingRepository } from 'src/repositories/logging.repository';
+
+type OperationObject = NonNullable<OpenAPIObject['paths'][string]['get']>;
+type ReferenceOrSchemaObject = Extract<ApiBodyOptions, { schema: unknown }>['schema'];
+type ReferenceObject = Extract<ReferenceOrSchemaObject, { $ref: unknown }>;
+type SchemaObject = Exclude<ReferenceOrSchemaObject, ReferenceObject>;
 
 export class ImmichStartupError extends Error {}
 export const isStartUpError = (error: unknown): error is ImmichStartupError => error instanceof ImmichStartupError;
@@ -44,7 +50,8 @@ export const getMethodNames = (instance: any) => {
   return methods;
 };
 
-export const getExternalDomain = (server: SystemConfig['server']) => server.externalDomain || `https://my.immich.app`;
+export const getExternalDomain = (server: SystemConfig['server'], defaultDomain = 'https://my.immich.app') =>
+  server.externalDomain || defaultDomain;
 
 /**
  * @returns a list of strings representing the keys of the object in dot notation
@@ -90,6 +97,8 @@ export const unsetDeep = (object: unknown, key: string) => {
 const isMachineLearningEnabled = (machineLearning: SystemConfig['machineLearning']) => machineLearning.enabled;
 export const isSmartSearchEnabled = (machineLearning: SystemConfig['machineLearning']) =>
   isMachineLearningEnabled(machineLearning) && machineLearning.clip.enabled;
+export const isOcrEnabled = (machineLearning: SystemConfig['machineLearning']) =>
+  isMachineLearningEnabled(machineLearning) && machineLearning.ocr.enabled;
 export const isFacialRecognitionEnabled = (machineLearning: SystemConfig['machineLearning']) =>
   isMachineLearningEnabled(machineLearning) && machineLearning.facialRecognition.enabled;
 export const isDuplicateDetectionEnabled = (machineLearning: SystemConfig['machineLearning']) =>
@@ -132,7 +141,7 @@ function sortKeys<T>(target: T): T {
   }
 
   const result: Partial<T> = {};
-  const keys = Object.keys(target).sort() as Array<keyof T>;
+  const keys = Object.keys(target).toSorted() as Array<keyof T>;
   for (const key of keys) {
     result[key] = sortKeys(target[key]);
   }
@@ -151,10 +160,37 @@ const isSchema = (schema: string | ReferenceObject | SchemaObject): schema is Sc
 };
 
 const patchOpenAPI = (document: OpenAPIObject) => {
+  const removeOpenApi30IncompatibleKeys = (target: unknown) => {
+    if (!target || typeof target !== 'object') {
+      return;
+    }
+
+    if (Array.isArray(target)) {
+      for (const item of target) {
+        removeOpenApi30IncompatibleKeys(item);
+      }
+      return;
+    }
+
+    const object = target as Record<string, unknown>;
+    delete object.propertyNames;
+    delete object.contentEncoding;
+
+    for (const value of Object.values(object)) {
+      removeOpenApi30IncompatibleKeys(value);
+    }
+  };
+
   document.paths = sortKeys(document.paths);
+  // Allowed in OpenAPI v3.1 (JSON Schema 2020-12), but not in OpenAPI v3.0 (current spec).
+  removeOpenApi30IncompatibleKeys(document);
 
   if (document.components?.schemas) {
     const schemas = document.components.schemas as Record<string, SchemaObject>;
+
+    for (const schema of Object.values(schemas)) {
+      delete (schema as Record<string, unknown>).id;
+    }
 
     document.components.schemas = sortKeys(schemas);
 
@@ -171,10 +207,7 @@ const patchOpenAPI = (document: OpenAPIObject) => {
             throw new Error(`Invalid number format: ${schemaName}.${key}=float (use double instead). `);
           }
         }
-
-        if (schema.required) {
-          schema.required = schema.required.sort();
-        }
+        schema.required?.sort();
       }
     }
   }
@@ -197,7 +230,12 @@ const patchOpenAPI = (document: OpenAPIObject) => {
       trace: path.trace,
     };
 
-    for (const operation of Object.values(operations)) {
+    for (const operation of Object.values(operations) as Array<
+      OperationObject & {
+        [ApiCustomExtension.AdminOnly]?: boolean;
+        [ApiCustomExtension.Permission]?: string;
+      }
+    >) {
       if (!operation) {
         continue;
       }
@@ -206,12 +244,12 @@ const patchOpenAPI = (document: OpenAPIObject) => {
         delete operation.summary;
       }
 
-      if (operation.operationId) {
-        // console.log(`${routeToErrorMessage(operation.operationId).padEnd(40)} (${operation.operationId})`);
-      }
-
       if (operation.description === '') {
         delete operation.description;
+      }
+
+      if (operation.operationId) {
+        // console.log(`${routeToErrorMessage(operation.operationId).padEnd(40)} (${operation.operationId})`);
       }
 
       if (operation.parameters) {
@@ -224,7 +262,7 @@ const patchOpenAPI = (document: OpenAPIObject) => {
 };
 
 export const useSwagger = (app: INestApplication, { write }: { write: boolean }) => {
-  const config = new DocumentBuilder()
+  const builder = new DocumentBuilder()
     .setTitle('Immich')
     .setDescription('Immich API')
     .setVersion(serverVersion.toString())
@@ -233,24 +271,30 @@ export const useSwagger = (app: INestApplication, { write }: { write: boolean })
       scheme: 'Bearer',
       in: 'header',
     })
-    .addCookieAuth(ImmichCookie.ACCESS_TOKEN)
+    .addCookieAuth(ImmichCookie.AccessToken)
     .addApiKey(
       {
         type: 'apiKey',
         in: 'header',
-        name: ImmichHeader.API_KEY,
+        name: ImmichHeader.ApiKey,
       },
-      MetadataKey.API_KEY_SECURITY,
+      MetadataKey.ApiKeySecurity,
     )
-    .addServer('/api')
-    .build();
+    .addServer('/api');
+
+  for (const [tag, description] of Object.entries(endpointTags)) {
+    builder.addTag(tag, description);
+  }
+  const config = builder.build();
 
   const options: SwaggerDocumentOptions = {
     operationIdFactory: (controllerKey: string, methodKey: string) => methodKey,
-    extraModels: extraSyncModels,
+    extraModels,
+    ignoreGlobalPrefix: true,
   };
 
   const specification = SwaggerModule.createDocument(app, config, options);
+  const openApiDoc = cleanupOpenApiDoc(specification);
 
   const customOptions: SwaggerCustomOptions = {
     swaggerOptions: {
@@ -261,12 +305,12 @@ export const useSwagger = (app: INestApplication, { write }: { write: boolean })
     customSiteTitle: 'Immich API Documentation',
   };
 
-  SwaggerModule.setup('doc', app, specification, customOptions);
+  SwaggerModule.setup('doc', app, openApiDoc, customOptions);
 
   if (write) {
     // Generate API Documentation only in development mode
     const outputPath = path.resolve(process.cwd(), '../open-api/immich-openapi-specs.json');
-    writeFileSync(outputPath, JSON.stringify(patchOpenAPI(specification), null, 2), { encoding: 'utf8' });
+    writeFileSync(outputPath, JSON.stringify(patchOpenAPI(openApiDoc), null, 2), { encoding: 'utf8' });
   }
 };
 

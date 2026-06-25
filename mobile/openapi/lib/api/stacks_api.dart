@@ -16,11 +16,16 @@ class StacksApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'POST /stacks' operation and returns the [Response].
+  /// Create a stack
+  ///
+  /// Create a new stack by providing a name and a list of asset IDs to include in the stack. If any of the provided asset IDs are primary assets of an existing stack, the existing stack will be merged into the newly created stack.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [StackCreateDto] stackCreateDto (required):
-  Future<Response> createStackWithHttpInfo(StackCreateDto stackCreateDto,) async {
+  Future<Response> createStackWithHttpInfo(StackCreateDto stackCreateDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/stacks';
 
@@ -42,14 +47,19 @@ class StacksApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Create a stack
+  ///
+  /// Create a new stack by providing a name and a list of asset IDs to include in the stack. If any of the provided asset IDs are primary assets of an existing stack, the existing stack will be merged into the newly created stack.
+  ///
   /// Parameters:
   ///
   /// * [StackCreateDto] stackCreateDto (required):
-  Future<StackResponseDto?> createStack(StackCreateDto stackCreateDto,) async {
-    final response = await createStackWithHttpInfo(stackCreateDto,);
+  Future<StackResponseDto?> createStack(StackCreateDto stackCreateDto, { Future<void>? abortTrigger, }) async {
+    final response = await createStackWithHttpInfo(stackCreateDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -63,11 +73,16 @@ class StacksApi {
     return null;
   }
 
-  /// Performs an HTTP 'DELETE /stacks/{id}' operation and returns the [Response].
+  /// Delete a stack
+  ///
+  /// Delete a specific stack by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> deleteStackWithHttpInfo(String id,) async {
+  Future<Response> deleteStackWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/stacks/{id}'
       .replaceAll('{id}', id);
@@ -90,24 +105,34 @@ class StacksApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Delete a stack
+  ///
+  /// Delete a specific stack by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<void> deleteStack(String id,) async {
-    final response = await deleteStackWithHttpInfo(id,);
+  Future<void> deleteStack(String id, { Future<void>? abortTrigger, }) async {
+    final response = await deleteStackWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'DELETE /stacks' operation and returns the [Response].
+  /// Delete stacks
+  ///
+  /// Delete multiple stacks by providing a list of stack IDs.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<Response> deleteStacksWithHttpInfo(BulkIdsDto bulkIdsDto,) async {
+  Future<Response> deleteStacksWithHttpInfo(BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/stacks';
 
@@ -129,24 +154,34 @@ class StacksApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Delete stacks
+  ///
+  /// Delete multiple stacks by providing a list of stack IDs.
+  ///
   /// Parameters:
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<void> deleteStacks(BulkIdsDto bulkIdsDto,) async {
-    final response = await deleteStacksWithHttpInfo(bulkIdsDto,);
+  Future<void> deleteStacks(BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
+    final response = await deleteStacksWithHttpInfo(bulkIdsDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'GET /stacks/{id}' operation and returns the [Response].
+  /// Retrieve a stack
+  ///
+  /// Retrieve a specific stack by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> getStackWithHttpInfo(String id,) async {
+  Future<Response> getStackWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/stacks/{id}'
       .replaceAll('{id}', id);
@@ -169,14 +204,19 @@ class StacksApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve a stack
+  ///
+  /// Retrieve a specific stack by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<StackResponseDto?> getStack(String id,) async {
-    final response = await getStackWithHttpInfo(id,);
+  Future<StackResponseDto?> getStack(String id, { Future<void>? abortTrigger, }) async {
+    final response = await getStackWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -190,11 +230,72 @@ class StacksApi {
     return null;
   }
 
-  /// Performs an HTTP 'GET /stacks' operation and returns the [Response].
+  /// Remove an asset from a stack
+  ///
+  /// Remove a specific asset from a stack by providing the stack ID and asset ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
+  /// Parameters:
+  ///
+  /// * [String] assetId (required):
+  ///
+  /// * [String] id (required):
+  Future<Response> removeAssetFromStackWithHttpInfo(String assetId, String id, { Future<void>? abortTrigger, }) async {
+    // ignore: prefer_const_declarations
+    final apiPath = r'/stacks/{id}/assets/{assetId}'
+      .replaceAll('{assetId}', assetId)
+      .replaceAll('{id}', id);
+
+    // ignore: prefer_final_locals
+    Object? postBody;
+
+    final queryParams = <QueryParam>[];
+    final headerParams = <String, String>{};
+    final formParams = <String, String>{};
+
+    const contentTypes = <String>[];
+
+
+    return apiClient.invokeAPI(
+      apiPath,
+      'DELETE',
+      queryParams,
+      postBody,
+      headerParams,
+      formParams,
+      contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
+    );
+  }
+
+  /// Remove an asset from a stack
+  ///
+  /// Remove a specific asset from a stack by providing the stack ID and asset ID.
+  ///
+  /// Parameters:
+  ///
+  /// * [String] assetId (required):
+  ///
+  /// * [String] id (required):
+  Future<void> removeAssetFromStack(String assetId, String id, { Future<void>? abortTrigger, }) async {
+    final response = await removeAssetFromStackWithHttpInfo(assetId, id, abortTrigger: abortTrigger,);
+    if (response.statusCode >= HttpStatus.badRequest) {
+      throw ApiException(response.statusCode, await _decodeBodyBytes(response));
+    }
+  }
+
+  /// Retrieve stacks
+  ///
+  /// Retrieve a list of stacks.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] primaryAssetId:
-  Future<Response> searchStacksWithHttpInfo({ String? primaryAssetId, }) async {
+  ///   Filter by primary asset ID
+  Future<Response> searchStacksWithHttpInfo({ String? primaryAssetId, Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/stacks';
 
@@ -220,14 +321,20 @@ class StacksApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve stacks
+  ///
+  /// Retrieve a list of stacks.
+  ///
   /// Parameters:
   ///
   /// * [String] primaryAssetId:
-  Future<List<StackResponseDto>?> searchStacks({ String? primaryAssetId, }) async {
-    final response = await searchStacksWithHttpInfo( primaryAssetId: primaryAssetId, );
+  ///   Filter by primary asset ID
+  Future<List<StackResponseDto>?> searchStacks({ String? primaryAssetId, Future<void>? abortTrigger, }) async {
+    final response = await searchStacksWithHttpInfo(primaryAssetId: primaryAssetId, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -244,13 +351,18 @@ class StacksApi {
     return null;
   }
 
-  /// Performs an HTTP 'PUT /stacks/{id}' operation and returns the [Response].
+  /// Update a stack
+  ///
+  /// Update an existing stack by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [StackUpdateDto] stackUpdateDto (required):
-  Future<Response> updateStackWithHttpInfo(String id, StackUpdateDto stackUpdateDto,) async {
+  Future<Response> updateStackWithHttpInfo(String id, StackUpdateDto stackUpdateDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/stacks/{id}'
       .replaceAll('{id}', id);
@@ -273,16 +385,21 @@ class StacksApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Update a stack
+  ///
+  /// Update an existing stack by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [StackUpdateDto] stackUpdateDto (required):
-  Future<StackResponseDto?> updateStack(String id, StackUpdateDto stackUpdateDto,) async {
-    final response = await updateStackWithHttpInfo(id, stackUpdateDto,);
+  Future<StackResponseDto?> updateStack(String id, StackUpdateDto stackUpdateDto, { Future<void>? abortTrigger, }) async {
+    final response = await updateStackWithHttpInfo(id, stackUpdateDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }

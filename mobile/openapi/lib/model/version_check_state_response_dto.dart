@@ -17,8 +17,10 @@ class VersionCheckStateResponseDto {
     required this.releaseVersion,
   });
 
+  /// Last check timestamp
   String? checkedAt;
 
+  /// Release version
   String? releaseVersion;
 
   @override
@@ -40,12 +42,12 @@ class VersionCheckStateResponseDto {
     if (this.checkedAt != null) {
       json[r'checkedAt'] = this.checkedAt;
     } else {
-    //  json[r'checkedAt'] = null;
+      json[r'checkedAt'] = null;
     }
     if (this.releaseVersion != null) {
       json[r'releaseVersion'] = this.releaseVersion;
     } else {
-    //  json[r'releaseVersion'] = null;
+      json[r'releaseVersion'] = null;
     }
     return json;
   }

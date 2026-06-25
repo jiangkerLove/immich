@@ -25,8 +25,23 @@
   @com.google.gson.annotations.SerializedName <fields>;
 }
 
+# TypeToken preventions
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken
+
 # Retain generic signatures of TypeToken and its subclasses with R8 version 3.0 and higher.
 -keep,allowobfuscation,allowshrinking class com.google.gson.reflect.TypeToken
 -keep,allowobfuscation,allowshrinking class * extends com.google.gson.reflect.TypeToken
 
 ##---------------End: proguard configuration for Gson  ----------
+
+# Keep all widget model classes and their fields for Gson
+-keep class app.alextran.immich.widget.model.** { *; }
+
+##---------------Begin: proguard configuration for ok_http JNI ----------
+# The ok_http Dart plugin accesses OkHttp and Okio classes via JNI
+# string-based reflection (JClass.forName), which R8 cannot trace.
+-keep class okhttp3.** { *; }
+-keep class okio.** { *; }
+-keep class com.example.ok_http.** { *; }
+##---------------End: proguard configuration for ok_http JNI ----------

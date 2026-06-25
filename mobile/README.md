@@ -4,17 +4,27 @@ The Immich mobile app is a Flutter-based solution leveraging the Isar Database f
 
 ## Setup
 
-1. Setup Flutter toolchain using FVM.
-2. Run `flutter pub get` to install the dependencies.
-3. Run `make translation` to generate the translation file.
-4. Run `fvm flutter run` to start the app.
+See [setup](https://docs.immich.app/developer/setup) for how to set up the mobile build environment.
 
-## Translation
+## Static Analysis
 
-To add a new translation text, enter the key-value pair in the `i18n/en.json` in the root of the immich project. Then, from the `mobile/` directory, run
+The following checks of static analysis must pass for a contribution to the mobile app to be valid:
 
 ```bash
-make translation
+dart format lib
+dart analyze
+dart run custom_lint
+dcm analyze lib
+```
+
+[DCM](https://dcm.dev/) is a vendor tool that needs to be downloaded manually to run locally.
+Immich was provided an open source license.
+To use it, it is important that you do not have an active free tier license (can be verified with `dcm license`).
+If you have write-access to the Immich repository directly, running dcm in your clone should just work.
+If you are working on a clone of a fork, you need to connect to the main Immich repository as remote first:
+
+```bash
+git remote add immich git@github.com:immich-app/immich.git
 ```
 
 ## Immich-Flutter Directory Structure
@@ -63,4 +73,4 @@ Below is how your code needs to be structured:
 
 ## Contributing
 
-Please refer to the [architecture](https://immich.app/docs/developer/architecture/) for contributing to the mobile app!
+Please refer to the [architecture](https://docs.immich.app/developer/architecture/) for contributing to the mobile app!

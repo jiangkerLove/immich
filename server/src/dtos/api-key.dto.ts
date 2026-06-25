@@ -1,42 +1,42 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMinSize, IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { createZodDto } from 'nestjs-zod';
 import { Permission } from 'src/enum';
-import { Optional } from 'src/validation';
-export class APIKeyCreateDto {
-  @IsString()
-  @IsNotEmpty()
-  @Optional()
-  name?: string;
+import { isoDatetimeToDate } from 'src/validation';
+import z from 'zod';
 
-  @IsEnum(Permission, { each: true })
-  @ApiProperty({ enum: Permission, enumName: 'Permission', isArray: true })
-  @ArrayMinSize(1)
-  permissions!: Permission[];
-}
+const PermissionSchema = z.enum(Permission).describe('List of permissions').meta({ id: 'Permission' });
 
-export class APIKeyUpdateDto {
-  @Optional()
-  @IsString()
-  @IsNotEmpty()
-  name?: string;
+const ApiKeyCreateSchema = z
+  .object({
+    name: z.string().optional().describe('API key name'),
+    permissions: z.array(PermissionSchema).min(1).describe('List of permissions'),
+  })
+  .meta({ id: 'ApiKeyCreateDto' });
 
-  @Optional()
-  @IsEnum(Permission, { each: true })
-  @ApiProperty({ enum: Permission, enumName: 'Permission', isArray: true })
-  @ArrayMinSize(1)
-  permissions?: Permission[];
-}
+const ApiKeyUpdateSchema = z
+  .object({
+    name: z.string().optional().describe('API key name'),
+    permissions: z.array(PermissionSchema).min(1).optional().describe('List of permissions'),
+  })
+  .meta({ id: 'ApiKeyUpdateDto' });
 
-export class APIKeyCreateResponseDto {
-  secret!: string;
-  apiKey!: APIKeyResponseDto;
-}
+const ApiKeyResponseSchema = z
+  .object({
+    id: z.uuidv4().describe('API key ID'),
+    name: z.string().describe('API key name'),
+    createdAt: isoDatetimeToDate.describe('Creation date'),
+    updatedAt: isoDatetimeToDate.describe('Last update date'),
+    permissions: z.array(PermissionSchema).describe('List of permissions'),
+  })
+  .meta({ id: 'ApiKeyResponseDto' });
 
-export class APIKeyResponseDto {
-  id!: string;
-  name!: string;
-  createdAt!: Date;
-  updatedAt!: Date;
-  @ApiProperty({ enum: Permission, enumName: 'Permission', isArray: true })
-  permissions!: Permission[];
-}
+const ApiKeyCreateResponseSchema = z
+  .object({
+    secret: z.string().describe('API key secret (only shown once)'),
+    apiKey: ApiKeyResponseSchema,
+  })
+  .meta({ id: 'ApiKeyCreateResponseDto' });
+
+export class ApiKeyCreateDto extends createZodDto(ApiKeyCreateSchema) {}
+export class ApiKeyUpdateDto extends createZodDto(ApiKeyUpdateSchema) {}
+export class ApiKeyResponseDto extends createZodDto(ApiKeyResponseSchema) {}
+export class ApiKeyCreateResponseDto extends createZodDto(ApiKeyCreateResponseSchema) {}

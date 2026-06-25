@@ -1,35 +1,27 @@
 <script lang="ts">
   import { copyToClipboard } from '$lib/utils';
-  import { Button, Modal, ModalBody, ModalFooter } from '@immich/ui';
+  import { Button, HStack, Modal, ModalBody, ModalFooter, Text, Textarea } from '@immich/ui';
   import { mdiKeyVariant } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
-  interface Props {
+  type Props = {
     secret?: string;
     onClose: () => void;
-  }
+  };
 
   let { secret = '', onClose }: Props = $props();
 </script>
 
 <Modal title={$t('api_key')} icon={mdiKeyVariant} {onClose} size="small">
   <ModalBody>
-    <div class="text-immich-primary dark:text-immich-dark-primary">
-      <p class="text-sm dark:text-immich-dark-fg">
-        {$t('api_key_description')}
-      </p>
-    </div>
-
-    <div class="my-4 flex flex-col gap-2">
-      <!-- <label class="immich-form-label" for="secret">{ $t("api_key") }</label> -->
-      <textarea class="immich-form-input" id="secret" name="secret" readonly={true} value={secret}></textarea>
-    </div>
+    <Text size="small" class="mb-4">{$t('api_key_description')}</Text>
+    <Textarea bind:value={secret} readonly class="font-mono" />
   </ModalBody>
 
   <ModalFooter>
-    <div class="flex gap-3 w-full">
+    <HStack fullWidth>
       <Button shape="round" onclick={() => copyToClipboard(secret)} fullWidth>{$t('copy_to_clipboard')}</Button>
       <Button shape="round" onclick={onClose} fullWidth>{$t('done')}</Button>
-    </div>
+    </HStack>
   </ModalFooter>
 </Modal>

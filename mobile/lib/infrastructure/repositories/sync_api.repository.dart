@@ -3,53 +3,78 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:immich_mobile/constants/constants.dart';
-import 'package:immich_mobile/domain/interfaces/sync_api.interface.dart';
 import 'package:immich_mobile/domain/models/sync_event.model.dart';
-import 'package:immich_mobile/presentation/pages/dev/dev_logger.dart';
+import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
 import 'package:immich_mobile/services/api.service.dart';
+import 'package:immich_mobile/utils/semver.dart';
 import 'package:logging/logging.dart';
 import 'package:openapi/api.dart';
 
-class SyncApiRepository implements ISyncApiRepository {
+class SyncApiRepository {
   final Logger _logger = Logger('SyncApiRepository');
   final ApiService _api;
   SyncApiRepository(this._api);
 
-  @override
   Future<void> ack(List<String> data) {
     return _api.syncApi.sendSyncAck(SyncAckSetDto(acks: data));
   }
 
-  @override
+  Future<void> deleteSyncAck(List<SyncEntityType> types) {
+    return _api.syncApi.deleteSyncAck(SyncAckDeleteDto(types: Optional.present(types)));
+  }
+
   Future<void> streamChanges(
-    Function(List<SyncEvent>, Function() abort) onData, {
+    Future<void> Function(List<SyncEvent>, Function() abort, Function() reset) onData, {
+    required SemVer serverVersion,
+    Function()? onReset,
     int batchSize = kSyncEventBatchSize,
     http.Client? httpClient,
+    Future<void>? abortSignal,
   }) async {
     final stopwatch = Stopwatch()..start();
-    final client = httpClient ?? http.Client();
+    final client = httpClient ?? NetworkRepository.client;
     final endpoint = "${_api.apiClient.basePath}/sync/stream";
 
-    final headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/jsonlines+json',
-    };
+    final headers = {'Content-Type': 'application/json', 'Accept': 'application/jsonlines+json'};
 
-    final headerParams = <String, String>{};
-    await _api.applyToParams([], headerParams);
-    headers.addAll(headerParams);
-
-    final request = http.Request('POST', Uri.parse(endpoint));
+    final request = http.AbortableRequest('POST', Uri.parse(endpoint), abortTrigger: abortSignal);
     request.headers.addAll(headers);
     request.body = jsonEncode(
       SyncStreamDto(
         types: [
+          SyncRequestType.authUsersV1,
           SyncRequestType.usersV1,
-          SyncRequestType.partnersV1,
-          SyncRequestType.assetsV1,
-          SyncRequestType.partnerAssetsV1,
+          serverVersion >= const SemVer(major: 3, minor: 0, patch: 0)
+              ? SyncRequestType.assetsV2
+              : SyncRequestType.assetsV1,
           SyncRequestType.assetExifsV1,
+          if (serverVersion >= const SemVer(major: 2, minor: 6, patch: 0)) SyncRequestType.assetEditsV1,
+          SyncRequestType.assetMetadataV1,
+          SyncRequestType.partnersV1,
+          serverVersion >= const SemVer(major: 3, minor: 0, patch: 0)
+              ? SyncRequestType.partnerAssetsV2
+              : SyncRequestType.partnerAssetsV1,
           SyncRequestType.partnerAssetExifsV1,
+          if (serverVersion < const SemVer(major: 3, minor: 0, patch: 0))
+            SyncRequestType.albumsV1
+          else
+            SyncRequestType.albumsV2,
+          SyncRequestType.albumUsersV1,
+          serverVersion >= const SemVer(major: 3, minor: 0, patch: 0)
+              ? SyncRequestType.albumAssetsV2
+              : SyncRequestType.albumAssetsV1,
+          SyncRequestType.albumAssetExifsV1,
+          SyncRequestType.albumToAssetsV1,
+          SyncRequestType.memoriesV1,
+          SyncRequestType.memoryToAssetsV1,
+          SyncRequestType.stacksV1,
+          SyncRequestType.partnerStacksV1,
+          SyncRequestType.userMetadataV1,
+          SyncRequestType.peopleV1,
+          serverVersion >= const SemVer(major: 2, minor: 6, patch: 0)
+              ? SyncRequestType.assetFacesV2
+              : SyncRequestType.assetFacesV1,
+          if (serverVersion >= const SemVer(major: 3, minor: 0, patch: 0)) SyncRequestType.assetOcrV1,
         ],
       ).toJson(),
     );
@@ -64,16 +89,14 @@ class SyncApiRepository implements ISyncApiRepository {
       shouldAbort = true;
     }
 
+    final reset = onReset ?? () {};
+
     try {
-      final response =
-          await client.send(request).timeout(const Duration(seconds: 20));
+      final response = await client.send(request);
 
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
-        throw ApiException(
-          response.statusCode,
-          'Failed to get sync stream: $errorBody',
-        );
+        throw ApiException(response.statusCode, 'Failed to get sync stream: $errorBody');
       }
 
       await for (final chunk in response.stream.transform(utf8.decoder)) {
@@ -90,23 +113,18 @@ class SyncApiRepository implements ISyncApiRepository {
           continue;
         }
 
-        await onData(_parseLines(lines), abort);
+        await onData(_parseLines(lines), abort, reset);
         lines.clear();
       }
 
       if (lines.isNotEmpty && !shouldAbort) {
-        await onData(_parseLines(lines), abort);
+        await onData(_parseLines(lines), abort, reset);
       }
     } catch (error, stack) {
-      _logger.severe("Error processing stream", error, stack);
       return Future.error(error, stack);
-    } finally {
-      client.close();
     }
     stopwatch.stop();
-    _logger
-        .info("Remote Sync completed in ${stopwatch.elapsed.inMilliseconds}ms");
-    DLog.log("Remote Sync completed in ${stopwatch.elapsed.inMilliseconds}ms");
+    _logger.info("Remote Sync completed in ${stopwatch.elapsed.inMilliseconds}ms");
   }
 
   List<SyncEvent> _parseLines(List<String> lines) {
@@ -130,16 +148,68 @@ class SyncApiRepository implements ISyncApiRepository {
   }
 }
 
-// ignore: avoid-dynamic
-const _kResponseMap = <SyncEntityType, Function(dynamic)>{
+const _kResponseMap = <SyncEntityType, Function(Object)>{
+  SyncEntityType.authUserV1: SyncAuthUserV1.fromJson,
   SyncEntityType.userV1: SyncUserV1.fromJson,
   SyncEntityType.userDeleteV1: SyncUserDeleteV1.fromJson,
   SyncEntityType.partnerV1: SyncPartnerV1.fromJson,
   SyncEntityType.partnerDeleteV1: SyncPartnerDeleteV1.fromJson,
   SyncEntityType.assetV1: SyncAssetV1.fromJson,
+  SyncEntityType.assetV2: SyncAssetV2.fromJson,
   SyncEntityType.assetDeleteV1: SyncAssetDeleteV1.fromJson,
   SyncEntityType.assetExifV1: SyncAssetExifV1.fromJson,
+  SyncEntityType.assetEditV1: SyncAssetEditV1.fromJson,
+  SyncEntityType.assetEditDeleteV1: SyncAssetEditDeleteV1.fromJson,
+  SyncEntityType.assetMetadataV1: SyncAssetMetadataV1.fromJson,
+  SyncEntityType.assetMetadataDeleteV1: SyncAssetMetadataDeleteV1.fromJson,
   SyncEntityType.partnerAssetV1: SyncAssetV1.fromJson,
+  SyncEntityType.partnerAssetV2: SyncAssetV2.fromJson,
+  SyncEntityType.partnerAssetBackfillV1: SyncAssetV1.fromJson,
+  SyncEntityType.partnerAssetBackfillV2: SyncAssetV2.fromJson,
   SyncEntityType.partnerAssetDeleteV1: SyncAssetDeleteV1.fromJson,
   SyncEntityType.partnerAssetExifV1: SyncAssetExifV1.fromJson,
+  SyncEntityType.partnerAssetExifBackfillV1: SyncAssetExifV1.fromJson,
+  SyncEntityType.albumV1: SyncAlbumV1.fromJson,
+  SyncEntityType.albumV2: SyncAlbumV2.fromJson,
+  SyncEntityType.albumDeleteV1: SyncAlbumDeleteV1.fromJson,
+  SyncEntityType.albumUserV1: SyncAlbumUserV1.fromJson,
+  SyncEntityType.albumUserBackfillV1: SyncAlbumUserV1.fromJson,
+  SyncEntityType.albumUserDeleteV1: SyncAlbumUserDeleteV1.fromJson,
+  SyncEntityType.albumAssetCreateV1: SyncAssetV1.fromJson,
+  SyncEntityType.albumAssetCreateV2: SyncAssetV2.fromJson,
+  SyncEntityType.albumAssetUpdateV1: SyncAssetV1.fromJson,
+  SyncEntityType.albumAssetUpdateV2: SyncAssetV2.fromJson,
+  SyncEntityType.albumAssetBackfillV1: SyncAssetV1.fromJson,
+  SyncEntityType.albumAssetBackfillV2: SyncAssetV2.fromJson,
+  SyncEntityType.albumAssetExifCreateV1: SyncAssetExifV1.fromJson,
+  SyncEntityType.albumAssetExifUpdateV1: SyncAssetExifV1.fromJson,
+  SyncEntityType.albumAssetExifBackfillV1: SyncAssetExifV1.fromJson,
+  SyncEntityType.albumToAssetV1: SyncAlbumToAssetV1.fromJson,
+  SyncEntityType.albumToAssetBackfillV1: SyncAlbumToAssetV1.fromJson,
+  SyncEntityType.albumToAssetDeleteV1: SyncAlbumToAssetDeleteV1.fromJson,
+  SyncEntityType.syncAckV1: _SyncEmptyDto.fromJson,
+  SyncEntityType.syncResetV1: _SyncEmptyDto.fromJson,
+  SyncEntityType.memoryV1: SyncMemoryV1.fromJson,
+  SyncEntityType.memoryDeleteV1: SyncMemoryDeleteV1.fromJson,
+  SyncEntityType.memoryToAssetV1: SyncMemoryAssetV1.fromJson,
+  SyncEntityType.memoryToAssetDeleteV1: SyncMemoryAssetDeleteV1.fromJson,
+  SyncEntityType.stackV1: SyncStackV1.fromJson,
+  SyncEntityType.stackDeleteV1: SyncStackDeleteV1.fromJson,
+  SyncEntityType.partnerStackV1: SyncStackV1.fromJson,
+  SyncEntityType.partnerStackBackfillV1: SyncStackV1.fromJson,
+  SyncEntityType.partnerStackDeleteV1: SyncStackDeleteV1.fromJson,
+  SyncEntityType.userMetadataV1: SyncUserMetadataV1.fromJson,
+  SyncEntityType.userMetadataDeleteV1: SyncUserMetadataDeleteV1.fromJson,
+  SyncEntityType.personV1: SyncPersonV1.fromJson,
+  SyncEntityType.personDeleteV1: SyncPersonDeleteV1.fromJson,
+  SyncEntityType.assetFaceV1: SyncAssetFaceV1.fromJson,
+  SyncEntityType.assetFaceV2: SyncAssetFaceV2.fromJson,
+  SyncEntityType.assetFaceDeleteV1: SyncAssetFaceDeleteV1.fromJson,
+  SyncEntityType.assetOcrV1: SyncAssetOcrV1.fromJson,
+  SyncEntityType.assetOcrDeleteV1: SyncAssetOcrDeleteV1.fromJson,
+  SyncEntityType.syncCompleteV1: _SyncEmptyDto.fromJson,
 };
+
+class _SyncEmptyDto {
+  static _SyncEmptyDto? fromJson(dynamic _) => _SyncEmptyDto();
+}

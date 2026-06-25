@@ -13,33 +13,38 @@ part of openapi.api;
 class PlacesResponseDto {
   /// Returns a new [PlacesResponseDto] instance.
   PlacesResponseDto({
-    this.admin1name,
-    this.admin2name,
+    this.admin1name = const Optional.absent(),
+    this.admin2name = const Optional.absent(),
     required this.latitude,
     required this.longitude,
     required this.name,
   });
 
+  /// Administrative level 1 name (state/province)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? admin1name;
+  Optional<String?> admin1name;
 
+  /// Administrative level 2 name (county/district)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? admin2name;
+  Optional<String?> admin2name;
 
+  /// Latitude coordinate
   num latitude;
 
+  /// Longitude coordinate
   num longitude;
 
+  /// Place name
   String name;
 
   @override
@@ -64,15 +69,13 @@ class PlacesResponseDto {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.admin1name != null) {
-      json[r'admin1name'] = this.admin1name;
-    } else {
-    //  json[r'admin1name'] = null;
+    if (this.admin1name.isPresent) {
+      final value = this.admin1name.value;
+      json[r'admin1name'] = value;
     }
-    if (this.admin2name != null) {
-      json[r'admin2name'] = this.admin2name;
-    } else {
-    //  json[r'admin2name'] = null;
+    if (this.admin2name.isPresent) {
+      final value = this.admin2name.value;
+      json[r'admin2name'] = value;
     }
       json[r'latitude'] = this.latitude;
       json[r'longitude'] = this.longitude;
@@ -89,8 +92,8 @@ class PlacesResponseDto {
       final json = value.cast<String, dynamic>();
 
       return PlacesResponseDto(
-        admin1name: mapValueOfType<String>(json, r'admin1name'),
-        admin2name: mapValueOfType<String>(json, r'admin2name'),
+        admin1name: json.containsKey(r'admin1name') ? Optional.present(mapValueOfType<String>(json, r'admin1name')) : const Optional.absent(),
+        admin2name: json.containsKey(r'admin2name') ? Optional.present(mapValueOfType<String>(json, r'admin2name')) : const Optional.absent(),
         latitude: num.parse('${json[r'latitude']}'),
         longitude: num.parse('${json[r'longitude']}'),
         name: mapValueOfType<String>(json, r'name')!,

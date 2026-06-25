@@ -13,35 +13,54 @@ part of openapi.api;
 class MemoriesUpdate {
   /// Returns a new [MemoriesUpdate] instance.
   MemoriesUpdate({
-    this.enabled,
+    this.duration = const Optional.absent(),
+    this.enabled = const Optional.absent(),
   });
 
+  /// Memory duration in seconds
+  ///
+  /// Minimum value: 1
+  /// Maximum value: 9007199254740991
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? enabled;
+  Optional<int?> duration;
+
+  /// Whether memories are enabled
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<bool?> enabled;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is MemoriesUpdate &&
+    other.duration == duration &&
     other.enabled == enabled;
 
   @override
   int get hashCode =>
     // ignore: unnecessary_parenthesis
+    (duration == null ? 0 : duration!.hashCode) +
     (enabled == null ? 0 : enabled!.hashCode);
 
   @override
-  String toString() => 'MemoriesUpdate[enabled=$enabled]';
+  String toString() => 'MemoriesUpdate[duration=$duration, enabled=$enabled]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.enabled != null) {
-      json[r'enabled'] = this.enabled;
-    } else {
-    //  json[r'enabled'] = null;
+    if (this.duration.isPresent) {
+      final value = this.duration.value;
+      json[r'duration'] = value;
+    }
+    if (this.enabled.isPresent) {
+      final value = this.enabled.value;
+      json[r'enabled'] = value;
     }
     return json;
   }
@@ -55,7 +74,8 @@ class MemoriesUpdate {
       final json = value.cast<String, dynamic>();
 
       return MemoriesUpdate(
-        enabled: mapValueOfType<bool>(json, r'enabled'),
+        duration: json.containsKey(r'duration') ? Optional.present(json[r'duration'] == null ? null : int.parse('${json[r'duration']}')) : const Optional.absent(),
+        enabled: json.containsKey(r'enabled') ? Optional.present(mapValueOfType<bool>(json, r'enabled')) : const Optional.absent(),
       );
     }
     return null;

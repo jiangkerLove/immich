@@ -14,51 +14,56 @@ class PersonResponseDto {
   /// Returns a new [PersonResponseDto] instance.
   PersonResponseDto({
     required this.birthDate,
-    this.color,
+    this.color = const Optional.absent(),
     required this.id,
-    this.isFavorite,
+    this.isFavorite = const Optional.absent(),
     required this.isHidden,
     required this.name,
     required this.thumbnailPath,
-    this.updatedAt,
+    this.updatedAt = const Optional.absent(),
   });
 
+  /// Person date of birth
   DateTime? birthDate;
 
-  /// This property was added in v1.126.0
+  /// Person color (hex)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? color;
+  Optional<String?> color;
 
+  /// Person ID
   String id;
 
-  /// This property was added in v1.126.0
+  /// Is favorite
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? isFavorite;
+  Optional<bool?> isFavorite;
 
+  /// Is hidden
   bool isHidden;
 
+  /// Person name
   String name;
 
+  /// Thumbnail path
   String thumbnailPath;
 
-  /// This property was added in v1.107.0
+  /// Last update date
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? updatedAt;
+  Optional<DateTime?> updatedAt;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is PersonResponseDto &&
@@ -91,26 +96,23 @@ class PersonResponseDto {
     if (this.birthDate != null) {
       json[r'birthDate'] = _dateFormatter.format(this.birthDate!.toUtc());
     } else {
-    //  json[r'birthDate'] = null;
+      json[r'birthDate'] = null;
     }
-    if (this.color != null) {
-      json[r'color'] = this.color;
-    } else {
-    //  json[r'color'] = null;
+    if (this.color.isPresent) {
+      final value = this.color.value;
+      json[r'color'] = value;
     }
       json[r'id'] = this.id;
-    if (this.isFavorite != null) {
-      json[r'isFavorite'] = this.isFavorite;
-    } else {
-    //  json[r'isFavorite'] = null;
+    if (this.isFavorite.isPresent) {
+      final value = this.isFavorite.value;
+      json[r'isFavorite'] = value;
     }
       json[r'isHidden'] = this.isHidden;
       json[r'name'] = this.name;
       json[r'thumbnailPath'] = this.thumbnailPath;
-    if (this.updatedAt != null) {
-      json[r'updatedAt'] = this.updatedAt!.toUtc().toIso8601String();
-    } else {
-    //  json[r'updatedAt'] = null;
+    if (this.updatedAt.isPresent) {
+      final value = this.updatedAt.value;
+      json[r'updatedAt'] = value == null ? null : value.toUtc().toIso8601String();
     }
     return json;
   }
@@ -125,13 +127,13 @@ class PersonResponseDto {
 
       return PersonResponseDto(
         birthDate: mapDateTime(json, r'birthDate', r''),
-        color: mapValueOfType<String>(json, r'color'),
+        color: json.containsKey(r'color') ? Optional.present(mapValueOfType<String>(json, r'color')) : const Optional.absent(),
         id: mapValueOfType<String>(json, r'id')!,
-        isFavorite: mapValueOfType<bool>(json, r'isFavorite'),
+        isFavorite: json.containsKey(r'isFavorite') ? Optional.present(mapValueOfType<bool>(json, r'isFavorite')) : const Optional.absent(),
         isHidden: mapValueOfType<bool>(json, r'isHidden')!,
         name: mapValueOfType<String>(json, r'name')!,
         thumbnailPath: mapValueOfType<String>(json, r'thumbnailPath')!,
-        updatedAt: mapDateTime(json, r'updatedAt', r''),
+        updatedAt: json.containsKey(r'updatedAt') ? Optional.present(mapDateTime(json, r'updatedAt', r'')) : const Optional.absent(),
       );
     }
     return null;

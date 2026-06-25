@@ -16,13 +16,18 @@ class MemoriesApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'PUT /memories/{id}/assets' operation and returns the [Response].
+  /// Add assets to a memory
+  ///
+  /// Add a list of asset IDs to a specific memory.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<Response> addMemoryAssetsWithHttpInfo(String id, BulkIdsDto bulkIdsDto,) async {
+  Future<Response> addMemoryAssetsWithHttpInfo(String id, BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories/{id}/assets'
       .replaceAll('{id}', id);
@@ -45,16 +50,21 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Add assets to a memory
+  ///
+  /// Add a list of asset IDs to a specific memory.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<List<BulkIdResponseDto>?> addMemoryAssets(String id, BulkIdsDto bulkIdsDto,) async {
-    final response = await addMemoryAssetsWithHttpInfo(id, bulkIdsDto,);
+  Future<List<BulkIdResponseDto>?> addMemoryAssets(String id, BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
+    final response = await addMemoryAssetsWithHttpInfo(id, bulkIdsDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -71,11 +81,16 @@ class MemoriesApi {
     return null;
   }
 
-  /// Performs an HTTP 'POST /memories' operation and returns the [Response].
+  /// Create a memory
+  ///
+  /// Create a new memory by providing a name, description, and a list of asset IDs to include in the memory.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [MemoryCreateDto] memoryCreateDto (required):
-  Future<Response> createMemoryWithHttpInfo(MemoryCreateDto memoryCreateDto,) async {
+  Future<Response> createMemoryWithHttpInfo(MemoryCreateDto memoryCreateDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories';
 
@@ -97,14 +112,19 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Create a memory
+  ///
+  /// Create a new memory by providing a name, description, and a list of asset IDs to include in the memory.
+  ///
   /// Parameters:
   ///
   /// * [MemoryCreateDto] memoryCreateDto (required):
-  Future<MemoryResponseDto?> createMemory(MemoryCreateDto memoryCreateDto,) async {
-    final response = await createMemoryWithHttpInfo(memoryCreateDto,);
+  Future<MemoryResponseDto?> createMemory(MemoryCreateDto memoryCreateDto, { Future<void>? abortTrigger, }) async {
+    final response = await createMemoryWithHttpInfo(memoryCreateDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -118,11 +138,16 @@ class MemoriesApi {
     return null;
   }
 
-  /// Performs an HTTP 'DELETE /memories/{id}' operation and returns the [Response].
+  /// Delete a memory
+  ///
+  /// Delete a specific memory by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> deleteMemoryWithHttpInfo(String id,) async {
+  Future<Response> deleteMemoryWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories/{id}'
       .replaceAll('{id}', id);
@@ -145,24 +170,34 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Delete a memory
+  ///
+  /// Delete a specific memory by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<void> deleteMemory(String id,) async {
-    final response = await deleteMemoryWithHttpInfo(id,);
+  Future<void> deleteMemory(String id, { Future<void>? abortTrigger, }) async {
+    final response = await deleteMemoryWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'GET /memories/{id}' operation and returns the [Response].
+  /// Retrieve a memory
+  ///
+  /// Retrieve a specific memory by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> getMemoryWithHttpInfo(String id,) async {
+  Future<Response> getMemoryWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories/{id}'
       .replaceAll('{id}', id);
@@ -185,14 +220,19 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve a memory
+  ///
+  /// Retrieve a specific memory by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<MemoryResponseDto?> getMemory(String id,) async {
-    final response = await getMemoryWithHttpInfo(id,);
+  Future<MemoryResponseDto?> getMemory(String id, { Future<void>? abortTrigger, }) async {
+    final response = await getMemoryWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -206,13 +246,122 @@ class MemoriesApi {
     return null;
   }
 
-  /// Performs an HTTP 'DELETE /memories/{id}/assets' operation and returns the [Response].
+  /// Retrieve memories statistics
+  ///
+  /// Retrieve statistics about memories, such as total count and other relevant metrics.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
+  /// Parameters:
+  ///
+  /// * [DateTime] for_:
+  ///   Filter by date
+  ///
+  /// * [bool] isSaved:
+  ///   Filter by saved status
+  ///
+  /// * [bool] isTrashed:
+  ///   Include trashed memories
+  ///
+  /// * [MemorySearchOrder] order:
+  ///
+  /// * [int] size:
+  ///   Number of memories to return
+  ///
+  /// * [MemoryType] type:
+  Future<Response> memoriesStatisticsWithHttpInfo({ DateTime? for_, bool? isSaved, bool? isTrashed, MemorySearchOrder? order, int? size, MemoryType? type, Future<void>? abortTrigger, }) async {
+    // ignore: prefer_const_declarations
+    final apiPath = r'/memories/statistics';
+
+    // ignore: prefer_final_locals
+    Object? postBody;
+
+    final queryParams = <QueryParam>[];
+    final headerParams = <String, String>{};
+    final formParams = <String, String>{};
+
+    if (for_ != null) {
+      queryParams.addAll(_queryParams('', 'for', for_));
+    }
+    if (isSaved != null) {
+      queryParams.addAll(_queryParams('', 'isSaved', isSaved));
+    }
+    if (isTrashed != null) {
+      queryParams.addAll(_queryParams('', 'isTrashed', isTrashed));
+    }
+    if (order != null) {
+      queryParams.addAll(_queryParams('', 'order', order));
+    }
+    if (size != null) {
+      queryParams.addAll(_queryParams('', 'size', size));
+    }
+    if (type != null) {
+      queryParams.addAll(_queryParams('', 'type', type));
+    }
+
+    const contentTypes = <String>[];
+
+
+    return apiClient.invokeAPI(
+      apiPath,
+      'GET',
+      queryParams,
+      postBody,
+      headerParams,
+      formParams,
+      contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
+    );
+  }
+
+  /// Retrieve memories statistics
+  ///
+  /// Retrieve statistics about memories, such as total count and other relevant metrics.
+  ///
+  /// Parameters:
+  ///
+  /// * [DateTime] for_:
+  ///   Filter by date
+  ///
+  /// * [bool] isSaved:
+  ///   Filter by saved status
+  ///
+  /// * [bool] isTrashed:
+  ///   Include trashed memories
+  ///
+  /// * [MemorySearchOrder] order:
+  ///
+  /// * [int] size:
+  ///   Number of memories to return
+  ///
+  /// * [MemoryType] type:
+  Future<MemoryStatisticsResponseDto?> memoriesStatistics({ DateTime? for_, bool? isSaved, bool? isTrashed, MemorySearchOrder? order, int? size, MemoryType? type, Future<void>? abortTrigger, }) async {
+    final response = await memoriesStatisticsWithHttpInfo(for_: for_, isSaved: isSaved, isTrashed: isTrashed, order: order, size: size, type: type, abortTrigger: abortTrigger,);
+    if (response.statusCode >= HttpStatus.badRequest) {
+      throw ApiException(response.statusCode, await _decodeBodyBytes(response));
+    }
+    // When a remote server returns no body with a status of 204, we shall not decode it.
+    // At the time of writing this, `dart:convert` will throw an "Unexpected end of input"
+    // FormatException when trying to decode an empty string.
+    if (response.body.isNotEmpty && response.statusCode != HttpStatus.noContent) {
+      return await apiClient.deserializeAsync(await _decodeBodyBytes(response), 'MemoryStatisticsResponseDto',) as MemoryStatisticsResponseDto;
+    
+    }
+    return null;
+  }
+
+  /// Remove assets from a memory
+  ///
+  /// Remove a list of asset IDs from a specific memory.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<Response> removeMemoryAssetsWithHttpInfo(String id, BulkIdsDto bulkIdsDto,) async {
+  Future<Response> removeMemoryAssetsWithHttpInfo(String id, BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories/{id}/assets'
       .replaceAll('{id}', id);
@@ -235,16 +384,21 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Remove assets from a memory
+  ///
+  /// Remove a list of asset IDs from a specific memory.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<List<BulkIdResponseDto>?> removeMemoryAssets(String id, BulkIdsDto bulkIdsDto,) async {
-    final response = await removeMemoryAssetsWithHttpInfo(id, bulkIdsDto,);
+  Future<List<BulkIdResponseDto>?> removeMemoryAssets(String id, BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
+    final response = await removeMemoryAssetsWithHttpInfo(id, bulkIdsDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -261,17 +415,30 @@ class MemoriesApi {
     return null;
   }
 
-  /// Performs an HTTP 'GET /memories' operation and returns the [Response].
+  /// Retrieve memories
+  ///
+  /// Retrieve a list of memories. Memories are sorted descending by creation date by default, although they can also be sorted in ascending order, or randomly.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [DateTime] for_:
+  ///   Filter by date
   ///
   /// * [bool] isSaved:
+  ///   Filter by saved status
   ///
   /// * [bool] isTrashed:
+  ///   Include trashed memories
+  ///
+  /// * [MemorySearchOrder] order:
+  ///
+  /// * [int] size:
+  ///   Number of memories to return
   ///
   /// * [MemoryType] type:
-  Future<Response> searchMemoriesWithHttpInfo({ DateTime? for_, bool? isSaved, bool? isTrashed, MemoryType? type, }) async {
+  Future<Response> searchMemoriesWithHttpInfo({ DateTime? for_, bool? isSaved, bool? isTrashed, MemorySearchOrder? order, int? size, MemoryType? type, Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories';
 
@@ -291,6 +458,12 @@ class MemoriesApi {
     if (isTrashed != null) {
       queryParams.addAll(_queryParams('', 'isTrashed', isTrashed));
     }
+    if (order != null) {
+      queryParams.addAll(_queryParams('', 'order', order));
+    }
+    if (size != null) {
+      queryParams.addAll(_queryParams('', 'size', size));
+    }
     if (type != null) {
       queryParams.addAll(_queryParams('', 'type', type));
     }
@@ -306,20 +479,33 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve memories
+  ///
+  /// Retrieve a list of memories. Memories are sorted descending by creation date by default, although they can also be sorted in ascending order, or randomly.
+  ///
   /// Parameters:
   ///
   /// * [DateTime] for_:
+  ///   Filter by date
   ///
   /// * [bool] isSaved:
+  ///   Filter by saved status
   ///
   /// * [bool] isTrashed:
+  ///   Include trashed memories
+  ///
+  /// * [MemorySearchOrder] order:
+  ///
+  /// * [int] size:
+  ///   Number of memories to return
   ///
   /// * [MemoryType] type:
-  Future<List<MemoryResponseDto>?> searchMemories({ DateTime? for_, bool? isSaved, bool? isTrashed, MemoryType? type, }) async {
-    final response = await searchMemoriesWithHttpInfo( for_: for_, isSaved: isSaved, isTrashed: isTrashed, type: type, );
+  Future<List<MemoryResponseDto>?> searchMemories({ DateTime? for_, bool? isSaved, bool? isTrashed, MemorySearchOrder? order, int? size, MemoryType? type, Future<void>? abortTrigger, }) async {
+    final response = await searchMemoriesWithHttpInfo(for_: for_, isSaved: isSaved, isTrashed: isTrashed, order: order, size: size, type: type, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -336,13 +522,18 @@ class MemoriesApi {
     return null;
   }
 
-  /// Performs an HTTP 'PUT /memories/{id}' operation and returns the [Response].
+  /// Update a memory
+  ///
+  /// Update an existing memory by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [MemoryUpdateDto] memoryUpdateDto (required):
-  Future<Response> updateMemoryWithHttpInfo(String id, MemoryUpdateDto memoryUpdateDto,) async {
+  Future<Response> updateMemoryWithHttpInfo(String id, MemoryUpdateDto memoryUpdateDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/memories/{id}'
       .replaceAll('{id}', id);
@@ -365,16 +556,21 @@ class MemoriesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Update a memory
+  ///
+  /// Update an existing memory by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [MemoryUpdateDto] memoryUpdateDto (required):
-  Future<MemoryResponseDto?> updateMemory(String id, MemoryUpdateDto memoryUpdateDto,) async {
-    final response = await updateMemoryWithHttpInfo(id, memoryUpdateDto,);
+  Future<MemoryResponseDto?> updateMemory(String id, MemoryUpdateDto memoryUpdateDto, { Future<void>? abortTrigger, }) async {
+    final response = await updateMemoryWithHttpInfo(id, memoryUpdateDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }

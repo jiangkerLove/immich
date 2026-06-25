@@ -6,6 +6,9 @@ class ExifInfo {
   final String? orientation;
   final String? timeZone;
   final DateTime? dateTimeOriginal;
+  final int? rating;
+  final int? width;
+  final int? height;
 
   // GPS
   final double? latitude;
@@ -23,11 +26,10 @@ class ExifInfo {
   final int? iso;
   final double? exposureSeconds;
 
-  bool get hasCoordinates =>
-      latitude != null && longitude != null && latitude != 0 && longitude != 0;
+  bool get hasCoordinates => latitude != null && longitude != null && latitude != 0 && longitude != 0;
 
   String get exposureTime {
-    if (exposureSeconds == null) {
+    if (exposureSeconds == null || exposureSeconds! <= 0 || exposureSeconds!.isNaN) {
       return "";
     }
     if (exposureSeconds! < 1) {
@@ -38,7 +40,7 @@ class ExifInfo {
 
   String get fNumber => f == null ? "" : f!.toStringAsFixed(1);
 
-  String get focalLength => mm == null ? "" : mm!.toStringAsFixed(1);
+  String get focalLength => mm == null ? "" : mm!.toStringAsFixed(3);
 
   const ExifInfo({
     this.assetId,
@@ -47,6 +49,9 @@ class ExifInfo {
     this.orientation,
     this.timeZone,
     this.dateTimeOriginal,
+    this.rating,
+    this.width,
+    this.height,
     this.isFlipped = false,
     this.latitude,
     this.longitude,
@@ -64,13 +69,19 @@ class ExifInfo {
 
   @override
   bool operator ==(covariant ExifInfo other) {
-    if (identical(this, other)) return true;
+    if (identical(this, other)) {
+      return true;
+    }
 
     return other.fileSize == fileSize &&
         other.description == description &&
+        other.isFlipped == isFlipped &&
         other.orientation == orientation &&
         other.timeZone == timeZone &&
         other.dateTimeOriginal == dateTimeOriginal &&
+        other.rating == rating &&
+        other.width == width &&
+        other.height == height &&
         other.latitude == latitude &&
         other.longitude == longitude &&
         other.city == city &&
@@ -91,8 +102,12 @@ class ExifInfo {
     return fileSize.hashCode ^
         description.hashCode ^
         orientation.hashCode ^
+        isFlipped.hashCode ^
         timeZone.hashCode ^
         dateTimeOriginal.hashCode ^
+        rating.hashCode ^
+        width.hashCode ^
+        height.hashCode ^
         latitude.hashCode ^
         longitude.hashCode ^
         city.hashCode ^
@@ -114,8 +129,12 @@ class ExifInfo {
 fileSize: ${fileSize ?? 'NA'},
 description: ${description ?? 'NA'},
 orientation: ${orientation ?? 'NA'},
+isFlipped: $isFlipped,
 timeZone: ${timeZone ?? 'NA'},
 dateTimeOriginal: ${dateTimeOriginal ?? 'NA'},
+rating: ${rating ?? 'NA'},
+width: ${width ?? 'NA'},
+height: ${height ?? 'NA'},
 latitude: ${latitude ?? 'NA'},
 longitude: ${longitude ?? 'NA'},
 city: ${city ?? 'NA'},
@@ -138,6 +157,9 @@ exposureSeconds: ${exposureSeconds ?? 'NA'},
     String? orientation,
     String? timeZone,
     DateTime? dateTimeOriginal,
+    int? rating,
+    int? width,
+    int? height,
     double? latitude,
     double? longitude,
     String? city,
@@ -159,6 +181,9 @@ exposureSeconds: ${exposureSeconds ?? 'NA'},
       orientation: orientation ?? this.orientation,
       timeZone: timeZone ?? this.timeZone,
       dateTimeOriginal: dateTimeOriginal ?? this.dateTimeOriginal,
+      rating: rating ?? this.rating,
+      width: width ?? this.width,
+      height: height ?? this.height,
       isFlipped: isFlipped ?? this.isFlipped,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,

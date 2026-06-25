@@ -13,16 +13,17 @@ part of openapi.api;
 class UserAdminDeleteDto {
   /// Returns a new [UserAdminDeleteDto] instance.
   UserAdminDeleteDto({
-    this.force,
+    this.force = const Optional.absent(),
   });
 
+  /// Force delete even if user has assets
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? force;
+  Optional<bool?> force;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is UserAdminDeleteDto &&
@@ -38,10 +39,9 @@ class UserAdminDeleteDto {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.force != null) {
-      json[r'force'] = this.force;
-    } else {
-    //  json[r'force'] = null;
+    if (this.force.isPresent) {
+      final value = this.force.value;
+      json[r'force'] = value;
     }
     return json;
   }
@@ -55,7 +55,7 @@ class UserAdminDeleteDto {
       final json = value.cast<String, dynamic>();
 
       return UserAdminDeleteDto(
-        force: mapValueOfType<bool>(json, r'force'),
+        force: json.containsKey(r'force') ? Optional.present(mapValueOfType<bool>(json, r'force')) : const Optional.absent(),
       );
     }
     return null;

@@ -1,61 +1,68 @@
-// ignore_for_file: avoid-dynamic
+import 'dart:async';
 
+import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:immich_mobile/domain/interfaces/store.interface.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/models/user.model.dart';
-import 'package:immich_mobile/infrastructure/entities/store.entity.dart';
+import 'package:immich_mobile/infrastructure/entities/store.entity.drift.dart';
+import 'package:immich_mobile/infrastructure/repositories/db.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/store.repository.dart';
-import 'package:isar/isar.dart';
 
 import '../../fixtures/user.stub.dart';
-import '../../test_utils.dart';
 
 const _kTestAccessToken = "#TestToken";
-final _kTestBackupFailed = DateTime(2025, 2, 20, 11, 45);
 const _kTestVersion = 10;
-const _kTestColorfulInterface = false;
+const _kTestAdvancedTroubleshooting = false;
 final _kTestUser = UserStub.admin;
 
-Future<void> _addIntStoreValue(Isar db, StoreKey key, int? value) async {
-  await db.storeValues.put(StoreValue(key.id, intValue: value, strValue: null));
-}
-
-Future<void> _addStrStoreValue(Isar db, StoreKey key, String? value) async {
-  await db.storeValues.put(StoreValue(key.id, intValue: null, strValue: value));
-}
-
-Future<void> _populateStore(Isar db) async {
-  await db.writeTxn(() async {
-    await _addIntStoreValue(
-      db,
-      StoreKey.colorfulInterface,
-      _kTestColorfulInterface ? 1 : 0,
+Future<void> _populateStore(Drift db) async {
+  await db.batch((batch) async {
+    batch.insert(
+      db.storeEntity,
+      StoreEntityCompanion(
+        id: Value(StoreKey.advancedTroubleshooting.id),
+        intValue: const Value(_kTestAdvancedTroubleshooting ? 1 : 0),
+        stringValue: const Value(null),
+      ),
     );
-    await _addIntStoreValue(
-      db,
-      StoreKey.backupFailedSince,
-      _kTestBackupFailed.millisecondsSinceEpoch,
+    batch.insert(
+      db.storeEntity,
+      StoreEntityCompanion(
+        id: Value(StoreKey.accessToken.id),
+        intValue: const Value(null),
+        stringValue: const Value(_kTestAccessToken),
+      ),
     );
-    await _addStrStoreValue(db, StoreKey.accessToken, _kTestAccessToken);
-    await _addIntStoreValue(db, StoreKey.version, _kTestVersion);
+    batch.insert(
+      db.storeEntity,
+      StoreEntityCompanion(
+        id: Value(StoreKey.version.id),
+        intValue: const Value(_kTestVersion),
+        stringValue: const Value(null),
+      ),
+    );
   });
 }
 
 void main() {
-  late Isar db;
-  late IStoreRepository sut;
+  late Drift db;
+  late DriftStoreRepository sut;
 
   setUp(() async {
-    db = await TestUtils.initIsar();
-    sut = IsarStoreRepository(db);
+    db = Drift(DatabaseConnection(NativeDatabase.memory(), closeStreamsSynchronously: true));
+    sut = DriftStoreRepository(db);
+  });
+
+  tearDown(() async {
+    await db.close();
   });
 
   group('Store Repository converters:', () {
     test('converts int', () async {
       int? version = await sut.tryGet(StoreKey.version);
       expect(version, isNull);
-      await sut.insert(StoreKey.version, _kTestVersion);
+      await sut.upsert(StoreKey.version, _kTestVersion);
       version = await sut.tryGet(StoreKey.version);
       expect(version, _kTestVersion);
     });
@@ -63,32 +70,23 @@ void main() {
     test('converts string', () async {
       String? accessToken = await sut.tryGet(StoreKey.accessToken);
       expect(accessToken, isNull);
-      await sut.insert(StoreKey.accessToken, _kTestAccessToken);
+      await sut.upsert(StoreKey.accessToken, _kTestAccessToken);
       accessToken = await sut.tryGet(StoreKey.accessToken);
       expect(accessToken, _kTestAccessToken);
     });
 
-    test('converts datetime', () async {
-      DateTime? backupFailedSince =
-          await sut.tryGet(StoreKey.backupFailedSince);
-      expect(backupFailedSince, isNull);
-      await sut.insert(StoreKey.backupFailedSince, _kTestBackupFailed);
-      backupFailedSince = await sut.tryGet(StoreKey.backupFailedSince);
-      expect(backupFailedSince, _kTestBackupFailed);
-    });
-
     test('converts bool', () async {
-      bool? colorfulInterface = await sut.tryGet(StoreKey.colorfulInterface);
-      expect(colorfulInterface, isNull);
-      await sut.insert(StoreKey.colorfulInterface, _kTestColorfulInterface);
-      colorfulInterface = await sut.tryGet(StoreKey.colorfulInterface);
-      expect(colorfulInterface, _kTestColorfulInterface);
+      bool? advancedTroubleshooting = await sut.tryGet(StoreKey.advancedTroubleshooting);
+      expect(advancedTroubleshooting, isNull);
+      await sut.upsert(StoreKey.advancedTroubleshooting, _kTestAdvancedTroubleshooting);
+      advancedTroubleshooting = await sut.tryGet(StoreKey.advancedTroubleshooting);
+      expect(advancedTroubleshooting, _kTestAdvancedTroubleshooting);
     });
 
     test('converts user', () async {
       UserDto? user = await sut.tryGet(StoreKey.currentUser);
       expect(user, isNull);
-      await sut.insert(StoreKey.currentUser, _kTestUser);
+      await sut.upsert(StoreKey.currentUser, _kTestUser);
       user = await sut.tryGet(StoreKey.currentUser);
       expect(user, _kTestUser);
     });
@@ -100,18 +98,18 @@ void main() {
     });
 
     test('delete()', () async {
-      bool? isColorful = await sut.tryGet(StoreKey.colorfulInterface);
-      expect(isColorful, isFalse);
-      await sut.delete(StoreKey.colorfulInterface);
-      isColorful = await sut.tryGet(StoreKey.colorfulInterface);
-      expect(isColorful, isNull);
+      bool? advancedTroubleshooting = await sut.tryGet(StoreKey.advancedTroubleshooting);
+      expect(advancedTroubleshooting, isFalse);
+      await sut.delete(StoreKey.advancedTroubleshooting);
+      advancedTroubleshooting = await sut.tryGet(StoreKey.advancedTroubleshooting);
+      expect(advancedTroubleshooting, isNull);
     });
 
     test('deleteAll()', () async {
-      final count = await db.storeValues.count();
+      final count = await db.storeEntity.count().getSingle();
       expect(count, isNot(isZero));
       await sut.deleteAll();
-      expectLater(await db.storeValues.count(), isZero);
+      unawaited(expectLater(await db.storeEntity.count().getSingle(), isZero));
     });
   });
 
@@ -120,10 +118,10 @@ void main() {
       await _populateStore(db);
     });
 
-    test('update()', () async {
+    test('upsert()', () async {
       int? version = await sut.tryGet(StoreKey.version);
       expect(version, _kTestVersion);
-      await sut.update(StoreKey.version, _kTestVersion + 10);
+      await sut.upsert(StoreKey.version, _kTestVersion + 10);
       version = await sut.tryGet(StoreKey.version);
       expect(version, _kTestVersion + 10);
     });
@@ -136,46 +134,31 @@ void main() {
 
     test('watch()', () async {
       final stream = sut.watch(StoreKey.version);
-      expectLater(stream, emitsInOrder([_kTestVersion, _kTestVersion + 10]));
+      unawaited(expectLater(stream, emitsInOrder([_kTestVersion, _kTestVersion + 10])));
       await pumpEventQueue();
-      await sut.update(StoreKey.version, _kTestVersion + 10);
+      await sut.upsert(StoreKey.version, _kTestVersion + 10);
     });
 
     test('watchAll()', () async {
       final stream = sut.watchAll();
-      expectLater(
-        stream,
-        emitsInAnyOrder([
-          emits(
-            const StoreUpdateEvent<dynamic>(StoreKey.version, _kTestVersion),
-          ),
-          emits(
-            StoreUpdateEvent<dynamic>(
-              StoreKey.backupFailedSince,
-              _kTestBackupFailed,
-            ),
-          ),
-          emits(
-            const StoreUpdateEvent<dynamic>(
-              StoreKey.accessToken,
-              _kTestAccessToken,
-            ),
-          ),
-          emits(
-            const StoreUpdateEvent<dynamic>(
-              StoreKey.colorfulInterface,
-              _kTestColorfulInterface,
-            ),
-          ),
-          emits(
-            const StoreUpdateEvent<dynamic>(
-              StoreKey.version,
-              _kTestVersion + 10,
-            ),
-          ),
-        ]),
+      unawaited(
+        expectLater(
+          stream,
+          emitsInOrder([
+            [
+              const StoreDto<Object>(StoreKey.version, _kTestVersion),
+              const StoreDto<Object>(StoreKey.accessToken, _kTestAccessToken),
+              const StoreDto<Object>(StoreKey.advancedTroubleshooting, _kTestAdvancedTroubleshooting),
+            ],
+            [
+              const StoreDto<Object>(StoreKey.version, _kTestVersion + 10),
+              const StoreDto<Object>(StoreKey.accessToken, _kTestAccessToken),
+              const StoreDto<Object>(StoreKey.advancedTroubleshooting, _kTestAdvancedTroubleshooting),
+            ],
+          ]),
+        ),
       );
-      await sut.update(StoreKey.version, _kTestVersion + 10);
+      await sut.upsert(StoreKey.version, _kTestVersion + 10);
     });
   });
 }

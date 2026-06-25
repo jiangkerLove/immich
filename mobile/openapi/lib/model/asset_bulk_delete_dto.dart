@@ -13,18 +13,20 @@ part of openapi.api;
 class AssetBulkDeleteDto {
   /// Returns a new [AssetBulkDeleteDto] instance.
   AssetBulkDeleteDto({
-    this.force,
+    this.force = const Optional.absent(),
     this.ids = const [],
   });
 
+  /// Force delete even if in use
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? force;
+  Optional<bool?> force;
 
+  /// IDs to process
   List<String> ids;
 
   @override
@@ -43,10 +45,9 @@ class AssetBulkDeleteDto {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.force != null) {
-      json[r'force'] = this.force;
-    } else {
-    //  json[r'force'] = null;
+    if (this.force.isPresent) {
+      final value = this.force.value;
+      json[r'force'] = value;
     }
       json[r'ids'] = this.ids;
     return json;
@@ -61,7 +62,7 @@ class AssetBulkDeleteDto {
       final json = value.cast<String, dynamic>();
 
       return AssetBulkDeleteDto(
-        force: mapValueOfType<bool>(json, r'force'),
+        force: json.containsKey(r'force') ? Optional.present(mapValueOfType<bool>(json, r'force')) : const Optional.absent(),
         ids: json[r'ids'] is Iterable
             ? (json[r'ids'] as Iterable).cast<String>().toList(growable: false)
             : const [],

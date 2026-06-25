@@ -1,12 +1,12 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/utils/background_sync.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
-import 'package:immich_mobile/interfaces/auth.interface.dart';
-import 'package:immich_mobile/interfaces/auth_api.interface.dart';
+import 'package:immich_mobile/infrastructure/repositories/settings.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
 import 'package:immich_mobile/models/auth/auxilary_endpoint.model.dart';
 import 'package:immich_mobile/models/auth/login_response.model.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
@@ -29,12 +29,11 @@ final authServiceProvider = Provider(
 );
 
 class AuthService {
-  final IAuthApiRepository _authApiRepository;
-  final IAuthRepository _authRepository;
+  final AuthApiRepository _authApiRepository;
+  final AuthRepository _authRepository;
   final ApiService _apiService;
   final NetworkService _networkService;
   final BackgroundSyncManager _backgroundSyncManager;
-
   final _log = Logger("AuthService");
 
   AuthService(
@@ -56,33 +55,25 @@ class AuthService {
   Future<String> validateServerUrl(String url) async {
     final validUrl = await _apiService.resolveAndSetEndpoint(url);
     await _apiService.setDeviceInfoHeader();
-    Store.put(StoreKey.serverUrl, validUrl);
+    await Store.put(StoreKey.serverUrl, validUrl);
 
     return validUrl;
   }
 
   Future<bool> validateAuxilaryServerUrl(String url) async {
-    final httpclient = HttpClient();
     bool isValid = false;
 
     try {
+      final urls = ApiService.getServerUrls();
+      urls.add(url);
+      await NetworkRepository.setHeaders(ApiService.getRequestHeaders(), urls);
       final uri = Uri.parse('$url/users/me');
-      final request = await httpclient.getUrl(uri);
-
-      // add auth token + any configured custom headers
-      final customHeaders = ApiService.getRequestHeaders();
-      customHeaders.forEach((key, value) {
-        request.headers.add(key, value);
-      });
-
-      final response = await request.close();
+      final response = await NetworkRepository.client.get(uri);
       if (response.statusCode == 200) {
         isValid = true;
       }
     } catch (error) {
       _log.severe("Error validating auxiliary endpoint", error);
-    } finally {
-      httpclient.close();
     }
 
     return isValid;
@@ -108,6 +99,8 @@ class AuthService {
       await clearLocalData().catchError((error, stackTrace) {
         _log.severe("Error clearing local data", error, stackTrace);
       });
+
+      await SettingsRepository.instance.write(SettingsKey.backupEnabled, false);
     }
   }
 
@@ -117,7 +110,7 @@ class AuthService {
   /// - Authentication repository data
   /// - Current user information
   /// - Access token
-  /// - Asset ETag
+  /// - Server-specific endpoint configuration
   ///
   /// All deletions are executed in parallel using [Future.wait].
   Future<void> clearLocalData() async {
@@ -127,11 +120,12 @@ class AuthService {
       _authRepository.clearLocalData(),
       Store.delete(StoreKey.currentUser),
       Store.delete(StoreKey.accessToken),
-      Store.delete(StoreKey.assetETag),
-      Store.delete(StoreKey.autoEndpointSwitching),
-      Store.delete(StoreKey.preferredWifiName),
-      Store.delete(StoreKey.localEndpoint),
-      Store.delete(StoreKey.externalEndpointList),
+      SettingsRepository.instance.clear(const [
+        .networkAutoEndpointSwitching,
+        .networkPreferredWifiName,
+        .networkLocalEndpoint,
+        .networkExternalEndpointList,
+      ]),
     ]);
   }
 

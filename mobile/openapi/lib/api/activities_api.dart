@@ -16,11 +16,16 @@ class ActivitiesApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'POST /activities' operation and returns the [Response].
+  /// Create an activity
+  ///
+  /// Create a like or a comment for an album, or an asset in an album.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [ActivityCreateDto] activityCreateDto (required):
-  Future<Response> createActivityWithHttpInfo(ActivityCreateDto activityCreateDto,) async {
+  Future<Response> createActivityWithHttpInfo(ActivityCreateDto activityCreateDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/activities';
 
@@ -42,14 +47,19 @@ class ActivitiesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Create an activity
+  ///
+  /// Create a like or a comment for an album, or an asset in an album.
+  ///
   /// Parameters:
   ///
   /// * [ActivityCreateDto] activityCreateDto (required):
-  Future<ActivityResponseDto?> createActivity(ActivityCreateDto activityCreateDto,) async {
-    final response = await createActivityWithHttpInfo(activityCreateDto,);
+  Future<ActivityResponseDto?> createActivity(ActivityCreateDto activityCreateDto, { Future<void>? abortTrigger, }) async {
+    final response = await createActivityWithHttpInfo(activityCreateDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -63,11 +73,16 @@ class ActivitiesApi {
     return null;
   }
 
-  /// Performs an HTTP 'DELETE /activities/{id}' operation and returns the [Response].
+  /// Delete an activity
+  ///
+  /// Removes a like or comment from a given album or asset in an album.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> deleteActivityWithHttpInfo(String id,) async {
+  Future<Response> deleteActivityWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/activities/{id}'
       .replaceAll('{id}', id);
@@ -90,32 +105,45 @@ class ActivitiesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Delete an activity
+  ///
+  /// Removes a like or comment from a given album or asset in an album.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<void> deleteActivity(String id,) async {
-    final response = await deleteActivityWithHttpInfo(id,);
+  Future<void> deleteActivity(String id, { Future<void>? abortTrigger, }) async {
+    final response = await deleteActivityWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'GET /activities' operation and returns the [Response].
+  /// List all activities
+  ///
+  /// Returns a list of activities for the selected asset or album. The activities are returned in sorted order, with the oldest activities appearing first.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] albumId (required):
+  ///   Album ID
   ///
   /// * [String] assetId:
+  ///   Asset ID (if activity is for an asset)
   ///
   /// * [ReactionLevel] level:
   ///
   /// * [ReactionType] type:
   ///
   /// * [String] userId:
-  Future<Response> getActivitiesWithHttpInfo(String albumId, { String? assetId, ReactionLevel? level, ReactionType? type, String? userId, }) async {
+  ///   Filter by user ID
+  Future<Response> getActivitiesWithHttpInfo(String albumId, { String? assetId, ReactionLevel? level, ReactionType? type, String? userId, Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/activities';
 
@@ -151,22 +179,30 @@ class ActivitiesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// List all activities
+  ///
+  /// Returns a list of activities for the selected asset or album. The activities are returned in sorted order, with the oldest activities appearing first.
+  ///
   /// Parameters:
   ///
   /// * [String] albumId (required):
+  ///   Album ID
   ///
   /// * [String] assetId:
+  ///   Asset ID (if activity is for an asset)
   ///
   /// * [ReactionLevel] level:
   ///
   /// * [ReactionType] type:
   ///
   /// * [String] userId:
-  Future<List<ActivityResponseDto>?> getActivities(String albumId, { String? assetId, ReactionLevel? level, ReactionType? type, String? userId, }) async {
-    final response = await getActivitiesWithHttpInfo(albumId,  assetId: assetId, level: level, type: type, userId: userId, );
+  ///   Filter by user ID
+  Future<List<ActivityResponseDto>?> getActivities(String albumId, { String? assetId, ReactionLevel? level, ReactionType? type, String? userId, Future<void>? abortTrigger, }) async {
+    final response = await getActivitiesWithHttpInfo(albumId, assetId: assetId, level: level, type: type, userId: userId, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -183,13 +219,20 @@ class ActivitiesApi {
     return null;
   }
 
-  /// Performs an HTTP 'GET /activities/statistics' operation and returns the [Response].
+  /// Retrieve activity statistics
+  ///
+  /// Returns the number of likes and comments for a given album or asset in an album.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] albumId (required):
+  ///   Album ID
   ///
   /// * [String] assetId:
-  Future<Response> getActivityStatisticsWithHttpInfo(String albumId, { String? assetId, }) async {
+  ///   Asset ID (if activity is for an asset)
+  Future<Response> getActivityStatisticsWithHttpInfo(String albumId, { String? assetId, Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/activities/statistics';
 
@@ -216,16 +259,23 @@ class ActivitiesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve activity statistics
+  ///
+  /// Returns the number of likes and comments for a given album or asset in an album.
+  ///
   /// Parameters:
   ///
   /// * [String] albumId (required):
+  ///   Album ID
   ///
   /// * [String] assetId:
-  Future<ActivityStatisticsResponseDto?> getActivityStatistics(String albumId, { String? assetId, }) async {
-    final response = await getActivityStatisticsWithHttpInfo(albumId,  assetId: assetId, );
+  ///   Asset ID (if activity is for an asset)
+  Future<ActivityStatisticsResponseDto?> getActivityStatistics(String albumId, { String? assetId, Future<void>? abortTrigger, }) async {
+    final response = await getActivityStatisticsWithHttpInfo(albumId, assetId: assetId, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }

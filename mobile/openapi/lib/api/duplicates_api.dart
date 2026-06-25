@@ -16,8 +16,111 @@ class DuplicatesApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'GET /duplicates' operation and returns the [Response].
-  Future<Response> getAssetDuplicatesWithHttpInfo() async {
+  /// Dismiss a duplicate group
+  ///
+  /// Dismiss a duplicate group by its ID, unlinking all assets in the group without deleting them.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
+  /// Parameters:
+  ///
+  /// * [String] id (required):
+  Future<Response> deleteDuplicateWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
+    // ignore: prefer_const_declarations
+    final apiPath = r'/duplicates/{id}'
+      .replaceAll('{id}', id);
+
+    // ignore: prefer_final_locals
+    Object? postBody;
+
+    final queryParams = <QueryParam>[];
+    final headerParams = <String, String>{};
+    final formParams = <String, String>{};
+
+    const contentTypes = <String>[];
+
+
+    return apiClient.invokeAPI(
+      apiPath,
+      'DELETE',
+      queryParams,
+      postBody,
+      headerParams,
+      formParams,
+      contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
+    );
+  }
+
+  /// Dismiss a duplicate group
+  ///
+  /// Dismiss a duplicate group by its ID, unlinking all assets in the group without deleting them.
+  ///
+  /// Parameters:
+  ///
+  /// * [String] id (required):
+  Future<void> deleteDuplicate(String id, { Future<void>? abortTrigger, }) async {
+    final response = await deleteDuplicateWithHttpInfo(id, abortTrigger: abortTrigger,);
+    if (response.statusCode >= HttpStatus.badRequest) {
+      throw ApiException(response.statusCode, await _decodeBodyBytes(response));
+    }
+  }
+
+  /// Delete duplicates
+  ///
+  /// Delete multiple duplicate assets specified by their IDs.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
+  /// Parameters:
+  ///
+  /// * [BulkIdsDto] bulkIdsDto (required):
+  Future<Response> deleteDuplicatesWithHttpInfo(BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
+    // ignore: prefer_const_declarations
+    final apiPath = r'/duplicates';
+
+    // ignore: prefer_final_locals
+    Object? postBody = bulkIdsDto;
+
+    final queryParams = <QueryParam>[];
+    final headerParams = <String, String>{};
+    final formParams = <String, String>{};
+
+    const contentTypes = <String>['application/json'];
+
+
+    return apiClient.invokeAPI(
+      apiPath,
+      'DELETE',
+      queryParams,
+      postBody,
+      headerParams,
+      formParams,
+      contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
+    );
+  }
+
+  /// Delete duplicates
+  ///
+  /// Delete multiple duplicate assets specified by their IDs.
+  ///
+  /// Parameters:
+  ///
+  /// * [BulkIdsDto] bulkIdsDto (required):
+  Future<void> deleteDuplicates(BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
+    final response = await deleteDuplicatesWithHttpInfo(bulkIdsDto, abortTrigger: abortTrigger,);
+    if (response.statusCode >= HttpStatus.badRequest) {
+      throw ApiException(response.statusCode, await _decodeBodyBytes(response));
+    }
+  }
+
+  /// Retrieve duplicates
+  ///
+  /// Retrieve a list of duplicate assets available to the authenticated user.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  Future<Response> getAssetDuplicatesWithHttpInfo({ Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/duplicates';
 
@@ -39,11 +142,15 @@ class DuplicatesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
-  Future<List<DuplicateResponseDto>?> getAssetDuplicates() async {
-    final response = await getAssetDuplicatesWithHttpInfo();
+  /// Retrieve duplicates
+  ///
+  /// Retrieve a list of duplicate assets available to the authenticated user.
+  Future<List<DuplicateResponseDto>?> getAssetDuplicates({ Future<void>? abortTrigger, }) async {
+    final response = await getAssetDuplicatesWithHttpInfo(abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -54,6 +161,66 @@ class DuplicatesApi {
       final responseBody = await _decodeBodyBytes(response);
       return (await apiClient.deserializeAsync(responseBody, 'List<DuplicateResponseDto>') as List)
         .cast<DuplicateResponseDto>()
+        .toList(growable: false);
+
+    }
+    return null;
+  }
+
+  /// Resolve duplicate groups
+  ///
+  /// Resolve duplicate groups by synchronizing metadata across assets and deleting/trashing duplicates.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
+  /// Parameters:
+  ///
+  /// * [DuplicateResolveDto] duplicateResolveDto (required):
+  Future<Response> resolveDuplicatesWithHttpInfo(DuplicateResolveDto duplicateResolveDto, { Future<void>? abortTrigger, }) async {
+    // ignore: prefer_const_declarations
+    final apiPath = r'/duplicates/resolve';
+
+    // ignore: prefer_final_locals
+    Object? postBody = duplicateResolveDto;
+
+    final queryParams = <QueryParam>[];
+    final headerParams = <String, String>{};
+    final formParams = <String, String>{};
+
+    const contentTypes = <String>['application/json'];
+
+
+    return apiClient.invokeAPI(
+      apiPath,
+      'POST',
+      queryParams,
+      postBody,
+      headerParams,
+      formParams,
+      contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
+    );
+  }
+
+  /// Resolve duplicate groups
+  ///
+  /// Resolve duplicate groups by synchronizing metadata across assets and deleting/trashing duplicates.
+  ///
+  /// Parameters:
+  ///
+  /// * [DuplicateResolveDto] duplicateResolveDto (required):
+  Future<List<BulkIdResponseDto>?> resolveDuplicates(DuplicateResolveDto duplicateResolveDto, { Future<void>? abortTrigger, }) async {
+    final response = await resolveDuplicatesWithHttpInfo(duplicateResolveDto, abortTrigger: abortTrigger,);
+    if (response.statusCode >= HttpStatus.badRequest) {
+      throw ApiException(response.statusCode, await _decodeBodyBytes(response));
+    }
+    // When a remote server returns no body with a status of 204, we shall not decode it.
+    // At the time of writing this, `dart:convert` will throw an "Unexpected end of input"
+    // FormatException when trying to decode an empty string.
+    if (response.body.isNotEmpty && response.statusCode != HttpStatus.noContent) {
+      final responseBody = await _decodeBodyBytes(response);
+      return (await apiClient.deserializeAsync(responseBody, 'List<BulkIdResponseDto>') as List)
+        .cast<BulkIdResponseDto>()
         .toList(growable: false);
 
     }

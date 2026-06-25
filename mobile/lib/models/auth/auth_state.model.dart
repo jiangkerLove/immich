@@ -7,7 +7,7 @@ class AuthState {
   final bool isAdmin;
   final String profileImagePath;
 
-  AuthState({
+  const AuthState({
     required this.deviceId,
     required this.userId,
     required this.userEmail,
@@ -44,7 +44,9 @@ class AuthState {
 
   @override
   bool operator ==(Object other) {
-    if (identical(this, other)) return true;
+    if (identical(this, other)) {
+      return true;
+    }
 
     return other is AuthState &&
         other.deviceId == deviceId &&

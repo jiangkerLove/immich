@@ -11,11 +11,10 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import { AggregationType } from '@opentelemetry/sdk-metrics';
 import { NodeSDK, contextBase } from '@opentelemetry/sdk-node';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
-import { ClassConstructor } from 'class-transformer';
 import { snakeCase, startCase } from 'lodash';
 import { MetricService } from 'nestjs-otel';
 import { copyMetadataFromFunctionToFunction } from 'nestjs-otel/lib/opentelemetry.utils';
-import { serverVersion } from 'src/constants';
+import { excludePaths, serverVersion } from 'src/constants';
 import { ImmichTelemetry, MetadataKey } from 'src/enum';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { LoggingRepository } from 'src/repositories/logging.repository';
@@ -61,6 +60,9 @@ export const bootstrapTelemetry = (port: number) => {
   if (instance) {
     throw new Error('OpenTelemetry SDK already started');
   }
+
+  const { telemetry } = new ConfigRepository().getEnv();
+
   instance = new NodeSDK({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: `immich`,
@@ -69,7 +71,10 @@ export const bootstrapTelemetry = (port: number) => {
     metricReader: new PrometheusExporter({ port }),
     contextManager: new AsyncLocalStorageContextManager(),
     instrumentations: [
-      new HttpInstrumentation(),
+      new HttpInstrumentation({
+        enabled: telemetry.metrics.has(ImmichTelemetry.Api),
+        ignoreIncomingRequestHook: (request) => excludePaths.some((item) => request.url?.startsWith(item)),
+      }),
       new IORedisInstrumentation(),
       new NestInstrumentation(),
       new PgInstrumentation(),
@@ -112,21 +117,21 @@ export class TelemetryRepository {
     const { telemetry } = this.configRepository.getEnv();
     const { metrics } = telemetry;
 
-    this.api = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.API) });
-    this.host = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.HOST) });
-    this.jobs = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.JOB) });
-    this.repo = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.REPO) });
+    this.api = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.Api) });
+    this.host = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.Host) });
+    this.jobs = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.Job) });
+    this.repo = new MetricGroupRepository(metricService).configure({ enabled: metrics.has(ImmichTelemetry.Repo) });
   }
 
-  setup({ repositories }: { repositories: ClassConstructor<unknown>[] }) {
+  setup({ repositories }: { repositories: (new (...args: any[]) => unknown)[] }) {
     const { telemetry } = this.configRepository.getEnv();
     const { metrics } = telemetry;
-    if (!metrics.has(ImmichTelemetry.REPO)) {
+    if (!metrics.has(ImmichTelemetry.Repo)) {
       return;
     }
 
     for (const Repository of repositories) {
-      const isEnabled = this.reflect.get(MetadataKey.TELEMETRY_ENABLED, Repository) ?? true;
+      const isEnabled = this.reflect.get(MetadataKey.TelemetryEnabled, Repository) ?? true;
       if (!isEnabled) {
         this.logger.debug(`Telemetry disabled for ${Repository.name}`);
         continue;
@@ -136,7 +141,7 @@ export class TelemetryRepository {
     }
   }
 
-  private wrap(Repository: ClassConstructor<unknown>) {
+  private wrap(Repository: new (...args: any[]) => unknown) {
     const className = Repository.name;
     const descriptors = Object.getOwnPropertyDescriptors(Repository.prototype);
     const unit = 'ms';

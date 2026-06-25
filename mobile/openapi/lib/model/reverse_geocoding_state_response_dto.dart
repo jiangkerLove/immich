@@ -17,8 +17,10 @@ class ReverseGeocodingStateResponseDto {
     required this.lastUpdate,
   });
 
+  /// Last import file name
   String? lastImportFileName;
 
+  /// Last update timestamp
   String? lastUpdate;
 
   @override
@@ -40,12 +42,12 @@ class ReverseGeocodingStateResponseDto {
     if (this.lastImportFileName != null) {
       json[r'lastImportFileName'] = this.lastImportFileName;
     } else {
-    //  json[r'lastImportFileName'] = null;
+      json[r'lastImportFileName'] = null;
     }
     if (this.lastUpdate != null) {
       json[r'lastUpdate'] = this.lastUpdate;
     } else {
-    //  json[r'lastUpdate'] = null;
+      json[r'lastUpdate'] = null;
     }
     return json;
   }

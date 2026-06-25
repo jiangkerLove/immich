@@ -19,7 +19,7 @@ class BaseCLIPTextualEncoder(InferenceModel):
     depends = []
     identity = (ModelType.TEXTUAL, ModelTask.SEARCH)
 
-    def _predict(self, inputs: str, language: str | None = None, **kwargs: Any) -> str:
+    def _predict(self, inputs: str, language: str | None = None) -> str:
         tokens = self.tokenize(inputs, language=language)
         res: NDArray[np.float32] = self.session.run(None, tokens)[0][0]
         return serialize_np_array(res)
@@ -89,7 +89,9 @@ class OpenClipTextualEncoder(BaseCLIPTextualEncoder):
 
         tokenizer: Tokenizer = Tokenizer.from_file(self.tokenizer_file_path.as_posix())
 
-        pad_id: int = tokenizer.token_to_id(pad_token)
+        pad_id = tokenizer.token_to_id(pad_token)
+        if pad_id is None:
+            raise ValueError(f"Pad token '{pad_token}' not found in tokenizer vocab")
         tokenizer.enable_padding(length=context_length, pad_token=pad_token, pad_id=pad_id)
         tokenizer.enable_truncation(max_length=context_length)
 

@@ -1,32 +1,33 @@
-import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
-import { UserTable } from 'src/schema/tables/user.table';
 import {
   Column,
   CreateDateColumn,
   ForeignKeyColumn,
+  Generated,
   PrimaryGeneratedColumn,
   Table,
+  Timestamp,
   UpdateDateColumn,
-} from 'src/sql-tools';
+} from '@immich/sql-tools';
+import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
+import { UserTable } from 'src/schema/tables/user.table';
 
-@Table({ name: 'sessions', primaryConstraintName: 'PK_48cb6b5c20faa63157b3c1baf7f' })
-@UpdatedAtTrigger('sessions_updated_at')
+@Table({ name: 'session' })
+@UpdatedAtTrigger('session_updatedAt')
 export class SessionTable {
   @PrimaryGeneratedColumn()
-  id!: string;
+  id!: Generated<string>;
 
-  // TODO convert to byte[]
-  @Column()
-  token!: string;
+  @Column({ type: 'bytea', index: true })
+  token!: Buffer;
 
   @CreateDateColumn()
-  createdAt!: Date;
+  createdAt!: Generated<Timestamp>;
 
   @UpdateDateColumn()
-  updatedAt!: Date;
+  updatedAt!: Generated<Timestamp>;
 
   @Column({ type: 'timestamp with time zone', nullable: true })
-  expiresAt!: Date | null;
+  expiresAt!: Timestamp | null;
 
   @ForeignKeyColumn(() => UserTable, { onUpdate: 'CASCADE', onDelete: 'CASCADE' })
   userId!: string;
@@ -35,14 +36,23 @@ export class SessionTable {
   parentId!: string | null;
 
   @Column({ default: '' })
-  deviceType!: string;
+  deviceType!: Generated<string>;
 
   @Column({ default: '' })
-  deviceOS!: string;
+  deviceOS!: Generated<string>;
 
-  @UpdateIdColumn({ indexName: 'IDX_sessions_update_id' })
-  updateId!: string;
+  @Column({ nullable: true })
+  appVersion!: string | null;
+
+  @UpdateIdColumn({ index: true })
+  updateId!: Generated<string>;
+
+  @Column({ type: 'boolean', default: false })
+  isPendingSyncReset!: Generated<boolean>;
 
   @Column({ type: 'timestamp with time zone', nullable: true })
-  pinExpiresAt!: Date | null;
+  pinExpiresAt!: Timestamp | null;
+
+  @Column({ nullable: true, index: true })
+  oauthSid!: string | null;
 }

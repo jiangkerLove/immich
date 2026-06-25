@@ -39,11 +39,11 @@ alt="Dot Env Example"
 />
 
 - Change the default `DB_PASSWORD`, and add custom database connection information if necessary.
-- Change `DB_DATA_LOCATION` to a folder where the database will be saved to disk.
-- Change `UPLOAD_LOCATION` to a folder where media (uploaded and generated) will be stored.
+- Change `DB_DATA_LOCATION` to a folder (absolute path) where the database will be saved to disk.
+- Change `UPLOAD_LOCATION` to a folder (absolute path) where media (uploaded and generated) will be stored.
 
 11. Click on "**Deploy the stack**".
 
 :::tip
-For more information on how to use the application, please refer to the [Post Installation](/docs/install/post-install.mdx) guide.
+For more information on how to use the application, please refer to the [Post Installation](/install/post-install.mdx) guide.
 :::

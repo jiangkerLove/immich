@@ -1,36 +1,73 @@
-import 'package:immich_mobile/entities/asset.entity.dart';
-import 'package:timezone/timezone.dart';
+import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/exif.model.dart';
+import 'package:immich_mobile/infrastructure/utils/exif.converter.dart';
+import 'package:openapi/api.dart' as api;
 
-extension TZExtension on Asset {
-  /// Returns the created time of the asset from the exif info (if available) or from
-  /// the fileCreatedAt field, adjusted to the timezone value from the exif info along with
-  /// the timezone offset in [Duration]
-  (DateTime, Duration) getTZAdjustedTimeAndOffset() {
-    DateTime dt = fileCreatedAt.toLocal();
-    if (exifInfo?.dateTimeOriginal != null) {
-      dt = exifInfo!.dateTimeOriginal!;
-      if (exifInfo?.timeZone != null) {
-        dt = dt.toUtc();
-        try {
-          final location = getLocation(exifInfo!.timeZone!);
-          dt = TZDateTime.from(dt, location);
-        } on LocationNotFoundException {
-          RegExp re = RegExp(
-            r'^utc(?:([+-]\d{1,2})(?::(\d{2}))?)?$',
-            caseSensitive: false,
-          );
-          final m = re.firstMatch(exifInfo!.timeZone!);
-          if (m != null) {
-            final duration = Duration(
-              hours: int.parse(m.group(1) ?? '0'),
-              minutes: int.parse(m.group(2) ?? '0'),
-            );
-            dt = dt.add(duration);
-            return (dt, duration);
-          }
-        }
-      }
-    }
-    return (dt, dt.timeZoneOffset);
+extension DTOToAsset on api.AssetResponseDto {
+  RemoteAsset toDto() {
+    return RemoteAsset(
+      id: id,
+      name: originalFileName,
+      checksum: checksum,
+      createdAt: fileCreatedAt,
+      updatedAt: updatedAt,
+      uploadedAt: createdAt,
+      ownerId: ownerId,
+      visibility: visibility.toAssetVisibility(),
+      durationMs: duration,
+      height: height?.toInt(),
+      width: width?.toInt(),
+      isFavorite: isFavorite,
+      livePhotoVideoId: livePhotoVideoId.orElse(null),
+      thumbHash: thumbhash,
+      localId: null,
+      type: type.toAssetType(),
+      stackId: stack.orElse(null)?.id,
+      isEdited: isEdited,
+    );
   }
+
+  RemoteAssetExif toDtoWithExif() {
+    return RemoteAssetExif(
+      id: id,
+      name: originalFileName,
+      checksum: checksum,
+      createdAt: fileCreatedAt,
+      updatedAt: updatedAt,
+      uploadedAt: createdAt,
+      ownerId: ownerId,
+      visibility: visibility.toAssetVisibility(),
+      durationMs: duration,
+      height: height?.toInt(),
+      width: width?.toInt(),
+      isFavorite: isFavorite,
+      livePhotoVideoId: livePhotoVideoId.orElse(null),
+      thumbHash: thumbhash,
+      localId: null,
+      type: type.toAssetType(),
+      stackId: stack.orElse(null)?.id,
+      isEdited: isEdited,
+      exifInfo: exifInfo.orElse(null) != null ? ExifDtoConverter.fromDto(exifInfo.orElse(null)!) : const ExifInfo(),
+    );
+  }
+}
+
+extension on api.AssetVisibility {
+  AssetVisibility toAssetVisibility() => switch (this) {
+    api.AssetVisibility.timeline => AssetVisibility.timeline,
+    api.AssetVisibility.hidden => AssetVisibility.hidden,
+    api.AssetVisibility.archive => AssetVisibility.archive,
+    api.AssetVisibility.locked => AssetVisibility.locked,
+    _ => AssetVisibility.timeline,
+  };
+}
+
+extension on api.AssetTypeEnum {
+  AssetType toAssetType() => switch (this) {
+    api.AssetTypeEnum.IMAGE => AssetType.image,
+    api.AssetTypeEnum.VIDEO => AssetType.video,
+    api.AssetTypeEnum.AUDIO => AssetType.audio,
+    api.AssetTypeEnum.OTHER => AssetType.other,
+    _ => throw Exception('Unknown AssetType value: $this'),
+  };
 }

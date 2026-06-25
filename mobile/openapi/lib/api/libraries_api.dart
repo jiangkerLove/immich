@@ -16,11 +16,16 @@ class LibrariesApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'POST /libraries' operation and returns the [Response].
+  /// Create a library
+  ///
+  /// Create a new external library.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [CreateLibraryDto] createLibraryDto (required):
-  Future<Response> createLibraryWithHttpInfo(CreateLibraryDto createLibraryDto,) async {
+  Future<Response> createLibraryWithHttpInfo(CreateLibraryDto createLibraryDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries';
 
@@ -42,14 +47,19 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Create a library
+  ///
+  /// Create a new external library.
+  ///
   /// Parameters:
   ///
   /// * [CreateLibraryDto] createLibraryDto (required):
-  Future<LibraryResponseDto?> createLibrary(CreateLibraryDto createLibraryDto,) async {
-    final response = await createLibraryWithHttpInfo(createLibraryDto,);
+  Future<LibraryResponseDto?> createLibrary(CreateLibraryDto createLibraryDto, { Future<void>? abortTrigger, }) async {
+    final response = await createLibraryWithHttpInfo(createLibraryDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -63,11 +73,16 @@ class LibrariesApi {
     return null;
   }
 
-  /// Performs an HTTP 'DELETE /libraries/{id}' operation and returns the [Response].
+  /// Delete a library
+  ///
+  /// Delete an external library by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> deleteLibraryWithHttpInfo(String id,) async {
+  Future<Response> deleteLibraryWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries/{id}'
       .replaceAll('{id}', id);
@@ -90,21 +105,30 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Delete a library
+  ///
+  /// Delete an external library by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<void> deleteLibrary(String id,) async {
-    final response = await deleteLibraryWithHttpInfo(id,);
+  Future<void> deleteLibrary(String id, { Future<void>? abortTrigger, }) async {
+    final response = await deleteLibraryWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'GET /libraries' operation and returns the [Response].
-  Future<Response> getAllLibrariesWithHttpInfo() async {
+  /// Retrieve libraries
+  ///
+  /// Retrieve a list of external libraries.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  Future<Response> getAllLibrariesWithHttpInfo({ Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries';
 
@@ -126,11 +150,15 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
-  Future<List<LibraryResponseDto>?> getAllLibraries() async {
-    final response = await getAllLibrariesWithHttpInfo();
+  /// Retrieve libraries
+  ///
+  /// Retrieve a list of external libraries.
+  Future<List<LibraryResponseDto>?> getAllLibraries({ Future<void>? abortTrigger, }) async {
+    final response = await getAllLibrariesWithHttpInfo(abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -147,11 +175,16 @@ class LibrariesApi {
     return null;
   }
 
-  /// Performs an HTTP 'GET /libraries/{id}' operation and returns the [Response].
+  /// Retrieve a library
+  ///
+  /// Retrieve an external library by its ID.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> getLibraryWithHttpInfo(String id,) async {
+  Future<Response> getLibraryWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries/{id}'
       .replaceAll('{id}', id);
@@ -174,14 +207,19 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve a library
+  ///
+  /// Retrieve an external library by its ID.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<LibraryResponseDto?> getLibrary(String id,) async {
-    final response = await getLibraryWithHttpInfo(id,);
+  Future<LibraryResponseDto?> getLibrary(String id, { Future<void>? abortTrigger, }) async {
+    final response = await getLibraryWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -195,11 +233,16 @@ class LibrariesApi {
     return null;
   }
 
-  /// Performs an HTTP 'GET /libraries/{id}/statistics' operation and returns the [Response].
+  /// Retrieve library statistics
+  ///
+  /// Retrieve statistics for a specific external library, including number of videos, images, and storage usage.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> getLibraryStatisticsWithHttpInfo(String id,) async {
+  Future<Response> getLibraryStatisticsWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries/{id}/statistics'
       .replaceAll('{id}', id);
@@ -222,14 +265,19 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve library statistics
+  ///
+  /// Retrieve statistics for a specific external library, including number of videos, images, and storage usage.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<LibraryStatsResponseDto?> getLibraryStatistics(String id,) async {
-    final response = await getLibraryStatisticsWithHttpInfo(id,);
+  Future<LibraryStatsResponseDto?> getLibraryStatistics(String id, { Future<void>? abortTrigger, }) async {
+    final response = await getLibraryStatisticsWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -243,11 +291,16 @@ class LibrariesApi {
     return null;
   }
 
-  /// Performs an HTTP 'POST /libraries/{id}/scan' operation and returns the [Response].
+  /// Scan a library
+  ///
+  /// Queue a scan for the external library to find and import new assets.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> scanLibraryWithHttpInfo(String id,) async {
+  Future<Response> scanLibraryWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries/{id}/scan'
       .replaceAll('{id}', id);
@@ -270,26 +323,36 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Scan a library
+  ///
+  /// Queue a scan for the external library to find and import new assets.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<void> scanLibrary(String id,) async {
-    final response = await scanLibraryWithHttpInfo(id,);
+  Future<void> scanLibrary(String id, { Future<void>? abortTrigger, }) async {
+    final response = await scanLibraryWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'PUT /libraries/{id}' operation and returns the [Response].
+  /// Update a library
+  ///
+  /// Update an existing external library.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [UpdateLibraryDto] updateLibraryDto (required):
-  Future<Response> updateLibraryWithHttpInfo(String id, UpdateLibraryDto updateLibraryDto,) async {
+  Future<Response> updateLibraryWithHttpInfo(String id, UpdateLibraryDto updateLibraryDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries/{id}'
       .replaceAll('{id}', id);
@@ -312,16 +375,21 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Update a library
+  ///
+  /// Update an existing external library.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [UpdateLibraryDto] updateLibraryDto (required):
-  Future<LibraryResponseDto?> updateLibrary(String id, UpdateLibraryDto updateLibraryDto,) async {
-    final response = await updateLibraryWithHttpInfo(id, updateLibraryDto,);
+  Future<LibraryResponseDto?> updateLibrary(String id, UpdateLibraryDto updateLibraryDto, { Future<void>? abortTrigger, }) async {
+    final response = await updateLibraryWithHttpInfo(id, updateLibraryDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -335,13 +403,18 @@ class LibrariesApi {
     return null;
   }
 
-  /// Performs an HTTP 'POST /libraries/{id}/validate' operation and returns the [Response].
+  /// Validate library settings
+  ///
+  /// Validate the settings of an external library.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [ValidateLibraryDto] validateLibraryDto (required):
-  Future<Response> validateWithHttpInfo(String id, ValidateLibraryDto validateLibraryDto,) async {
+  Future<Response> validateWithHttpInfo(String id, ValidateLibraryDto validateLibraryDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/libraries/{id}/validate'
       .replaceAll('{id}', id);
@@ -364,16 +437,21 @@ class LibrariesApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Validate library settings
+  ///
+  /// Validate the settings of an external library.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
   /// * [ValidateLibraryDto] validateLibraryDto (required):
-  Future<ValidateLibraryResponseDto?> validate(String id, ValidateLibraryDto validateLibraryDto,) async {
-    final response = await validateWithHttpInfo(id, validateLibraryDto,);
+  Future<ValidateLibraryResponseDto?> validate(String id, ValidateLibraryDto validateLibraryDto, { Future<void>? abortTrigger, }) async {
+    final response = await validateWithHttpInfo(id, validateLibraryDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }

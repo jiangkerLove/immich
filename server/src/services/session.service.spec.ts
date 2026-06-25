@@ -1,7 +1,8 @@
 import { JobStatus } from 'src/enum';
 import { SessionService } from 'src/services/session.service';
+import { AuthFactory } from 'test/factories/auth.factory';
+import { SessionFactory } from 'test/factories/session.factory';
 import { authStub } from 'test/fixtures/auth.stub';
-import { factory } from 'test/small.factory';
 import { newTestService, ServiceMocks } from 'test/utils';
 
 describe('SessionService', () => {
@@ -19,15 +20,15 @@ describe('SessionService', () => {
   describe('handleCleanup', () => {
     it('should clean sessions', async () => {
       mocks.session.cleanup.mockResolvedValue([]);
-      await expect(sut.handleCleanup()).resolves.toEqual(JobStatus.SUCCESS);
+      await expect(sut.handleCleanup()).resolves.toEqual(JobStatus.Success);
     });
   });
 
   describe('getAll', () => {
     it('should get the devices', async () => {
-      const currentSession = factory.session();
-      const otherSession = factory.session();
-      const auth = factory.auth({ session: currentSession });
+      const currentSession = SessionFactory.create();
+      const otherSession = SessionFactory.create();
+      const auth = AuthFactory.from().session(currentSession).build();
 
       mocks.session.getByUserId.mockResolvedValue([currentSession, otherSession]);
 
@@ -42,18 +43,17 @@ describe('SessionService', () => {
 
   describe('logoutDevices', () => {
     it('should logout all devices', async () => {
-      const currentSession = factory.session();
-      const otherSession = factory.session();
-      const auth = factory.auth({ session: currentSession });
+      const currentSession = SessionFactory.create();
+      const auth = AuthFactory.from().session(currentSession).build();
 
-      mocks.session.getByUserId.mockResolvedValue([currentSession, otherSession]);
-      mocks.session.delete.mockResolvedValue();
+      mocks.session.invalidateAll.mockResolvedValue();
 
       await sut.deleteAll(auth);
 
-      expect(mocks.session.getByUserId).toHaveBeenCalledWith(auth.user.id);
-      expect(mocks.session.delete).toHaveBeenCalledWith(otherSession.id);
-      expect(mocks.session.delete).not.toHaveBeenCalledWith(currentSession.id);
+      expect(mocks.session.invalidateAll).toHaveBeenCalledWith({
+        userId: auth.user.id,
+        excludeId: currentSession.id,
+      });
     });
   });
 

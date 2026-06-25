@@ -1,20 +1,16 @@
-import { Injectable } from '@nestjs/common';
-import { Cron, CronExpression, Interval } from '@nestjs/schedule';
+import { Injectable, NotAcceptableException } from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
+import { escape } from 'lodash';
 import { readFileSync } from 'node:fs';
-import sanitizeHtml from 'sanitize-html';
-import { ONE_HOUR } from 'src/constants';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { LoggingRepository } from 'src/repositories/logging.repository';
 import { AuthService } from 'src/services/auth.service';
-import { JobService } from 'src/services/job.service';
 import { SharedLinkService } from 'src/services/shared-link.service';
-import { VersionService } from 'src/services/version.service';
 import { OpenGraphTags } from 'src/utils/misc';
 
-const render = (index: string, meta: OpenGraphTags) => {
+export const render = (index: string, meta: OpenGraphTags) => {
   const [title, description, imageUrl] = [meta.title, meta.description, meta.imageUrl].map((item) =>
-    item ? sanitizeHtml(item, { allowedTags: [] }) : '',
+    item ? escape(item) : '',
   );
 
   const tags = `
@@ -40,23 +36,11 @@ const render = (index: string, meta: OpenGraphTags) => {
 export class ApiService {
   constructor(
     private authService: AuthService,
-    private jobService: JobService,
     private sharedLinkService: SharedLinkService,
-    private versionService: VersionService,
     private configRepository: ConfigRepository,
     private logger: LoggingRepository,
   ) {
     this.logger.setContext(ApiService.name);
-  }
-
-  @Interval(ONE_HOUR.as('milliseconds'))
-  async onVersionCheck() {
-    await this.versionService.handleQueueVersionCheck();
-  }
-
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
-  async onNightlyJob() {
-    await this.jobService.handleNightlyJobs();
   }
 
   ssr(excludePaths: string[]) {
@@ -70,44 +54,56 @@ export class ApiService {
     }
 
     return async (request: Request, res: Response, next: NextFunction) => {
+      const method = request.method.toLowerCase();
       if (
         request.url.startsWith('/api') ||
-        request.method.toLowerCase() !== 'get' ||
+        (method !== 'get' && method !== 'head') ||
         excludePaths.some((item) => request.url.startsWith(item))
       ) {
         return next();
       }
 
-      const targets = [
-        {
-          regex: /^\/share\/(.+)$/,
-          onMatch: async (matches: RegExpMatchArray) => {
-            const key = matches[1];
-            const auth = await this.authService.validateSharedLink(key);
-            return this.sharedLinkService.getMetadataTags(auth);
-          },
-        },
-      ];
-
-      let html = index;
-
-      try {
-        for (const { regex, onMatch } of targets) {
-          const matches = request.url.match(regex);
-          if (matches) {
-            const meta = await onMatch(matches);
-            if (meta) {
-              html = render(index, meta);
-            }
-
-            break;
-          }
-        }
-      } catch {
-        // nothing to do here
+      const responseType = request.accepts('text/html');
+      if (!responseType) {
+        throw new NotAcceptableException(
+          `The route ${request.path} was requested as ${request.header('accept')}, but only returns text/html`,
+        );
       }
 
-      res.type('text/html').header('Cache-Control', 'no-store').send(html);
+      let status = 200;
+      let html = index;
+
+      const defaultDomain = request.host ? `${request.protocol}://${request.host}` : undefined;
+
+      let meta: OpenGraphTags | null = null;
+
+      const shareKey = request.url.match(/^\/share\/(.+)$/);
+      if (shareKey) {
+        try {
+          const key = shareKey[1];
+          const auth = await this.authService.validateSharedLinkKey(key);
+          meta = await this.sharedLinkService.getMetadataTags(auth, defaultDomain);
+        } catch {
+          status = 404;
+        }
+      }
+
+      const shareSlug = request.url.match(/^\/s\/(.+)$/);
+      if (shareSlug) {
+        try {
+          const slug = shareSlug[1];
+          const auth = await this.authService.validateSharedLinkSlug(slug);
+          meta = await this.sharedLinkService.getMetadataTags(auth, defaultDomain);
+        } catch {
+          status = 404;
+        }
+      }
+
+      if (meta) {
+        html = render(index, meta);
+      }
+
+      res.status(status).type(responseType).header('Cache-Control', 'no-store').send(html);
     };
   }
 }

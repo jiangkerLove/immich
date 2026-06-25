@@ -9,15 +9,16 @@
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "target": "es2022",
+    "target": "es2023",
     "sourceMap": true,
     "outDir": "./dist",
     "incremental": true,
     "skipLibCheck": true,
+    "paths": {
+      "src/*": ["./src/*"]
+    },
     "esModuleInterop": true,
-    "rootDirs": ["src"],
-    "baseUrl": "./"
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "vitest*.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

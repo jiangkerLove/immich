@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { GeneratedImageType, StorageCore } from 'src/cores/storage.core';
+import { StorageCore } from 'src/cores/storage.core';
 import { AssetFile } from 'src/database';
 import { BulkIdErrorReason, BulkIdResponseDto } from 'src/dtos/asset-ids.response.dto';
 import { UploadFieldName } from 'src/dtos/asset-media.dto';
@@ -10,17 +10,24 @@ import { AccessRepository } from 'src/repositories/access.repository';
 import { AssetRepository } from 'src/repositories/asset.repository';
 import { EventRepository } from 'src/repositories/event.repository';
 import { PartnerRepository } from 'src/repositories/partner.repository';
-import { IBulkAsset, ImmichFile, UploadFile } from 'src/types';
+import { IBulkAsset, ImmichFile, UploadFile, UploadRequest } from 'src/types';
 import { checkAccess } from 'src/utils/access';
 
-export const getAssetFile = (files: AssetFile[], type: AssetFileType | GeneratedImageType) => {
-  return files.find((file) => file.type === type);
+export const getAssetFile = (files: AssetFile[], type: AssetFileType, { isEdited }: { isEdited: boolean }) => {
+  return files.find((file) => file.type === type && file.isEdited === isEdited);
 };
 
 export const getAssetFiles = (files: AssetFile[]) => ({
-  fullsizeFile: getAssetFile(files, AssetFileType.FULLSIZE),
-  previewFile: getAssetFile(files, AssetFileType.PREVIEW),
-  thumbnailFile: getAssetFile(files, AssetFileType.THUMBNAIL),
+  fullsizeFile: getAssetFile(files, AssetFileType.FullSize, { isEdited: false }),
+  previewFile: getAssetFile(files, AssetFileType.Preview, { isEdited: false }),
+  thumbnailFile: getAssetFile(files, AssetFileType.Thumbnail, { isEdited: false }),
+  sidecarFile: getAssetFile(files, AssetFileType.Sidecar, { isEdited: false }),
+
+  editedFullsizeFile: getAssetFile(files, AssetFileType.FullSize, { isEdited: true }),
+  editedPreviewFile: getAssetFile(files, AssetFileType.Preview, { isEdited: true }),
+  editedThumbnailFile: getAssetFile(files, AssetFileType.Thumbnail, { isEdited: true }),
+
+  encodedVideoFile: getAssetFile(files, AssetFileType.EncodedVideo, { isEdited: false }),
 });
 
 export const addAssets = async (
@@ -33,7 +40,7 @@ export const addAssets = async (
   const notPresentAssetIds = dto.assetIds.filter((id) => !existingAssetIds.has(id));
   const allowedAssetIds = await checkAccess(access, {
     auth,
-    permission: Permission.ASSET_SHARE,
+    permission: Permission.AssetShare,
     ids: notPresentAssetIds,
   });
 
@@ -75,7 +82,7 @@ export const removeAssets = async (
   const existingAssetIds = await bulk.getAssetIds(dto.parentId, dto.assetIds);
   const allowedAssetIds = canAlwaysRemove.has(dto.parentId)
     ? existingAssetIds
-    : await checkAccess(access, { auth, permission: Permission.ASSET_SHARE, ids: existingAssetIds });
+    : await checkAccess(access, { auth, permission: Permission.AssetShare, ids: existingAssetIds });
 
   const results: BulkIdResponseDto[] = [];
   for (const assetId of dto.assetIds) {
@@ -143,16 +150,16 @@ export const onBeforeLink = async (
   if (!motionAsset) {
     throw new BadRequestException('Live photo video not found');
   }
-  if (motionAsset.type !== AssetType.VIDEO) {
+  if (motionAsset.type !== AssetType.Video) {
     throw new BadRequestException('Live photo video must be a video');
   }
   if (motionAsset.ownerId !== userId) {
     throw new BadRequestException('Live photo video does not belong to the user');
   }
 
-  if (motionAsset && motionAsset.visibility === AssetVisibility.TIMELINE) {
-    await assetRepository.update({ id: livePhotoVideoId, visibility: AssetVisibility.HIDDEN });
-    await eventRepository.emit('asset.hide', { assetId: motionAsset.id, userId });
+  if (motionAsset && motionAsset.visibility === AssetVisibility.Timeline) {
+    await assetRepository.update({ id: livePhotoVideoId, visibility: AssetVisibility.Hidden });
+    await eventRepository.emit('AssetHide', { assetId: motionAsset.id, userId });
   }
 };
 
@@ -177,7 +184,7 @@ export const onAfterUnlink = async (
   { userId, livePhotoVideoId, visibility }: { userId: string; livePhotoVideoId: string; visibility: AssetVisibility },
 ) => {
   await assetRepository.update({ id: livePhotoVideoId, visibility });
-  await eventRepository.emit('asset.show', { assetId: livePhotoVideoId, userId });
+  await eventRepository.emit('AssetShow', { assetId: livePhotoVideoId, userId });
 };
 
 export function mapToUploadFile(file: ImmichFile): UploadFile {
@@ -190,10 +197,40 @@ export function mapToUploadFile(file: ImmichFile): UploadFile {
   };
 }
 
-export const asRequest = (request: AuthRequest, file: Express.Multer.File) => {
+export const asUploadRequest = (request: AuthRequest, file: Express.Multer.File): UploadRequest => {
   return {
     auth: request.user || null,
+    body: request.body,
     fieldName: file.fieldname as UploadFieldName,
     file: mapToUploadFile(file as ImmichFile),
   };
+};
+
+const isFlipped = (orientation?: string | null) => {
+  const value = Number(orientation);
+  return value && [5, 6, 7, 8, -90, 90].includes(value);
+};
+
+export const getDimensions = ({
+  exifImageHeight: height,
+  exifImageWidth: width,
+  orientation,
+}: {
+  exifImageHeight: number | null;
+  exifImageWidth: number | null;
+  orientation: string | null;
+}) => {
+  if (!width || !height) {
+    return { width: 0, height: 0 };
+  }
+
+  if (isFlipped(orientation)) {
+    return { width: height, height: width };
+  }
+
+  return { width, height };
+};
+
+export const isPanorama = (asset: { projectionType: string | null; originalFileName: string }) => {
+  return asset.projectionType === 'EQUIRECTANGULAR' || asset.originalFileName.toLowerCase().endsWith('.insp');
 };

@@ -1,52 +1,54 @@
-import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
-import { NotificationLevel, NotificationType } from 'src/enum';
-import { UserTable } from 'src/schema/tables/user.table';
 import {
   Column,
   CreateDateColumn,
   DeleteDateColumn,
   ForeignKeyColumn,
+  Generated,
   PrimaryGeneratedColumn,
   Table,
+  Timestamp,
   UpdateDateColumn,
-} from 'src/sql-tools';
+} from '@immich/sql-tools';
+import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
+import { NotificationLevel, NotificationType } from 'src/enum';
+import { UserTable } from 'src/schema/tables/user.table';
 
-@Table('notifications')
-@UpdatedAtTrigger('notifications_updated_at')
+@Table('notification')
+@UpdatedAtTrigger('notification_updatedAt')
 export class NotificationTable {
   @PrimaryGeneratedColumn()
-  id!: string;
+  id!: Generated<string>;
 
   @CreateDateColumn()
-  createdAt!: Date;
+  createdAt!: Generated<Timestamp>;
 
   @UpdateDateColumn()
-  updatedAt!: Date;
+  updatedAt!: Generated<Timestamp>;
 
   @DeleteDateColumn()
-  deletedAt?: Date;
+  deletedAt!: Timestamp | null;
 
-  @UpdateIdColumn({ indexName: 'IDX_notifications_update_id' })
-  updateId?: string;
+  @UpdateIdColumn({ index: true })
+  updateId!: Generated<string>;
 
   @ForeignKeyColumn(() => UserTable, { onDelete: 'CASCADE', onUpdate: 'CASCADE', nullable: true })
   userId!: string;
 
   @Column({ default: NotificationLevel.Info })
-  level!: NotificationLevel;
+  level!: Generated<NotificationLevel>;
 
   @Column({ default: NotificationLevel.Info })
-  type!: NotificationType;
+  type!: Generated<NotificationType>;
 
   @Column({ type: 'jsonb', nullable: true })
-  data!: any | null;
+  data!: unknown | null;
 
   @Column()
   title!: string;
 
   @Column({ type: 'text', nullable: true })
-  description!: string;
+  description!: string | null;
 
   @Column({ type: 'timestamp with time zone', nullable: true })
-  readAt?: Date | null;
+  readAt!: Timestamp | null;
 }

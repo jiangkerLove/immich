@@ -1,26 +1,18 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:immich_mobile/domain/interfaces/user.interface.dart';
-import 'package:immich_mobile/domain/interfaces/user_api.interface.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/models/user.model.dart';
 import 'package:immich_mobile/domain/services/store.service.dart';
+import 'package:immich_mobile/infrastructure/repositories/user_api.repository.dart';
 import 'package:logging/logging.dart';
 
 class UserService {
   final Logger _log = Logger("UserService");
-  final IUserRepository _userRepository;
-  final IUserApiRepository _userApiRepository;
+  final UserApiRepository _userApiRepository;
   final StoreService _storeService;
 
-  UserService({
-    required IUserRepository userRepository,
-    required IUserApiRepository userApiRepository,
-    required StoreService storeService,
-  })  : _userRepository = userRepository,
-        _userApiRepository = userApiRepository,
-        _storeService = storeService;
+  UserService({required this._userApiRepository, required this._storeService});
 
   UserDto getMyUser() {
     return _storeService.get(StoreKey.currentUser);
@@ -36,33 +28,22 @@ class UserService {
 
   Future<UserDto?> refreshMyUser() async {
     final user = await _userApiRepository.getMyUser();
-    if (user == null) return null;
+    if (user == null) {
+      return null;
+    }
     await _storeService.put(StoreKey.currentUser, user);
-    await _userRepository.update(user);
     return user;
   }
 
   Future<String?> createProfileImage(String name, Uint8List image) async {
     try {
-      final path = await _userApiRepository.createProfileImage(
-        name: name,
-        data: image,
-      );
-      final updatedUser = getMyUser().copyWith(profileImagePath: path);
+      final path = await _userApiRepository.createProfileImage(name: name, data: image);
+      final updatedUser = getMyUser();
       await _storeService.put(StoreKey.currentUser, updatedUser);
-      await _userRepository.update(updatedUser);
       return path;
     } catch (e) {
       _log.warning("Failed to upload profile image", e);
       return null;
     }
-  }
-
-  Future<List<UserDto>> getAll() async {
-    return await _userRepository.getAll();
-  }
-
-  Future<void> deleteAll() {
-    return _userRepository.deleteAll();
   }
 }

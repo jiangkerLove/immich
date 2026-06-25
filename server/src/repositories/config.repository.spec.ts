@@ -8,11 +8,14 @@ const getEnv = () => {
 
 const resetEnv = () => {
   for (const env of [
+    'IMMICH_ALLOW_EXTERNAL_PLUGINS',
+    'IMMICH_ALLOW_SETUP',
     'IMMICH_ENV',
     'IMMICH_WORKERS_INCLUDE',
     'IMMICH_WORKERS_EXCLUDE',
     'IMMICH_TRUSTED_PROXIES',
     'IMMICH_API_METRICS_PORT',
+    'IMMICH_MEDIA_LOCATION',
     'IMMICH_MICROSERVICES_METRICS_PORT',
     'IMMICH_TELEMETRY_INCLUDE',
     'IMMICH_TELEMETRY_EXCLUDE',
@@ -74,6 +77,42 @@ describe('getEnv', () => {
       configFile: undefined,
       logLevel: undefined,
     });
+
+    expect(config.plugins.external).toEqual({ allow: false });
+    expect(config.setup).toEqual({ allow: true });
+  });
+
+  describe('IMMICH_MEDIA_LOCATION', () => {
+    it('should throw an error for relative paths', () => {
+      process.env.IMMICH_MEDIA_LOCATION = './relative/path';
+      expect(() => getEnv()).toThrowError('[IMMICH_MEDIA_LOCATION] Must be an absolute path');
+    });
+  });
+
+  describe('IMMICH_ALLOW_EXTERNAL_PLUGINS', () => {
+    it('should disable plugins', () => {
+      process.env.IMMICH_ALLOW_EXTERNAL_PLUGINS = 'false';
+      const config = getEnv();
+      expect(config.plugins.external).toEqual({ allow: false });
+    });
+
+    it('should throw an error for invalid value', () => {
+      process.env.IMMICH_ALLOW_EXTERNAL_PLUGINS = 'invalid';
+      expect(() => getEnv()).toThrowError('[IMMICH_ALLOW_EXTERNAL_PLUGINS] Invalid option: expected one of');
+    });
+  });
+
+  describe('IMMICH_ALLOW_SETUP', () => {
+    it('should disable setup', () => {
+      process.env.IMMICH_ALLOW_SETUP = 'false';
+      const { setup } = getEnv();
+      expect(setup).toEqual({ allow: false });
+    });
+
+    it('should throw an error for invalid value', () => {
+      process.env.IMMICH_ALLOW_SETUP = 'invalid';
+      expect(() => getEnv()).toThrowError('[IMMICH_ALLOW_SETUP] Invalid option: expected one of');
+    });
   });
 
   describe('database', () => {
@@ -95,7 +134,7 @@ describe('getEnv', () => {
 
     it('should validate DB_SSL_MODE', () => {
       process.env.DB_SSL_MODE = 'invalid';
-      expect(() => getEnv()).toThrowError('Invalid environment variables: DB_SSL_MODE');
+      expect(() => getEnv()).toThrow(/\[DB_SSL_MODE\] Invalid option: expected one of/);
     });
 
     it('should accept a valid DB_SSL_MODE', () => {
@@ -239,7 +278,7 @@ describe('getEnv', () => {
 
     it('should reject invalid trusted proxies', () => {
       process.env.IMMICH_TRUSTED_PROXIES = '10.1';
-      expect(() => getEnv()).toThrowError('Invalid environment variables: IMMICH_TRUSTED_PROXIES');
+      expect(() => getEnv()).toThrow('[IMMICH_TRUSTED_PROXIES] Must be an ip address or ip address range');
     });
   });
 
@@ -249,7 +288,7 @@ describe('getEnv', () => {
       expect(telemetry).toEqual({
         apiPort: 8081,
         microservicesPort: 8082,
-        metrics: new Set([]),
+        metrics: new Set(),
       });
     });
 
@@ -275,14 +314,14 @@ describe('getEnv', () => {
       process.env.IMMICH_TELEMETRY_EXCLUDE = 'job';
       const { telemetry } = getEnv();
       expect(telemetry.metrics).toEqual(
-        new Set([ImmichTelemetry.API, ImmichTelemetry.HOST, ImmichTelemetry.IO, ImmichTelemetry.REPO]),
+        new Set([ImmichTelemetry.Api, ImmichTelemetry.Host, ImmichTelemetry.Io, ImmichTelemetry.Repo]),
       );
     });
 
     it('should run with specific telemetry metrics', () => {
       process.env.IMMICH_TELEMETRY_INCLUDE = 'io, host, api';
       const { telemetry } = getEnv();
-      expect(telemetry.metrics).toEqual(new Set([ImmichTelemetry.API, ImmichTelemetry.HOST, ImmichTelemetry.IO]));
+      expect(telemetry.metrics).toEqual(new Set([ImmichTelemetry.Api, ImmichTelemetry.Host, ImmichTelemetry.Io]));
     });
   });
 });

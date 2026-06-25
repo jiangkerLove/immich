@@ -5,16 +5,21 @@ const Map<String, Locale> locales = {
   'English (en)': Locale('en'),
   // Additional locales
   'Arabic (ar)': Locale('ar'),
+  'Basque (eu)': Locale('eu'),
+  'Bosnian (bl)': Locale('bn'),
+  'Brazilian Portuguese (pt_BR)': Locale('pt', 'BR'),
   'Bulgarian (bg)': Locale('bg'),
   'Catalan (ca)': Locale('ca'),
-  'Chinese Simplified (zh_CN)':
-      Locale.fromSubtags(languageCode: 'zh', scriptCode: 'SIMPLIFIED'),
-  'Chinese Traditional (zh_TW)':
-      Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
+  'Chinese Simplified (zh_CN)': Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
+  'Chinese Traditional (zh_TW)': Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
+  'Croatian (hr)': Locale('hr'),
   'Czech (cs)': Locale('cs'),
   'Danish (da)': Locale('da'),
   'Dutch (nl)': Locale('nl'),
+  'English (United Kingdom) (en_GB)': Locale('en', 'GB'),
   'Estonian (et)': Locale('et'),
+  'Filipino (fil)': Locale('fil'),
+  'Filipino (Tagalog) (tl)': Locale('tl'),
   'Finnish (fi)': Locale('fi'),
   'French (fr)': Locale('fr'),
   'Galician (gl)': Locale('gl'),
@@ -26,23 +31,27 @@ const Map<String, Locale> locales = {
   'Indonesian (id)': Locale('id'),
   'Italian (it)': Locale('it'),
   'Japanese (ja)': Locale('ja'),
+  'Kabyle (kab)': Locale('kab'),
+  'Khmer (Northern) (kxm)': Locale('kxm'),
   'Korean (ko)': Locale('ko'),
   'Latvian (lv)': Locale('lv'),
   'Lithuanian (lt)': Locale('lt'),
+  'Lombard (lmo)': Locale('lmo'),
   'Mongolian (mn)': Locale('mn'),
+  'Māori (mi)': Locale('mi'),
+  'Nepali (ne)': Locale('ne'),
   'Norwegian Bokmål (nb_NO)': Locale('nb', 'NO'),
   'Polish (pl)': Locale('pl'),
-  'Brazilian Portuguese (pt_BR)': Locale('pt', 'BR'),
   'Portuguese (pt)': Locale('pt'),
   'Romanian (ro)': Locale('ro'),
   'Russian (ru)': Locale('ru'),
-  'Serbian Cyrillic (sr_Cyrl)':
-      Locale.fromSubtags(languageCode: 'sr', scriptCode: 'Cyrl'),
-  'Serbian Latin (sr_Latn)':
-      Locale.fromSubtags(languageCode: 'sr', scriptCode: 'Latn'),
+  'Serbian Cyrillic (sr_Cyrl)': Locale.fromSubtags(languageCode: 'sr', scriptCode: 'Cyrl'),
+  'Serbian Latin (sr_Latn)': Locale.fromSubtags(languageCode: 'sr', scriptCode: 'Latn'),
   'Slovak (sk)': Locale('sk'),
   'Slovenian (sl)': Locale('sl'),
   'Spanish (es)': Locale('es'),
+  'Swabian (swg)': Locale('swg'),
+  'Swahili (sw)': Locale('sw'),
   'Swedish (sv)': Locale('sv'),
   'Tamil (ta)': Locale('ta'),
   'Telugu (te)': Locale('te'),
@@ -54,7 +63,4 @@ const Map<String, Locale> locales = {
 
 const String translationsPath = 'assets/i18n';
 
-const List<Locale> localesNotSupportedByOverpass = [
-  Locale('el', 'GR'),
-  Locale('sr', 'Cyrl'),
-];
+const List<Locale> localesNotSupportedByAppFont = [Locale('el', 'GR'), Locale('sr', 'Cyrl')];

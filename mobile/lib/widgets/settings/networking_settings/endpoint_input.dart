@@ -1,10 +1,10 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/models/auth/auxilary_endpoint.model.dart';
 import 'package:immich_mobile/providers/auth.provider.dart';
 import 'package:immich_mobile/widgets/settings/networking_settings/networking_settings.dart';
+import 'package:immich_ui/immich_ui.dart';
 
 class EndpointInput extends StatefulHookConsumerWidget {
   const EndpointInput({
@@ -61,8 +61,7 @@ class EndpointInputState extends ConsumerState<EndpointInput> {
     final url = controller.text;
     setState(() => auxCheckStatus = AuxCheckStatus.loading);
 
-    final isValid =
-        await ref.read(authProvider.notifier).validateAuxilaryServerUrl(url);
+    final isValid = await ref.read(authProvider.notifier).validateAuxilaryServerUrl(url);
 
     setState(() {
       if (mounted) {
@@ -98,10 +97,7 @@ class EndpointInputState extends ConsumerState<EndpointInput> {
         color: Colors.red,
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 16),
-        child: const Icon(
-          Icons.delete,
-          color: Colors.white,
-        ),
+        child: const Icon(Icons.delete, color: Colors.white),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 24),
@@ -115,37 +111,12 @@ class EndpointInputState extends ConsumerState<EndpointInput> {
           status: auxCheckStatus,
           enabled: widget.enabled,
         ),
-        subtitle: TextFormField(
+        subtitle: ImmichURLInput(
           enabled: widget.enabled,
-          onTapOutside: (_) => focusNode.unfocus(),
-          autovalidateMode: AutovalidateMode.onUserInteraction,
+          autovalidateMode: .onUserInteraction,
           validator: validateUrl,
-          keyboardType: TextInputType.url,
-          style: const TextStyle(
-            fontFamily: 'Inconsolata',
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-          ),
-          decoration: InputDecoration(
-            hintText: 'http(s)://immich.domain.com',
-            contentPadding: const EdgeInsets.all(16),
-            filled: true,
-            fillColor: context.colorScheme.surfaceContainer,
-            border: const OutlineInputBorder(
-              borderRadius: BorderRadius.all(Radius.circular(16)),
-            ),
-            errorBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: Colors.red[300]!),
-              borderRadius: const BorderRadius.all(Radius.circular(16)),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(
-                color:
-                    context.isDarkTheme ? Colors.grey[900]! : Colors.grey[300]!,
-              ),
-              borderRadius: const BorderRadius.all(Radius.circular(16)),
-            ),
-          ),
+          keyboardAction: .next,
+          hintText: 'http(s)://immich.domain.com',
           controller: controller,
           focusNode: focusNode,
         ),

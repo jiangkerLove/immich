@@ -1,13 +1,15 @@
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:immich_mobile/models/map/map_marker.model.dart';
 import 'package:immich_mobile/widgets/common/confirm_dialog.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:logging/logging.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 class MapUtils {
-  MapUtils._();
+  const MapUtils._();
 
   static final Logger _log = Logger("MapUtils");
   static const defaultSourceId = 'asset-map-markers';
@@ -48,21 +50,18 @@ class MapUtils {
   );
 
   static Map<String, dynamic> _addFeature(MapMarker marker) => {
-        'type': 'Feature',
-        'id': marker.assetRemoteId,
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [marker.latLng.longitude, marker.latLng.latitude],
-        },
-      };
+    'type': 'Feature',
+    'id': marker.assetRemoteId,
+    'geometry': {
+      'type': 'Point',
+      'coordinates': [marker.latLng.longitude, marker.latLng.latitude],
+    },
+  };
 
-  static Map<String, dynamic> generateGeoJsonForMarkers(
-    List<MapMarker> markers,
-  ) =>
-      {
-        'type': 'FeatureCollection',
-        'features': markers.map(_addFeature).toList(),
-      };
+  static Map<String, dynamic> generateGeoJsonForMarkers(List<MapMarker> markers) => {
+    'type': 'FeatureCollection',
+    'features': markers.map(_addFeature).toList(),
+  };
 
   static Future<(Position?, LocationPermission?)> checkPermAndGetLocation({
     required BuildContext context,
@@ -71,10 +70,7 @@ class MapUtils {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled && !silent) {
-        showDialog(
-          context: context,
-          builder: (context) => _LocationServiceDisabledDialog(),
-        );
+        unawaited(showDialog(context: context, builder: (context) => _LocationServiceDisabledDialog()));
         return (null, LocationPermission.deniedForever);
       }
 
@@ -91,12 +87,9 @@ class MapUtils {
         }
       }
 
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
         // Open app settings only if you did not request for permission before
-        if (permission == LocationPermission.deniedForever &&
-            !shouldRequestPermission &&
-            !silent) {
+        if (permission == LocationPermission.deniedForever && !shouldRequestPermission && !silent) {
           await Geolocator.openAppSettings();
         }
         return (null, LocationPermission.deniedForever);
@@ -119,24 +112,24 @@ class MapUtils {
 
 class _LocationServiceDisabledDialog extends ConfirmDialog {
   _LocationServiceDisabledDialog()
-      : super(
-          title: 'map_location_service_disabled_title'.tr(),
-          content: 'map_location_service_disabled_content'.tr(),
-          cancel: 'cancel'.tr(),
-          ok: 'yes'.tr(),
-          onOk: () async {
-            await Geolocator.openLocationSettings();
-          },
-        );
+    : super(
+        title: 'map_location_service_disabled_title'.tr(),
+        content: 'map_location_service_disabled_content'.tr(),
+        cancel: 'cancel'.tr(),
+        ok: 'yes'.tr(),
+        onOk: () async {
+          await Geolocator.openLocationSettings();
+        },
+      );
 }
 
 class _LocationPermissionDisabledDialog extends ConfirmDialog {
   _LocationPermissionDisabledDialog()
-      : super(
-          title: 'map_no_location_permission_title'.tr(),
-          content: 'map_no_location_permission_content'.tr(),
-          cancel: 'cancel'.tr(),
-          ok: 'yes'.tr(),
-          onOk: () {},
-        );
+    : super(
+        title: 'map_no_location_permission_title'.tr(),
+        content: 'map_no_location_permission_content'.tr(),
+        cancel: 'cancel'.tr(),
+        ok: 'yes'.tr(),
+        onOk: () {},
+      );
 }

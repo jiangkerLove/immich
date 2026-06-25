@@ -27,7 +27,8 @@
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_nl_NL.md">Nederlands</a>
   <a href="README_tr_TR.md">Türkçe</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_uk_UA.md">Українська</a>
   <a href="README_ru_RU.md">Русский</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
@@ -36,25 +37,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## Avís legal
+> [!WARNING]
+> ⚠️ Always follow [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) backup plan for your precious photos and videos!
+>
 
-- ⚠️ El projecte està en desenvolupament **molt actiu**.
-- ⚠️ Espereu errors i canvis que poden trencar coses.
-- ⚠️ **No utilitzeu l'aplicació com a única manera de guardar les vostres fotos i vídeos!**
+> [!NOTE]
+> Podeu trobar la documentació principal, incloent les guies d'instal·lació, a https://immich.app/.
 
 ## Contingut
 
-- [Documentació oficial](https://immich.app/docs)
-- [Mapa de ruta](https://github.com/orgs/immich-app/projects/1)
+- [Documentació](https://docs.immich.app/)
+- [Introducció](https://docs.immich.app/overview/introduction)
+- [Instal·lació](https://docs.immich.app/install/requirements)
+- [Mapa de ruta](https://immich.app/roadmap)
 - [Demo](#demo)
 - [Funcionalitats](#funcionalitats)
-- [Introducció](https://immich.app/docs/overview/introduction)
-- [Instal·lació](https://immich.app/docs/install/requirements)
-- [Directrius de contribució](https://immich.app/docs/overview/support-the-project)
-
-## Documentació
-
-Podeu trobar la documentació principal, incloent les guies d'instal·lació, a https://immich.app/.
+- [Traduccions](https://docs.immich.app/developer/translations)
+- [Directrius de contribució](https://docs.immich.app/overview/support-the-project)
 
 ## Demo
 

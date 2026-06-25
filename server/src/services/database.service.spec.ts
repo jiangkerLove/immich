@@ -2,7 +2,7 @@ import { EXTENSION_NAMES } from 'src/constants';
 import { DatabaseExtension, VectorIndex } from 'src/enum';
 import { DatabaseService } from 'src/services/database.service';
 import { VectorExtension } from 'src/types';
-import { mockEnvData } from 'test/repositories/config.repository.mock';
+import { envData, mockEnvData } from 'test/repositories/config.repository.mock';
 import { newTestService, ServiceMocks } from 'test/utils';
 
 describe(DatabaseService.name, () => {
@@ -19,8 +19,13 @@ describe(DatabaseService.name, () => {
     ({ sut, mocks } = newTestService(DatabaseService));
 
     extensionRange = '0.2.x';
-    mocks.database.getVectorExtension.mockResolvedValue(DatabaseExtension.VECTORCHORD);
+    mocks.database.getVectorExtension.mockResolvedValue(DatabaseExtension.VectorChord);
     mocks.database.getExtensionVersionRange.mockReturnValue(extensionRange);
+    mocks.database.getSchemaDrift.mockResolvedValue({
+      items: [],
+      asSql: () => [],
+      asHuman: () => [],
+    });
 
     versionBelowRange = '0.1.0';
     minVersionInRange = '0.2.0';
@@ -28,7 +33,7 @@ describe(DatabaseService.name, () => {
     versionAboveRange = '0.3.0';
     mocks.database.getExtensionVersions.mockResolvedValue([
       {
-        name: DatabaseExtension.VECTORCHORD,
+        name: DatabaseExtension.VectorChord,
         installedVersion: null,
         availableVersion: minVersionInRange,
       },
@@ -49,9 +54,8 @@ describe(DatabaseService.name, () => {
     });
 
     describe.each(<Array<{ extension: VectorExtension; extensionName: string }>>[
-      { extension: DatabaseExtension.VECTOR, extensionName: EXTENSION_NAMES[DatabaseExtension.VECTOR] },
-      { extension: DatabaseExtension.VECTORS, extensionName: EXTENSION_NAMES[DatabaseExtension.VECTORS] },
-      { extension: DatabaseExtension.VECTORCHORD, extensionName: EXTENSION_NAMES[DatabaseExtension.VECTORCHORD] },
+      { extension: DatabaseExtension.Vector, extensionName: EXTENSION_NAMES[DatabaseExtension.Vector] },
+      { extension: DatabaseExtension.VectorChord, extensionName: EXTENSION_NAMES[DatabaseExtension.VectorChord] },
     ])('should work with $extensionName', ({ extension, extensionName }) => {
       beforeEach(() => {
         mocks.database.getExtensionVersions.mockResolvedValue([
@@ -63,20 +67,7 @@ describe(DatabaseService.name, () => {
         ]);
         mocks.database.getVectorExtension.mockResolvedValue(extension);
         mocks.config.getEnv.mockReturnValue(
-          mockEnvData({
-            database: {
-              config: {
-                connectionType: 'parts',
-                host: 'database',
-                port: 5432,
-                username: 'postgres',
-                password: 'postgres',
-                database: 'immich',
-              },
-              skipMigrations: false,
-              vectorExtension: extension,
-            },
-          }),
+          mockEnvData({ database: { ...envData.database, vectorExtension: extension } }),
         );
       });
 
@@ -152,7 +143,6 @@ describe(DatabaseService.name, () => {
             installedVersion: minVersionInRange,
           },
         ]);
-        mocks.database.updateVectorExtension.mockResolvedValue({ restartRequired: false });
 
         await expect(sut.onBootstrap()).resolves.toBeUndefined();
 
@@ -261,39 +251,24 @@ describe(DatabaseService.name, () => {
 
         await expect(sut.onBootstrap()).rejects.toThrow('Failed to update extension');
 
-        expect(mocks.logger.warn.mock.calls[0][0]).toContain(
-          `The ${extensionName} extension can be updated to ${updateInRange}.`,
+        expect(mocks.logger.warn.mock.calls).toEqual(
+          expect.arrayContaining([
+            expect.arrayContaining([
+              expect.stringContaining(`The ${extensionName} extension can be updated to ${updateInRange}.`),
+            ]),
+          ]),
         );
         expect(mocks.logger.fatal).not.toHaveBeenCalled();
         expect(mocks.database.updateVectorExtension).toHaveBeenCalledWith(extension, updateInRange);
         expect(mocks.database.runMigrations).not.toHaveBeenCalled();
       });
 
-      it(`should warn if ${extension} extension update requires restart`, async () => {
-        mocks.database.getExtensionVersions.mockResolvedValue([
-          {
-            name: extension,
-            availableVersion: updateInRange,
-            installedVersion: minVersionInRange,
-          },
-        ]);
-        mocks.database.updateVectorExtension.mockResolvedValue({ restartRequired: true });
-
-        await expect(sut.onBootstrap()).resolves.toBeUndefined();
-
-        expect(mocks.logger.warn).toHaveBeenCalledTimes(1);
-        expect(mocks.logger.warn.mock.calls[0][0]).toContain(extensionName);
-        expect(mocks.database.updateVectorExtension).toHaveBeenCalledWith(extension, updateInRange);
-        expect(mocks.database.runMigrations).toHaveBeenCalledTimes(1);
-        expect(mocks.logger.fatal).not.toHaveBeenCalled();
-      });
-
       it(`should reindex ${extension} indices if needed`, async () => {
         await expect(sut.onBootstrap()).resolves.toBeUndefined();
 
         expect(mocks.database.reindexVectorsIfNeeded).toHaveBeenCalledExactlyOnceWith([
-          VectorIndex.CLIP,
-          VectorIndex.FACE,
+          VectorIndex.Clip,
+          VectorIndex.Face,
         ]);
         expect(mocks.database.reindexVectorsIfNeeded).toHaveBeenCalledTimes(1);
         expect(mocks.database.runMigrations).toHaveBeenCalledTimes(1);
@@ -306,8 +281,8 @@ describe(DatabaseService.name, () => {
         await expect(sut.onBootstrap()).rejects.toBeDefined();
 
         expect(mocks.database.reindexVectorsIfNeeded).toHaveBeenCalledExactlyOnceWith([
-          VectorIndex.CLIP,
-          VectorIndex.FACE,
+          VectorIndex.Clip,
+          VectorIndex.Face,
         ]);
         expect(mocks.database.runMigrations).not.toHaveBeenCalled();
         expect(mocks.logger.fatal).not.toHaveBeenCalled();
@@ -318,22 +293,7 @@ describe(DatabaseService.name, () => {
     });
 
     it('should skip migrations if DB_SKIP_MIGRATIONS=true', async () => {
-      mocks.config.getEnv.mockReturnValue(
-        mockEnvData({
-          database: {
-            config: {
-              connectionType: 'parts',
-              host: 'database',
-              port: 5432,
-              username: 'postgres',
-              password: 'postgres',
-              database: 'immich',
-            },
-            skipMigrations: true,
-            vectorExtension: DatabaseExtension.VECTORS,
-          },
-        }),
-      );
+      mocks.config.getEnv.mockReturnValue(mockEnvData({ database: { ...envData.database, skipMigrations: true } }));
 
       await expect(sut.onBootstrap()).resolves.toBeUndefined();
 
@@ -341,7 +301,6 @@ describe(DatabaseService.name, () => {
     });
 
     it(`should throw error if extension could not be created`, async () => {
-      mocks.database.updateVectorExtension.mockResolvedValue({ restartRequired: false });
       mocks.database.createExtension.mockRejectedValue(new Error('Failed to create extension'));
 
       await expect(sut.onBootstrap()).rejects.toThrow('Failed to create extension');
@@ -354,35 +313,42 @@ describe(DatabaseService.name, () => {
     });
 
     it(`should drop unused extension`, async () => {
+      mocks.config.getEnv.mockReturnValue(
+        mockEnvData({ database: { ...envData.database, vectorExtension: DatabaseExtension.Vector } }),
+      );
+      mocks.database.getVectorExtension.mockResolvedValue(DatabaseExtension.Vector);
       mocks.database.getExtensionVersions.mockResolvedValue([
         {
-          name: DatabaseExtension.VECTORS,
+          name: DatabaseExtension.Vector,
           installedVersion: minVersionInRange,
           availableVersion: minVersionInRange,
         },
         {
-          name: DatabaseExtension.VECTORCHORD,
-          installedVersion: null,
+          name: DatabaseExtension.VectorChord,
+          installedVersion: minVersionInRange,
           availableVersion: minVersionInRange,
         },
       ]);
 
       await expect(sut.onBootstrap()).resolves.toBeUndefined();
 
-      expect(mocks.database.createExtension).toHaveBeenCalledExactlyOnceWith(DatabaseExtension.VECTORCHORD);
-      expect(mocks.database.dropExtension).toHaveBeenCalledExactlyOnceWith(DatabaseExtension.VECTORS);
+      expect(mocks.database.dropExtension).toHaveBeenCalledExactlyOnceWith(DatabaseExtension.VectorChord);
     });
 
     it(`should warn if unused extension could not be dropped`, async () => {
+      mocks.config.getEnv.mockReturnValue(
+        mockEnvData({ database: { ...envData.database, vectorExtension: DatabaseExtension.Vector } }),
+      );
+      mocks.database.getVectorExtension.mockResolvedValue(DatabaseExtension.Vector);
       mocks.database.getExtensionVersions.mockResolvedValue([
         {
-          name: DatabaseExtension.VECTORS,
+          name: DatabaseExtension.Vector,
           installedVersion: minVersionInRange,
           availableVersion: minVersionInRange,
         },
         {
-          name: DatabaseExtension.VECTORCHORD,
-          installedVersion: null,
+          name: DatabaseExtension.VectorChord,
+          installedVersion: minVersionInRange,
           availableVersion: minVersionInRange,
         },
       ]);
@@ -390,21 +356,20 @@ describe(DatabaseService.name, () => {
 
       await expect(sut.onBootstrap()).resolves.toBeUndefined();
 
-      expect(mocks.database.createExtension).toHaveBeenCalledExactlyOnceWith(DatabaseExtension.VECTORCHORD);
-      expect(mocks.database.dropExtension).toHaveBeenCalledExactlyOnceWith(DatabaseExtension.VECTORS);
+      expect(mocks.database.dropExtension).toHaveBeenCalledExactlyOnceWith(DatabaseExtension.VectorChord);
       expect(mocks.logger.warn).toHaveBeenCalledTimes(1);
-      expect(mocks.logger.warn.mock.calls[0][0]).toContain('DROP EXTENSION vectors');
+      expect(mocks.logger.warn.mock.calls[0][0]).toContain('DROP EXTENSION vchord');
     });
 
     it(`should not try to drop pgvector when using vectorchord`, async () => {
       mocks.database.getExtensionVersions.mockResolvedValue([
         {
-          name: DatabaseExtension.VECTOR,
+          name: DatabaseExtension.Vector,
           installedVersion: minVersionInRange,
           availableVersion: minVersionInRange,
         },
         {
-          name: DatabaseExtension.VECTORCHORD,
+          name: DatabaseExtension.VectorChord,
           installedVersion: minVersionInRange,
           availableVersion: minVersionInRange,
         },

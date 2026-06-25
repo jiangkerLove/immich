@@ -1,19 +1,35 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty } from 'class-validator';
-import { UserResponseDto } from 'src/dtos/user.dto';
+import { createZodDto } from 'nestjs-zod';
+import { UserResponseSchema } from 'src/dtos/user.dto';
 import { PartnerDirection } from 'src/repositories/partner.repository';
+import z from 'zod';
 
-export class UpdatePartnerDto {
-  @IsNotEmpty()
-  inTimeline!: boolean;
-}
+const PartnerDirectionSchema = z.enum(PartnerDirection).describe('Partner direction').meta({ id: 'PartnerDirection' });
 
-export class PartnerSearchDto {
-  @IsEnum(PartnerDirection)
-  @ApiProperty({ enum: PartnerDirection, enumName: 'PartnerDirection' })
-  direction!: PartnerDirection;
-}
+const PartnerCreateSchema = z
+  .object({
+    sharedWithId: z.uuidv4().describe('User ID to share with'),
+  })
+  .meta({ id: 'PartnerCreateDto' });
 
-export class PartnerResponseDto extends UserResponseDto {
-  inTimeline?: boolean;
-}
+const PartnerUpdateSchema = z
+  .object({
+    inTimeline: z.boolean().describe('Show partner assets in timeline'),
+  })
+  .meta({ id: 'PartnerUpdateDto' });
+
+const PartnerSearchSchema = z
+  .object({
+    direction: PartnerDirectionSchema,
+  })
+  .meta({ id: 'PartnerSearchDto' });
+
+const PartnerResponseSchema = UserResponseSchema.extend({
+  inTimeline: z.boolean().optional().describe('Show in timeline'),
+})
+  .describe('Partner response')
+  .meta({ id: 'PartnerResponseDto' });
+
+export class PartnerCreateDto extends createZodDto(PartnerCreateSchema) {}
+export class PartnerUpdateDto extends createZodDto(PartnerUpdateSchema) {}
+export class PartnerSearchDto extends createZodDto(PartnerSearchSchema) {}
+export class PartnerResponseDto extends createZodDto(PartnerResponseSchema) {}

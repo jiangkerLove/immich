@@ -2,12 +2,12 @@
 
 Users can deploy a custom reverse proxy that forwards requests to Immich. This way, the reverse proxy can handle TLS termination, load balancing, or other advanced features. All reverse proxies between Immich and the user must forward all headers and set the `Host`, `X-Real-IP`, `X-Forwarded-Proto` and `X-Forwarded-For` headers to their appropriate values. Additionally, your reverse proxy should allow for big enough uploads. By following these practices, you ensure that all custom reverse proxies are fully compatible with Immich.
 
-:::note
-The Repair page can take a long time to load. To avoid server timeouts or errors, we recommend specifying a timeout of at least 10 minutes on your proxy server.
-:::
-
 :::caution
 Immich does not support being served on a sub-path such as `location /immich {`. It has to be served on the root path of a (sub)domain.
+:::
+
+:::info
+If your reverse proxy uses the [Let's Encrypt](https://letsencrypt.org/) [http-01 challenge](https://letsencrypt.org/docs/challenge-types/#http-01-challenge), you may want to verify that the Immich well-known endpoint (`/.well-known/immich`) gets correctly routed to Immich, otherwise it will likely be routed elsewhere and the mobile app may run into connection issues.
 :::
 
 ### Nginx example config
@@ -21,6 +21,12 @@ server {
     # allow large file uploads
     client_max_body_size 50000M;
 
+    # disable buffering uploads to prevent OOM on reverse proxy server and make uploads twice as fast (no pause)
+    proxy_request_buffering off;
+
+    # increase body buffer to avoid limiting upload speed
+    client_body_buffer_size 1024k;
+
     # Set headers
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;
@@ -29,8 +35,6 @@ server {
 
     # enable websockets: http://nginx.org/en/docs/http/websocket.html
     proxy_http_version 1.1;
-    proxy_set_header   Upgrade    $http_upgrade;
-    proxy_set_header   Connection "upgrade";
     proxy_redirect     off;
 
     # set timeout
@@ -40,29 +44,16 @@ server {
 
     location / {
         proxy_pass http://<backend_url>:2283;
+        proxy_set_header   Upgrade    $http_upgrade;
+        proxy_set_header   Connection "upgrade";
     }
+
+    # useful when using Let's Encrypt http-01 challenge
+    # location = /.well-known/immich {
+    #     proxy_pass http://<backend_url>:2283;
+    # }
 }
 ```
-
-#### Compatibility with Let's Encrypt
-
-In the event that your nginx configuration includes a section for Let's Encrypt, it's likely that you have a segment similar to the following:
-
-```nginx
-location ~ /.well-known {
-    ...
-}
-```
-
-This particular `location` directive can inadvertently prevent mobile clients from reaching the `/.well-known/immich` path, which is crucial for discovery. Usual error message for this case is: "Your app major version is not compatible with the server". To remedy this, you should introduce an additional location block specifically for this path, ensuring that requests are correctly proxied to the Immich server:
-
-```nginx
-location = /.well-known/immich {
-    proxy_pass http://<backend_url>:2283;
-}
-```
-
-By doing so, you'll maintain the functionality of Let's Encrypt while allowing mobile clients to access the necessary Immich path without obstruction.
 
 ### Caddy example config
 
@@ -107,7 +98,6 @@ entryPoints:
       respondingTimeouts:
         readTimeout: 600s
         idleTimeout: 600s
-        writeTimeout: 600s
 ```
 
 The second part is in the `docker-compose.yml` file where immich is in. Add the Traefik specific labels like in the example.
@@ -122,7 +112,7 @@ services:
       traefik.enable: true
       # increase readingTimeouts for the entrypoint used here
       traefik.http.routers.immich.entrypoints: websecure
-      traefik.http.routers.immich.rule: Host(`immich.your-domain.com`)
+      traefik.http.routers.immich.rule: Host(`immich.example.com`)
       traefik.http.services.immich.loadbalancer.server.port: 2283
 ```
 

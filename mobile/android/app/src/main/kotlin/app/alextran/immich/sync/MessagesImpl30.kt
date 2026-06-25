@@ -1,10 +1,14 @@
 package app.alextran.immich.sync
 
+import android.content.ContentResolver
 import android.content.Context
 import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresExtension
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
 
 @RequiresApi(Build.VERSION_CODES.Q)
@@ -33,7 +37,11 @@ class NativeSyncApiImpl30(context: Context) : NativeSyncApiImplBase(context), Na
     }
   }
 
-  override fun shouldFullSync(): Boolean =
+  override fun shouldFullSync(callback: (Result<Boolean>) -> Unit) {
+    runSync(callback) { shouldFullSync() }
+  }
+
+  private fun shouldFullSync(): Boolean =
     MediaStore.getVersion(ctx) != prefs.getString(SHARED_PREF_MEDIA_STORE_VERSION_KEY, null)
 
   override fun checkpointSync() {
@@ -47,7 +55,11 @@ class NativeSyncApiImpl30(context: Context) : NativeSyncApiImplBase(context), Na
     }
   }
 
-  override fun getMediaChanges(): SyncDelta {
+  override fun getMediaChanges(callback: (Result<SyncDelta>) -> Unit) {
+    runSync(callback) { getMediaChanges() }
+  }
+
+  private suspend fun getMediaChanges(): SyncDelta {
     val genMap = getSavedGenerationMap()
     val currentVolumes = MediaStore.getExternalVolumeNames(ctx)
     val changed = mutableListOf<PlatformAsset>()
@@ -56,6 +68,7 @@ class NativeSyncApiImpl30(context: Context) : NativeSyncApiImplBase(context), Na
     var hasChanges = genMap.keys != currentVolumes
 
     for (volume in currentVolumes) {
+      currentCoroutineContext().ensureActive()
       val currentGen = MediaStore.getGeneration(ctx, volume)
       val storedGen = genMap[volume] ?: 0
       if (currentGen <= storedGen) {
@@ -85,5 +98,30 @@ class NativeSyncApiImpl30(context: Context) : NativeSyncApiImplBase(context), Na
     }
     // Unmounted volumes are handled in dart when the album is removed
     return SyncDelta(hasChanges, changed, deleted, assetAlbums)
+  }
+
+  override fun getTrashedAssets(): Map<String, List<PlatformAsset>> {
+
+    val result = LinkedHashMap<String, MutableList<PlatformAsset>>()
+    val volumes = MediaStore.getExternalVolumeNames(ctx)
+
+    for (volume in volumes) {
+
+      val queryArgs = Bundle().apply {
+        putString(ContentResolver.QUERY_ARG_SQL_SELECTION, MEDIA_SELECTION)
+        putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, MEDIA_SELECTION_ARGS)
+        putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_ONLY)
+      }
+
+      getCursor(volume, queryArgs).use { cursor ->
+        getAssets(cursor).forEach { res ->
+          if (res is AssetResult.ValidAsset) {
+            result.getOrPut(res.albumId) { mutableListOf() }.add(res.asset)
+          }
+        }
+      }
+    }
+
+    return result.mapValues { it.value.toList() }
   }
 }

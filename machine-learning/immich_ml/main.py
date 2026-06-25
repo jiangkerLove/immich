@@ -12,7 +12,7 @@ from zipfile import BadZipFile
 
 import orjson
 from fastapi import Depends, FastAPI, File, Form, HTTPException
-from fastapi.responses import ORJSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from onnxruntime.capi.onnxruntime_pybind11_state import InvalidProtobuf, NoSuchFile
 from PIL.Image import Image
 from pydantic import ValidationError
@@ -32,11 +32,12 @@ from .schemas import (
     ModelIdentity,
     ModelTask,
     ModelType,
+    ORJSONResponse,
     PipelineRequest,
     T,
 )
 
-MultiPartParser.max_file_size = 2**26  # spools to disk if payload is 64 MiB or larger
+MultiPartParser.spool_max_size = 2**26  # spools to disk if payload is 64 MiB or larger
 
 model_cache = ModelCache(revalidate=settings.model_ttl > 0)
 thread_pool: ThreadPoolExecutor | None = None
@@ -103,18 +104,18 @@ async def preload_models(preload: PreloadModelData) -> None:
             ModelTask.FACIAL_RECOGNITION,
         )
 
-    if preload.clip_fallback is not None:
-        log.warning(
-            "Deprecated env variable: 'MACHINE_LEARNING_PRELOAD__CLIP'. "
-            "Use 'MACHINE_LEARNING_PRELOAD__CLIP__TEXTUAL' and "
-            "'MACHINE_LEARNING_PRELOAD__CLIP__VISUAL' instead."
+    if preload.ocr.detection is not None:
+        await load_models(
+            preload.ocr.detection,
+            ModelType.DETECTION,
+            ModelTask.OCR,
         )
 
-    if preload.facial_recognition_fallback is not None:
-        log.warning(
-            "Deprecated env variable: 'MACHINE_LEARNING_PRELOAD__FACIAL_RECOGNITION'. "
-            "Use 'MACHINE_LEARNING_PRELOAD__FACIAL_RECOGNITION__DETECTION' and "
-            "'MACHINE_LEARNING_PRELOAD__FACIAL_RECOGNITION__RECOGNITION' instead."
+    if preload.ocr.recognition is not None:
+        await load_models(
+            preload.ocr.recognition,
+            ModelType.RECOGNITION,
+            ModelTask.OCR,
         )
 
 
@@ -169,7 +170,10 @@ async def predict(
     text: str | None = Form(default=None),
 ) -> Any:
     if image is not None:
-        inputs: Image | str = await run(lambda: decode_pil(image))
+        decoded = await run(lambda: decode_pil(image))
+        if decoded.width == 0 or decoded.height == 0:
+            raise HTTPException(400, "Image has zero width or height")
+        inputs: Image | str = decoded
     elif text is not None:
         inputs = text
     else:
@@ -183,7 +187,9 @@ async def run_inference(payload: Image | str, entries: InferenceEntries) -> Infe
     response: InferenceResponse = {}
 
     async def _run_inference(entry: InferenceEntry) -> None:
-        model = await model_cache.get(entry["name"], entry["type"], entry["task"], ttl=settings.model_ttl)
+        model = await model_cache.get(
+            entry["name"], entry["type"], entry["task"], ttl=settings.model_ttl, **entry["options"]
+        )
         inputs = [payload]
         for dep in model.depends:
             try:
@@ -244,7 +250,6 @@ async def load(model: InferenceModel) -> InferenceModel:
 
 async def idle_shutdown_task() -> None:
     while True:
-        log.debug("Checking for inactivity...")
         if (
             last_called is not None
             and not active_requests

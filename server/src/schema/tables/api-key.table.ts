@@ -1,39 +1,41 @@
-import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
-import { Permission } from 'src/enum';
-import { UserTable } from 'src/schema/tables/user.table';
 import {
   Column,
   CreateDateColumn,
   ForeignKeyColumn,
+  Generated,
   PrimaryGeneratedColumn,
   Table,
+  Timestamp,
   UpdateDateColumn,
-} from 'src/sql-tools';
+} from '@immich/sql-tools';
+import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
+import { Permission } from 'src/enum';
+import { UserTable } from 'src/schema/tables/user.table';
 
-@Table('api_keys')
-@UpdatedAtTrigger('api_keys_updated_at')
-export class APIKeyTable {
+@Table('api_key')
+@UpdatedAtTrigger('api_key_updatedAt')
+export class ApiKeyTable {
+  @PrimaryGeneratedColumn()
+  id!: Generated<string>;
+
   @Column()
   name!: string;
 
-  @Column()
-  key!: string;
+  @Column({ type: 'bytea', index: true })
+  key!: Buffer;
 
   @ForeignKeyColumn(() => UserTable, { onUpdate: 'CASCADE', onDelete: 'CASCADE' })
   userId!: string;
 
   @CreateDateColumn()
-  createdAt!: Date;
+  createdAt!: Generated<Timestamp>;
 
   @UpdateDateColumn()
-  updatedAt!: Date;
-
-  @PrimaryGeneratedColumn()
-  id!: string;
+  updatedAt!: Generated<Timestamp>;
 
   @Column({ array: true, type: 'character varying' })
   permissions!: Permission[];
 
-  @UpdateIdColumn({ indexName: 'IDX_api_keys_update_id' })
-  updateId?: string;
+  @UpdateIdColumn({ index: true })
+  updateId!: Generated<string>;
 }

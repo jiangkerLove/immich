@@ -28,7 +28,8 @@
 <a href="README_de_DE.md">Deutsch</a>
 <a href="README_nl_NL.md">Nederlands</a>
 <a href="README_tr_TR.md">Türkçe</a>
-<a href="README_zh_CN.md">中文</a>
+<a href="README_zh_CN.md">简体中文</a>
+<a href="README_zh_TW.md">正體中文</a>
 <a href="README_uk_UA.md">Українська</a>
 <a href="README_ru_RU.md">Русский</a>
 <a href="README_pt_BR.md">Português Brasileiro</a>
@@ -38,26 +39,23 @@
 
 </p>
 
-## 주의 사항
-
-- ⚠️ 이 프로젝트는 **매우 활발하게** 개발 중입니다.
-- ⚠️ 버그와 잦은 변경 사항이 있을 것으로 예상됩니다.
-- ⚠️ **사진과 동영상을 이 앱에만 단독으로 저장하지 마세요.**
-- ⚠️ 중요한 사진과 동영상을 위해 항상 [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) 백업 계획을 따르세요!
+> [!WARNING]
+> ⚠️ 중요한 사진과 동영상을 위해 항상 [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) 백업 계획을 따르세요!
+>
 
 > [!NOTE]
 > 설치하는 방법을 포함한 주요 문서는 https://immich.app/ 에서 확인할 수 있습니다.
 
 ## 링크
 
-- [문서](https://immich.app/docs)
-- [소개](https://immich.app/docs/overview/introduction)
-- [설치](https://immich.app/docs/install/requirements)
+- [문서](https://docs.immich.app)
+- [소개](https://docs.immich.app/overview/introduction)
+- [설치](https://docs.immich.app/install/requirements)
 - [로드맵](https://immich.app/roadmap)
 - [데모](#데모)
 - [기능](#기능)
-- [번역](https://immich.app/docs/developer/tranlations)
-- [기여](https://immich.app/docs/overview/support-the-project)
+- [번역](https://docs.immich.app/developer/translations)
+- [기여](https://docs.immich.app/overview/support-the-project)
 
 ## 데모
 
@@ -104,7 +102,7 @@
 
 ## 번역
 
-번역에 대한 자세한 정보는 [이곳](https://immich.app/docs/developer/translations)에서 확인하세요.
+번역에 대한 자세한 정보는 [이곳](https://docs.immich.app/developer/translations)에서 확인하세요.
 
 <a href="https://hosted.weblate.org/engage/immich/">
 <img src="https://hosted.weblate.org/widget/immich/immich/multi-auto.svg" alt="번역 현황" />

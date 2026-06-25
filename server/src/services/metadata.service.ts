@@ -1,20 +1,20 @@
 import { Injectable } from '@nestjs/common';
-import { ContainerDirectoryItem, Maybe, Tags } from 'exiftool-vendored';
-import { firstDateTime } from 'exiftool-vendored/dist/FirstDateTime';
+import { ContainerDirectoryItem, ExifDateTime, Tags } from 'exiftool-vendored';
 import { Insertable } from 'kysely';
 import _ from 'lodash';
-import { Duration } from 'luxon';
+import { DateTime, Duration } from 'luxon';
 import { Stats } from 'node:fs';
 import { constants } from 'node:fs/promises';
-import path from 'node:path';
+import { join, parse } from 'node:path';
 import { JOBS_ASSET_PAGINATION_SIZE } from 'src/constants';
 import { StorageCore } from 'src/cores/storage.core';
-import { Asset, AssetFace } from 'src/database';
-import { AssetFaces, Exif, Person } from 'src/db';
+import { Asset, AssetFile } from 'src/database';
 import { OnEvent, OnJob } from 'src/decorators';
 import {
+  AssetFileType,
   AssetType,
   AssetVisibility,
+  ChecksumAlgorithm,
   DatabaseLock,
   ExifOrientation,
   ImmichWorker,
@@ -26,24 +26,62 @@ import {
 import { ArgOf } from 'src/repositories/event.repository';
 import { ReverseGeocodeResult } from 'src/repositories/map.repository';
 import { ImmichTags } from 'src/repositories/metadata.repository';
+import { AssetExifTable } from 'src/schema/tables/asset-exif.table';
+import { AssetFaceTable } from 'src/schema/tables/asset-face.table';
+import { PersonTable } from 'src/schema/tables/person.table';
 import { BaseService } from 'src/services/base.service';
 import { JobItem, JobOf } from 'src/types';
+import { getAssetFiles } from 'src/utils/asset.util';
+import { isAssetChecksumConstraint } from 'src/utils/database';
+import { mergeTimeZone } from 'src/utils/date';
+import { mimeTypes } from 'src/utils/mime-types';
 import { isFaceImportEnabled } from 'src/utils/misc';
 import { upsertTags } from 'src/utils/tag';
+import { Tasks } from 'src/utils/tasks';
+
+const POSTGRES_INT_MAX = 2_147_483_647;
+const POSTGRES_INT_MIN = -2_147_483_648;
 
 /** look for a date from these tags (in order) */
-const EXIF_DATE_TAGS: Array<keyof Tags> = [
+const EXIF_DATE_TAGS: Array<keyof ImmichTags> = [
   'SubSecDateTimeOriginal',
-  'DateTimeOriginal',
   'SubSecCreateDate',
+  'DateTimeOriginal',
   'CreationDate',
   'CreateDate',
-  'SubSecMediaCreateDate',
   'MediaCreateDate',
   'DateTimeCreated',
+  'GPSDateTime',
+  'DateTimeUTC',
+  'SonyDateTime2',
   // Undocumented, non-standard tag from insta360 in xmp.GPano namespace
-  'SourceImageCreateTime' as keyof Tags,
+  'SourceImageCreateTime' as keyof ImmichTags,
 ];
+
+export function firstDateTime(tags: ImmichTags) {
+  for (const tag of EXIF_DATE_TAGS) {
+    const tagValue = tags?.[tag];
+
+    if (tagValue instanceof ExifDateTime) {
+      return {
+        tag,
+        dateTime: tagValue,
+      };
+    }
+
+    if (typeof tagValue !== 'string') {
+      continue;
+    }
+
+    const exifDateTime = ExifDateTime.fromEXIF(tagValue);
+    if (exifDateTime) {
+      return {
+        tag,
+        dateTime: exifDateTime,
+      };
+    }
+  }
+}
 
 const validate = <T>(value: T): NonNullable<T> | null => {
   // handle lists of numbers
@@ -56,7 +94,10 @@ const validate = <T>(value: T): NonNullable<T> | null => {
     return null;
   }
 
-  if (typeof value === 'number' && (Number.isNaN(value) || !Number.isFinite(value))) {
+  if (
+    typeof value === 'number' &&
+    (Number.isNaN(value) || !Number.isFinite(value) || value < POSTGRES_INT_MIN || value > POSTGRES_INT_MAX)
+  ) {
     return null;
   }
 
@@ -72,7 +113,7 @@ const validateRange = (value: number | undefined, min: number, max: number): Non
     return null;
   }
 
-  return val;
+  return Math.round(val);
 };
 
 const getLensModel = (exifTags: ImmichTags): string | null => {
@@ -97,24 +138,24 @@ type Dates = {
 
 @Injectable()
 export class MetadataService extends BaseService {
-  @OnEvent({ name: 'app.bootstrap', workers: [ImmichWorker.MICROSERVICES] })
+  @OnEvent({ name: 'AppBootstrap', workers: [ImmichWorker.Microservices] })
   async onBootstrap() {
     this.logger.log('Bootstrapping metadata service');
     await this.init();
   }
 
-  @OnEvent({ name: 'app.shutdown' })
+  @OnEvent({ name: 'AppShutdown' })
   async onShutdown() {
     await this.metadataRepository.teardown();
   }
 
-  @OnEvent({ name: 'config.init', workers: [ImmichWorker.MICROSERVICES] })
-  onConfigInit({ newConfig }: ArgOf<'config.init'>) {
+  @OnEvent({ name: 'ConfigInit', workers: [ImmichWorker.Microservices] })
+  onConfigInit({ newConfig }: ArgOf<'ConfigInit'>) {
     this.metadataRepository.setMaxConcurrency(newConfig.job.metadataExtraction.concurrency);
   }
 
-  @OnEvent({ name: 'config.update', workers: [ImmichWorker.MICROSERVICES], server: true })
-  onConfigUpdate({ newConfig }: ArgOf<'config.update'>) {
+  @OnEvent({ name: 'ConfigUpdate', workers: [ImmichWorker.Microservices], server: true })
+  onConfigUpdate({ newConfig }: ArgOf<'ConfigUpdate'>) {
     this.metadataRepository.setMaxConcurrency(newConfig.job.metadataExtraction.concurrency);
   }
 
@@ -122,26 +163,26 @@ export class MetadataService extends BaseService {
     this.logger.log('Initializing metadata service');
 
     try {
-      await this.jobRepository.pause(QueueName.METADATA_EXTRACTION);
+      await this.jobRepository.pause(QueueName.MetadataExtraction);
       await this.databaseRepository.withLock(DatabaseLock.GeodataImport, () => this.mapRepository.init());
-      await this.jobRepository.resume(QueueName.METADATA_EXTRACTION);
+      await this.jobRepository.resume(QueueName.MetadataExtraction);
 
       this.logger.log(`Initialized local reverse geocoder`);
     } catch (error: Error | any) {
       this.logger.error(`Unable to initialize reverse geocoding: ${error}`, error?.stack);
-      throw new Error(`Metadata service init failed`);
+      throw new Error('Metadata service init failed', { cause: error });
     }
   }
 
   private async linkLivePhotos(
     asset: { id: string; type: AssetType; ownerId: string; libraryId: string | null },
-    exifInfo: Insertable<Exif>,
+    exifInfo: Insertable<AssetExifTable>,
   ): Promise<void> {
     if (!exifInfo.livePhotoCID) {
       return;
     }
 
-    const otherType = asset.type === AssetType.VIDEO ? AssetType.IMAGE : AssetType.VIDEO;
+    const otherType = asset.type === AssetType.Video ? AssetType.Image : AssetType.Video;
     const match = await this.assetRepository.findLivePhotoMatch({
       livePhotoCID: exifInfo.livePhotoCID,
       ownerId: asset.ownerId,
@@ -154,23 +195,32 @@ export class MetadataService extends BaseService {
       return;
     }
 
-    const [photoAsset, motionAsset] = asset.type === AssetType.IMAGE ? [asset, match] : [match, asset];
+    const [photoAsset, motionAsset] = asset.type === AssetType.Image ? [asset, match] : [match, asset];
     await Promise.all([
       this.assetRepository.update({ id: photoAsset.id, livePhotoVideoId: motionAsset.id }),
-      this.assetRepository.update({ id: motionAsset.id, visibility: AssetVisibility.HIDDEN }),
+      this.assetRepository.update({ id: motionAsset.id, visibility: AssetVisibility.Hidden }),
       this.albumRepository.removeAssetsFromAll([motionAsset.id]),
     ]);
 
-    await this.eventRepository.emit('asset.hide', { assetId: motionAsset.id, userId: motionAsset.ownerId });
+    await this.eventRepository.emit('AssetHide', { assetId: motionAsset.id, userId: motionAsset.ownerId });
   }
 
-  @OnJob({ name: JobName.QUEUE_METADATA_EXTRACTION, queue: QueueName.METADATA_EXTRACTION })
-  async handleQueueMetadataExtraction(job: JobOf<JobName.QUEUE_METADATA_EXTRACTION>): Promise<JobStatus> {
+  private isOrientationSidewards(orientation: ExifOrientation | number): boolean {
+    return [
+      ExifOrientation.MirrorHorizontalRotate270CW,
+      ExifOrientation.Rotate90CW,
+      ExifOrientation.MirrorHorizontalRotate90CW,
+      ExifOrientation.Rotate270CW,
+    ].includes(orientation);
+  }
+
+  @OnJob({ name: JobName.AssetExtractMetadataQueueAll, queue: QueueName.MetadataExtraction })
+  async handleQueueMetadataExtraction(job: JobOf<JobName.AssetExtractMetadataQueueAll>): Promise<JobStatus> {
     const { force } = job;
 
-    let queue: { name: JobName.METADATA_EXTRACTION; data: { id: string } }[] = [];
+    let queue: { name: JobName.AssetExtractMetadata; data: { id: string } }[] = [];
     for await (const asset of this.assetJobRepository.streamForMetadataExtraction(force)) {
-      queue.push({ name: JobName.METADATA_EXTRACTION, data: { id: asset.id } });
+      queue.push({ name: JobName.AssetExtractMetadata, data: { id: asset.id } });
 
       if (queue.length >= JOBS_ASSET_PAGINATION_SIZE) {
         await this.jobRepository.queueAll(queue);
@@ -179,11 +229,11 @@ export class MetadataService extends BaseService {
     }
 
     await this.jobRepository.queueAll(queue);
-    return JobStatus.SUCCESS;
+    return JobStatus.Success;
   }
 
-  @OnJob({ name: JobName.METADATA_EXTRACTION, queue: QueueName.METADATA_EXTRACTION })
-  async handleMetadataExtraction(data: JobOf<JobName.METADATA_EXTRACTION>) {
+  @OnJob({ name: JobName.AssetExtractMetadata, queue: QueueName.MetadataExtraction })
+  async handleMetadataExtraction(data: JobOf<JobName.AssetExtractMetadata>) {
     const [{ metadata, reverseGeocoding }, asset] = await Promise.all([
       this.getConfig({ withCache: true }),
       this.assetJobRepository.getForMetadataExtraction(data.id),
@@ -193,10 +243,11 @@ export class MetadataService extends BaseService {
       return;
     }
 
-    const [exifTags, stats] = await Promise.all([
+    const [exifResult, stats] = await Promise.all([
       this.getExifTags(asset),
       this.storageRepository.stat(asset.originalPath),
     ]);
+    const { tags: exifTags, audio, video, packets, format } = exifResult;
     this.logger.verbose('Exif Tags', exifTags);
 
     const dates = this.getDates(asset, exifTags, stats);
@@ -206,14 +257,16 @@ export class MetadataService extends BaseService {
       latitude: number | null = null,
       longitude: number | null = null;
     if (this.hasGeo(exifTags)) {
-      latitude = exifTags.GPSLatitude;
-      longitude = exifTags.GPSLongitude;
+      latitude = Number(exifTags.GPSLatitude);
+      longitude = Number(exifTags.GPSLongitude);
       if (reverseGeocoding.enabled) {
         geo = await this.mapRepository.reverseGeocode({ latitude, longitude });
       }
     }
 
-    const exifData: Insertable<Exif> = {
+    const tags = this.getTagList(exifTags);
+
+    const exifData: Insertable<AssetExifTable> = {
       assetId: asset.id,
 
       // dates
@@ -235,12 +288,14 @@ export class MetadataService extends BaseService {
       orientation: validate(exifTags.Orientation)?.toString() ?? null,
       projectionType: exifTags.ProjectionType ? String(exifTags.ProjectionType).toUpperCase() : null,
       bitsPerSample: this.getBitsPerSample(exifTags),
-      colorspace: exifTags.ColorSpace ?? null,
+      colorspace: exifTags.ColorSpace === undefined ? null : String(exifTags.ColorSpace),
 
       // camera
-      make: exifTags.Make ?? exifTags?.Device?.Manufacturer ?? exifTags.AndroidMake ?? null,
-      model: exifTags.Model ?? exifTags?.Device?.ModelName ?? exifTags.AndroidModel ?? null,
-      fps: validate(Number.parseFloat(exifTags.VideoFrameRate!)),
+      make:
+        exifTags.Make ?? exifTags.Device?.Manufacturer ?? exifTags.AndroidMake ?? (exifTags.DeviceManufacturer || null),
+      model:
+        exifTags.Model ?? exifTags.Device?.ModelName ?? exifTags.AndroidModel ?? (exifTags.DeviceModelName || null),
+      fps: video?.frameRate ?? validate(Number.parseFloat(exifTags.VideoFrameRate!)),
       iso: validate(exifTags.ISO) as number,
       exposureTime: exifTags.ExposureTime ?? null,
       lensModel: getLensModel(exifTags),
@@ -250,49 +305,118 @@ export class MetadataService extends BaseService {
       // comments
       description: String(exifTags.ImageDescription || exifTags.Description || '').trim(),
       profileDescription: exifTags.ProfileDescription || null,
-      rating: validateRange(exifTags.Rating, -1, 5),
+      rating: exifTags.Rating === 0 ? null : validateRange(exifTags.Rating, 1, 5),
 
       // grouping
       livePhotoCID: (exifTags.ContentIdentifier || exifTags.MediaGroupUUID) ?? null,
       autoStackId: this.getAutoStackId(exifTags),
+
+      tags: tags.length > 0 ? tags : null,
     };
 
-    const promises: Promise<unknown>[] = [
-      this.assetRepository.upsertExif(exifData),
-      this.assetRepository.update({
-        id: asset.id,
-        duration: exifTags.Duration?.toString() ?? null,
-        localDateTime: dates.localDateTime,
-        fileCreatedAt: dates.dateTimeOriginal ?? undefined,
-        fileModifiedAt: stats.mtime,
-      }),
-      this.applyTagList(asset, exifTags),
-    ];
+    const audioData =
+      format && audio?.codecName
+        ? {
+            assetId: asset.id,
+            bitrate: audio.bitrate,
+            index: audio.index,
+            profile: audio.profile,
+            codecName: audio.codecName,
+          }
+        : undefined;
+
+    const videoData =
+      format?.formatName && format?.formatLongName && video?.codecName && video?.timeBase
+        ? {
+            assetId: asset.id,
+            bitrate: video.bitrate,
+            frameCount: video.frameCount,
+            timeBase: video.timeBase,
+            index: video.index,
+            profile: video.profile,
+            level: video.level,
+            colorPrimaries: video.colorPrimaries,
+            colorTransfer: video.colorTransfer,
+            colorMatrix: video.colorMatrix,
+            dvProfile: video.dvProfile,
+            dvLevel: video.dvLevel,
+            dvBlSignalCompatibilityId: video.dvBlSignalCompatibilityId,
+            codecName: video.codecName,
+            formatName: format.formatName,
+            formatLongName: format.formatLongName,
+            pixelFormat: video.pixelFormat,
+          }
+        : undefined;
+
+    const keyframeData =
+      packets && packets.keyframePts.length > 0
+        ? {
+            assetId: asset.id,
+            totalDuration: packets.totalDuration,
+            packetCount: packets.packetCount,
+            outputFrames: packets.outputFrames,
+            pts: packets.keyframePts,
+            accDuration: packets.keyframeAccDuration,
+            ownDuration: packets.keyframeOwnDuration,
+          }
+        : undefined;
+
+    const isSidewards = exifTags.Orientation && this.isOrientationSidewards(exifTags.Orientation);
+    const assetWidth = isSidewards ? validate(height) : validate(width);
+    const assetHeight = isSidewards ? validate(width) : validate(height);
+
+    const tasks = new Tasks();
+
+    tasks.push(
+      () =>
+        this.assetRepository.update({
+          id: asset.id,
+          duration: this.getDuration(exifTags),
+          localDateTime: dates.localDateTime,
+          fileCreatedAt: dates.dateTimeOriginal ?? undefined,
+          fileModifiedAt: stats.mtime,
+
+          // Keep unedited assets in sync with the file on disk, but don't overwrite edited dimensions.
+          width: !asset.isEdited || asset.width == null ? assetWidth : undefined,
+          height: !asset.isEdited || asset.height == null ? assetHeight : undefined,
+        }),
+      async () => {
+        await this.assetRepository.upsertExif({
+          exif: exifData,
+          audio: audioData,
+          video: videoData,
+          keyframes: keyframeData,
+          lockedPropertiesBehavior: 'skip',
+        });
+        await this.applyTagList(asset);
+      },
+    );
 
     if (this.isMotionPhoto(asset, exifTags)) {
-      promises.push(this.applyMotionPhotos(asset, exifTags, dates, stats));
+      tasks.push(() => this.applyMotionPhotos(asset, exifTags, dates, stats));
     }
 
     if (isFaceImportEnabled(metadata) && this.hasTaggedFaces(exifTags)) {
-      promises.push(this.applyTaggedFaces(asset, exifTags));
+      tasks.push(() => this.applyTaggedFaces(asset, exifTags));
     }
 
-    await Promise.all(promises);
+    await tasks.all();
+
     if (exifData.livePhotoCID) {
       await this.linkLivePhotos(asset, exifData);
     }
 
     await this.assetRepository.upsertJobStatus({ assetId: asset.id, metadataExtractedAt: new Date() });
 
-    await this.eventRepository.emit('asset.metadataExtracted', {
+    await this.eventRepository.emit('AssetMetadataExtracted', {
       assetId: asset.id,
       userId: asset.ownerId,
       source: data.source,
     });
   }
 
-  @OnJob({ name: JobName.QUEUE_SIDECAR, queue: QueueName.SIDECAR })
-  async handleQueueSidecar({ force }: JobOf<JobName.QUEUE_SIDECAR>): Promise<JobStatus> {
+  @OnJob({ name: JobName.SidecarQueueAll, queue: QueueName.Sidecar })
+  async handleQueueSidecar({ force }: JobOf<JobName.SidecarQueueAll>): Promise<JobStatus> {
     let jobs: JobItem[] = [];
     const queueAll = async () => {
       await this.jobRepository.queueAll(jobs);
@@ -301,7 +425,7 @@ export class MetadataService extends BaseService {
 
     const assets = this.assetJobRepository.streamForSidecar(force);
     for await (const asset of assets) {
-      jobs.push({ name: force ? JobName.SIDECAR_SYNC : JobName.SIDECAR_DISCOVERY, data: { id: asset.id } });
+      jobs.push({ name: JobName.SidecarCheck, data: { id: asset.id } });
       if (jobs.length >= JOBS_ASSET_PAGINATION_SIZE) {
         await queueAll();
       }
@@ -309,64 +433,132 @@ export class MetadataService extends BaseService {
 
     await queueAll();
 
-    return JobStatus.SUCCESS;
+    return JobStatus.Success;
   }
 
-  @OnJob({ name: JobName.SIDECAR_SYNC, queue: QueueName.SIDECAR })
-  handleSidecarSync({ id }: JobOf<JobName.SIDECAR_SYNC>): Promise<JobStatus> {
-    return this.processSidecar(id, true);
-  }
-
-  @OnJob({ name: JobName.SIDECAR_DISCOVERY, queue: QueueName.SIDECAR })
-  handleSidecarDiscovery({ id }: JobOf<JobName.SIDECAR_DISCOVERY>): Promise<JobStatus> {
-    return this.processSidecar(id, false);
-  }
-
-  @OnEvent({ name: 'asset.tag' })
-  async handleTagAsset({ assetId }: ArgOf<'asset.tag'>) {
-    await this.jobRepository.queue({ name: JobName.SIDECAR_WRITE, data: { id: assetId, tags: true } });
-  }
-
-  @OnEvent({ name: 'asset.untag' })
-  async handleUntagAsset({ assetId }: ArgOf<'asset.untag'>) {
-    await this.jobRepository.queue({ name: JobName.SIDECAR_WRITE, data: { id: assetId, tags: true } });
-  }
-
-  @OnJob({ name: JobName.SIDECAR_WRITE, queue: QueueName.SIDECAR })
-  async handleSidecarWrite(job: JobOf<JobName.SIDECAR_WRITE>): Promise<JobStatus> {
-    const { id, description, dateTimeOriginal, latitude, longitude, rating, tags } = job;
-    const asset = await this.assetJobRepository.getForSidecarWriteJob(id);
+  @OnJob({ name: JobName.SidecarCheck, queue: QueueName.Sidecar })
+  async handleSidecarCheck({ id }: JobOf<JobName.SidecarCheck>): Promise<JobStatus | undefined> {
+    const asset = await this.assetJobRepository.getForSidecarCheckJob(id);
     if (!asset) {
-      return JobStatus.FAILED;
+      return;
     }
 
-    const tagsList = (asset.tags || []).map((tag) => tag.value);
+    let sidecarPath = null;
+    for (const candidate of this.getSidecarCandidates(asset)) {
+      const exists = await this.storageRepository.checkFileExists(candidate, constants.R_OK);
+      if (!exists) {
+        continue;
+      }
 
-    const sidecarPath = asset.sidecarPath || `${asset.originalPath}.xmp`;
+      sidecarPath = candidate;
+      break;
+    }
+
+    const { sidecarFile } = getAssetFiles(asset.files);
+
+    const isChanged = sidecarPath !== sidecarFile?.path;
+
+    if (sidecarFile?.path || sidecarPath) {
+      this.logger.debug(
+        `Sidecar check found old=${sidecarFile?.path}, new=${sidecarPath} will ${isChanged ? 'update' : 'do nothing for'} asset ${asset.id}: ${asset.originalPath}`,
+      );
+    } else {
+      this.logger.verbose(`No sidecars found for asset ${asset.id}: ${asset.originalPath}`);
+    }
+
+    if (!isChanged) {
+      return JobStatus.Skipped;
+    }
+
+    await (sidecarPath === null
+      ? this.assetRepository.deleteFile({ assetId: asset.id, type: AssetFileType.Sidecar })
+      : this.assetRepository.upsertFile({ assetId: asset.id, type: AssetFileType.Sidecar, path: sidecarPath }));
+
+    return JobStatus.Success;
+  }
+
+  @OnEvent({ name: 'AssetTag' })
+  async handleTagAsset({ assetId }: ArgOf<'AssetTag'>) {
+    await this.jobRepository.queue({ name: JobName.SidecarWrite, data: { id: assetId } });
+  }
+
+  @OnEvent({ name: 'AssetUntag' })
+  async handleUntagAsset({ assetId }: ArgOf<'AssetUntag'>) {
+    await this.jobRepository.queue({ name: JobName.SidecarWrite, data: { id: assetId } });
+  }
+
+  @OnJob({ name: JobName.SidecarWrite, queue: QueueName.Sidecar })
+  async handleSidecarWrite(job: JobOf<JobName.SidecarWrite>): Promise<JobStatus> {
+    const { id } = job;
+    const asset = await this.assetJobRepository.getForSidecarWriteJob(id);
+    if (!asset) {
+      return JobStatus.Failed;
+    }
+
+    const lockedProperties = await this.assetJobRepository.getLockedPropertiesForMetadataExtraction(id);
+
+    const { sidecarFile } = getAssetFiles(asset.files);
+    const sidecarPath = sidecarFile?.path || `${asset.originalPath}.xmp`;
+
+    const { description, dateTimeOriginal, latitude, longitude, rating, tags, timeZone } = _.pick(
+      {
+        description: asset.exifInfo.description,
+        dateTimeOriginal: asset.exifInfo.dateTimeOriginal,
+        latitude: asset.exifInfo.latitude,
+        longitude: asset.exifInfo.longitude,
+        rating: asset.exifInfo.rating ?? 0,
+        tags: asset.exifInfo.tags,
+        timeZone: asset.exifInfo.timeZone,
+      },
+      lockedProperties,
+    );
+
     const exif = _.omitBy(
       <Tags>{
         Description: description,
         ImageDescription: description,
-        DateTimeOriginal: dateTimeOriginal,
+        DateTimeOriginal: mergeTimeZone(dateTimeOriginal, timeZone)?.toISO(),
         GPSLatitude: latitude,
         GPSLongitude: longitude,
         Rating: rating,
-        TagsList: tags ? tagsList : undefined,
+        TagsList: tags,
       },
       _.isUndefined,
     );
 
     if (Object.keys(exif).length === 0) {
-      return JobStatus.SKIPPED;
+      return JobStatus.Skipped;
     }
 
     await this.metadataRepository.writeTags(sidecarPath, exif);
 
-    if (!asset.sidecarPath) {
-      await this.assetRepository.update({ id, sidecarPath });
+    if (asset.files.length === 0) {
+      await this.assetRepository.upsertFile({ assetId: id, type: AssetFileType.Sidecar, path: sidecarPath });
     }
 
-    return JobStatus.SUCCESS;
+    await this.assetRepository.unlockProperties(asset.id, lockedProperties);
+
+    return JobStatus.Success;
+  }
+
+  private getSidecarCandidates({ files, originalPath }: { files: AssetFile[]; originalPath: string }) {
+    const candidates: string[] = [];
+
+    const { sidecarFile } = getAssetFiles(files);
+    if (sidecarFile?.path) {
+      candidates.push(sidecarFile.path);
+    }
+
+    const assetPath = parse(originalPath);
+
+    candidates.push(
+      // IMG_123.jpg.xmp
+      `${originalPath}.xmp`,
+      // IMG_123.xmp
+      `${join(assetPath.dir, assetPath.name)}.xmp`,
+    );
+
+    return candidates;
   }
 
   private getImageDimensions(exifTags: ImmichTags): { width?: number; height?: number } {
@@ -375,51 +567,73 @@ export class MetadataService extends BaseService {
      * For RAW images in the CR2 or RAF format, the "ImageSize" value seems to be correct,
      * but ImageWidth and ImageHeight are not correct (they contain the dimensions of the preview image).
      */
-    let [width, height] = exifTags.ImageSize?.split('x').map((dim) => Number.parseInt(dim) || undefined) || [];
+    let [width, height] =
+      exifTags.ImageSize?.toString()
+        ?.split('x')
+        ?.map((dim) => Number.parseInt(dim) || undefined) ?? [];
     if (!width || !height) {
       [width, height] = [exifTags.ImageWidth, exifTags.ImageHeight];
     }
     return { width, height };
   }
 
-  private getExifTags(asset: {
-    originalPath: string;
-    sidecarPath: string | null;
-    type: AssetType;
-  }): Promise<ImmichTags> {
-    if (!asset.sidecarPath && asset.type === AssetType.IMAGE) {
-      return this.metadataRepository.readTags(asset.originalPath);
-    }
+  private async getExifTags(asset: { originalPath: string; files: AssetFile[]; type: AssetType }) {
+    const { sidecarFile } = getAssetFiles(asset.files);
+    const shouldProbe = asset.type === AssetType.Video || asset.originalPath.toLowerCase().endsWith('.gif');
 
-    return this.mergeExifTags(asset);
-  }
-
-  private async mergeExifTags(asset: {
-    originalPath: string;
-    sidecarPath: string | null;
-    type: AssetType;
-  }): Promise<ImmichTags> {
-    const [mediaTags, sidecarTags, videoTags] = await Promise.all([
+    const [mediaTags, sidecarTags, videoResult] = await Promise.all([
       this.metadataRepository.readTags(asset.originalPath),
-      asset.sidecarPath ? this.metadataRepository.readTags(asset.sidecarPath) : null,
-      asset.type === AssetType.VIDEO ? this.getVideoTags(asset.originalPath) : null,
+      sidecarFile ? this.metadataRepository.readTags(sidecarFile.path) : null,
+      shouldProbe ? this.getVideoTags(asset.originalPath) : null,
     ]);
 
     // prefer dates from sidecar tags
     if (sidecarTags) {
-      const sidecarDate = firstDateTime(sidecarTags as Tags, EXIF_DATE_TAGS);
+      const result = firstDateTime(sidecarTags);
+      const sidecarDate = result?.dateTime;
       if (sidecarDate) {
         for (const tag of EXIF_DATE_TAGS) {
+          delete mediaTags[tag];
+        }
+
+        // exiftool-vendored derives tz information from the date.
+        // if the sidecar file has date information, we also assume the tz information come from there.
+        //
+        // this is especially important in the case of UTC+0 where exiftool-vendored does not return tz/zone fields
+        // and as such the tags aren't overwritten when returning all tags.
+        for (const tag of ['zone', 'tz', 'tzSource'] as const) {
           delete mediaTags[tag];
         }
       }
     }
 
     // prefer duration from video tags
-    delete mediaTags.Duration;
+    // don't save duration if asset is definitely not an animated image (see e.g. CR3 with Duration: 1s)
+    if (videoResult || !mimeTypes.isPossiblyAnimatedImage(asset.originalPath)) {
+      delete mediaTags.Duration;
+    }
+
+    // never use duration from sidecar
     delete sidecarTags?.Duration;
 
-    return { ...mediaTags, ...videoTags, ...sidecarTags };
+    // don't use Exif Orientation for HEIF based images, it's usually missing or invalid.
+    // prefer irot (ExifTool QuickTime:Rotation) mapped to ExifOrientation.
+    if (mimeTypes.isHeifImage(asset.originalPath)) {
+      const orientation = this.getHeifOrientation(mediaTags);
+      if (orientation === null) {
+        delete mediaTags.Orientation;
+      } else {
+        mediaTags.Orientation = orientation;
+      }
+    }
+
+    return {
+      tags: { ...mediaTags, ...videoResult?.tags, ...sidecarTags },
+      audio: videoResult?.audio,
+      video: videoResult?.video,
+      packets: videoResult?.packets,
+      format: videoResult?.format ?? null,
+    };
   }
 
   private getTagList(exifTags: ImmichTags): string[] {
@@ -448,17 +662,20 @@ export class MetadataService extends BaseService {
     return tags;
   }
 
-  private async applyTagList(asset: { id: string; ownerId: string }, exifTags: ImmichTags) {
-    const tags = this.getTagList(exifTags);
-    const results = await upsertTags(this.tagRepository, { userId: asset.ownerId, tags });
+  private async applyTagList({ id, ownerId }: { id: string; ownerId: string }) {
+    const asset = await this.assetRepository.getForMetadataExtractionTags(id);
+    const results = await upsertTags(this.tagRepository, {
+      userId: ownerId,
+      tags: asset?.tags ?? [],
+    });
     await this.tagRepository.replaceAssetTags(
-      asset.id,
+      id,
       results.map((tag) => tag.id),
     );
   }
 
   private isMotionPhoto(asset: { type: AssetType }, tags: ImmichTags): boolean {
-    return asset.type === AssetType.IMAGE && !!(tags.MotionPhoto || tags.MicroVideo);
+    return asset.type === AssetType.Image && !!(tags.MotionPhoto || tags.MicroVideo);
   }
 
   private async applyMotionPhotos(asset: Asset, tags: ImmichTags, dates: Dates, stats: Stats) {
@@ -515,47 +732,61 @@ export class MetadataService extends BaseService {
         });
       }
       const checksum = this.cryptoRepository.hashSha1(video);
+      const checksumQuery = { ownerId: asset.ownerId, libraryId: asset.libraryId ?? undefined, checksum };
 
-      let motionAsset = await this.assetRepository.getByChecksum({
-        ownerId: asset.ownerId,
-        libraryId: asset.libraryId ?? undefined,
-        checksum,
-      });
-      if (motionAsset) {
+      let motionAsset = await this.assetRepository.getByChecksum(checksumQuery);
+      let isNewMotionAsset = false;
+
+      if (!motionAsset) {
+        try {
+          const motionAssetId = this.cryptoRepository.randomUUID();
+          motionAsset = await this.assetRepository.create({
+            id: motionAssetId,
+            libraryId: asset.libraryId,
+            type: AssetType.Video,
+            fileCreatedAt: dates.dateTimeOriginal,
+            fileModifiedAt: stats.mtime,
+            localDateTime: dates.localDateTime,
+            checksum,
+            checksumAlgorithm: ChecksumAlgorithm.sha1File,
+            ownerId: asset.ownerId,
+            originalPath: StorageCore.getAndroidMotionPath(asset, motionAssetId),
+            originalFileName: `${parse(asset.originalFileName).name}.mp4`,
+            visibility: AssetVisibility.Hidden,
+          });
+
+          isNewMotionAsset = true;
+
+          if (!asset.isExternal) {
+            await this.userRepository.updateUsage(asset.ownerId, video.byteLength);
+          }
+        } catch (error) {
+          if (!isAssetChecksumConstraint(error)) {
+            throw error;
+          }
+
+          motionAsset = await this.assetRepository.getByChecksum(checksumQuery);
+          if (!motionAsset) {
+            this.logger.warn(`Unable to find existing motion video asset for ${asset.id}: ${asset.originalPath}`);
+            return;
+          }
+        }
+      }
+
+      if (!isNewMotionAsset) {
         this.logger.debugFn(() => {
           const base64Checksum = checksum.toString('base64');
           return `Motion asset with checksum ${base64Checksum} already exists for asset ${asset.id}: ${asset.originalPath}`;
         });
+      }
 
-        // Hide the motion photo video asset if it's not already hidden to prepare for linking
-        if (motionAsset.visibility === AssetVisibility.TIMELINE) {
-          await this.assetRepository.update({
-            id: motionAsset.id,
-            visibility: AssetVisibility.HIDDEN,
-          });
-          this.logger.log(`Hid unlinked motion photo video asset (${motionAsset.id})`);
-        }
-      } else {
-        const motionAssetId = this.cryptoRepository.randomUUID();
-        motionAsset = await this.assetRepository.create({
-          id: motionAssetId,
-          libraryId: asset.libraryId,
-          type: AssetType.VIDEO,
-          fileCreatedAt: dates.dateTimeOriginal,
-          fileModifiedAt: stats.mtime,
-          localDateTime: dates.localDateTime,
-          checksum,
-          ownerId: asset.ownerId,
-          originalPath: StorageCore.getAndroidMotionPath(asset, motionAssetId),
-          originalFileName: `${path.parse(asset.originalFileName).name}.mp4`,
-          visibility: AssetVisibility.HIDDEN,
-          deviceAssetId: 'NONE',
-          deviceId: 'NONE',
+      // Hide the motion photo video asset if it's not already hidden to prepare for linking
+      if (motionAsset.visibility === AssetVisibility.Timeline) {
+        await this.assetRepository.update({
+          id: motionAsset.id,
+          visibility: AssetVisibility.Hidden,
         });
-
-        if (!asset.isExternal) {
-          await this.userRepository.updateUsage(asset.ownerId, video.byteLength);
-        }
+        this.logger.log(`Hid unlinked motion photo video asset (${motionAsset.id})`);
       }
 
       if (asset.livePhotoVideoId !== motionAsset.id) {
@@ -567,7 +798,7 @@ export class MetadataService extends BaseService {
         // note asset.livePhotoVideoId is not motionAsset.id yet
         if (asset.livePhotoVideoId) {
           await this.jobRepository.queue({
-            name: JobName.ASSET_DELETION,
+            name: JobName.AssetDelete,
             data: { id: asset.livePhotoVideoId, deleteOnDisk: true },
           });
           this.logger.log(`Removed old motion photo video asset (${asset.livePhotoVideoId})`);
@@ -582,7 +813,7 @@ export class MetadataService extends BaseService {
         this.logger.log(`Wrote motion photo video to ${motionAsset.originalPath}`);
 
         await this.handleMetadataExtraction({ id: motionAsset.id });
-        await this.jobRepository.queue({ name: JobName.VIDEO_CONVERSION, data: { id: motionAsset.id } });
+        await this.jobRepository.queue({ name: JobName.AssetEncodeVideo, data: { id: motionAsset.id } });
       }
 
       this.logger.debug(`Finished motion photo video extraction for asset ${asset.id}: ${asset.originalPath}`);
@@ -609,12 +840,7 @@ export class MetadataService extends BaseService {
       return regionInfo;
     }
 
-    const isSidewards = [
-      ExifOrientation.MirrorHorizontalRotate270CW,
-      ExifOrientation.Rotate90CW,
-      ExifOrientation.MirrorHorizontalRotate90CW,
-      ExifOrientation.Rotate270CW,
-    ].includes(orientation);
+    const isSidewards = this.isOrientationSidewards(orientation);
 
     // swap image dimensions in AppliedToDimensions if orientation is sidewards
     const adjustedAppliedToDimensions = isSidewards
@@ -675,17 +901,17 @@ export class MetadataService extends BaseService {
   }
 
   private async applyTaggedFaces(
-    asset: { id: string; ownerId: string; faces: AssetFace[]; originalPath: string },
+    asset: { id: string; ownerId: string; faces: { id: string; sourceType: SourceType }[]; originalPath: string },
     tags: ImmichTags,
   ) {
     if (!tags.RegionInfo?.AppliedToDimensions || tags.RegionInfo.RegionList.length === 0) {
       return;
     }
 
-    const facesToAdd: (Insertable<AssetFaces> & { assetId: string })[] = [];
+    const facesToAdd: (Insertable<AssetFaceTable> & { assetId: string })[] = [];
     const existingNames = await this.personRepository.getDistinctNames(asset.ownerId, { withHidden: true });
     const existingNameMap = new Map(existingNames.map(({ id, name }) => [name.toLowerCase(), id]));
-    const missing: (Insertable<Person> & { ownerId: string })[] = [];
+    const missing: (Insertable<PersonTable> & { ownerId: string })[] = [];
     const missingWithFaceAsset: { id: string; ownerId: string; faceAssetId: string }[] = [];
 
     const adjustedRegionInfo = this.orientRegionInfo(tags.RegionInfo, tags.Orientation);
@@ -710,7 +936,7 @@ export class MetadataService extends BaseService {
         boundingBoxY1: Math.floor((region.Area.Y - region.Area.H / 2) * imageHeight),
         boundingBoxX2: Math.floor((region.Area.X + region.Area.W / 2) * imageWidth),
         boundingBoxY2: Math.floor((region.Area.Y + region.Area.H / 2) * imageHeight),
-        sourceType: SourceType.EXIF,
+        sourceType: SourceType.Exif,
       };
 
       facesToAdd.push(face);
@@ -723,11 +949,11 @@ export class MetadataService extends BaseService {
     if (missing.length > 0) {
       this.logger.debugFn(() => `Creating missing persons: ${missing.map((p) => `${p.name}/${p.id}`)}`);
       const newPersonIds = await this.personRepository.createAll(missing);
-      const jobs = newPersonIds.map((id) => ({ name: JobName.GENERATE_PERSON_THUMBNAIL, data: { id } }) as const);
+      const jobs = newPersonIds.map((id) => ({ name: JobName.PersonGenerateThumbnail, data: { id } }) as const);
       await this.jobRepository.queueAll(jobs);
     }
 
-    const facesToRemove = asset.faces.filter((face) => face.sourceType === SourceType.EXIF).map((face) => face.id);
+    const facesToRemove = asset.faces.filter((face) => face.sourceType === SourceType.Exif).map((face) => face.id);
     if (facesToRemove.length > 0) {
       this.logger.debug(`Removing ${facesToRemove.length} faces for asset ${asset.id}: ${asset.originalPath}`);
     }
@@ -747,13 +973,25 @@ export class MetadataService extends BaseService {
     }
   }
 
-  private getDates(asset: { id: string; originalPath: string }, exifTags: ImmichTags, stats: Stats) {
-    const dateTime = firstDateTime(exifTags as Maybe<Tags>, EXIF_DATE_TAGS);
-    this.logger.verbose(`Date and time is ${dateTime} for asset ${asset.id}: ${asset.originalPath}`);
+  private getDates(
+    asset: { id: string; originalPath: string; fileCreatedAt: Date },
+    exifTags: ImmichTags,
+    stats: Stats,
+  ) {
+    const result = firstDateTime(exifTags);
+    const tag = result?.tag;
+    const dateTime = result?.dateTime;
+    if (dateTime) {
+      this.logger.verbose(
+        `Date and time is ${dateTime} using exifTag ${tag} for asset ${asset.id}: ${asset.originalPath}`,
+      );
+    } else {
+      this.logger.verbose(`No exif date time information found for asset ${asset.id}: ${asset.originalPath}`);
+    }
 
     // timezone
-    let timeZone = exifTags.tz ?? null;
-    if (timeZone == null && dateTime?.rawValue?.endsWith('+00:00')) {
+    let timeZone = exifTags.zone ?? null;
+    if (timeZone == null && (dateTime?.rawValue?.endsWith('Z') || dateTime?.rawValue?.endsWith('+00:00'))) {
       // exiftool-vendored returns "no timezone" information even though "+00:00" might be set explicitly
       // https://github.com/photostructure/exiftool-vendored.js/issues/203
       timeZone = 'UTC+0';
@@ -761,41 +999,53 @@ export class MetadataService extends BaseService {
 
     if (timeZone) {
       this.logger.verbose(
-        `Found timezone ${timeZone} via ${exifTags.tzSource} for asset ${asset.id}: ${asset.originalPath}`,
+        `Found timezone ${timeZone} via ${exifTags.zoneSource} for asset ${asset.id}: ${asset.originalPath}`,
       );
     } else {
       this.logger.debug(`No timezone information found for asset ${asset.id}: ${asset.originalPath}`);
     }
 
-    let dateTimeOriginal = dateTime?.toDate();
-    let localDateTime = dateTime?.toDateTime().setZone('UTC', { keepLocalTime: true }).toJSDate();
+    let dateTimeOriginal = dateTime?.toDateTime();
+
+    // do not let JavaScript use local timezone
+    if (dateTimeOriginal && !dateTime?.hasZone) {
+      dateTimeOriginal = dateTimeOriginal.setZone('UTC', { keepLocalTime: true });
+    }
+
+    // align with whatever timeZone we chose
+    dateTimeOriginal = dateTimeOriginal?.setZone(timeZone ?? 'UTC');
+
+    // store as "local time"
+    let localDateTime = dateTimeOriginal?.setZone('UTC', { keepLocalTime: true });
+
     if (!localDateTime || !dateTimeOriginal) {
       // FileCreateDate is not available on linux, likely because exiftool hasn't integrated the statx syscall yet
       // birthtime is not available in Docker on macOS, so it appears as 0
-      const earliestDate = stats.birthtimeMs ? new Date(Math.min(stats.mtimeMs, stats.birthtimeMs)) : stats.mtime;
+      const earliestDate = DateTime.fromMillis(
+        Math.min(
+          asset.fileCreatedAt.getTime(),
+          stats.birthtimeMs ? Math.min(stats.mtimeMs, stats.birthtimeMs) : stats.mtime.getTime(),
+        ),
+      );
       this.logger.debug(
-        `No exif date time found, falling back on ${earliestDate.toISOString()}, earliest of file creation and modification for asset ${asset.id}: ${asset.originalPath}`,
+        `No exif date time found, falling back on ${earliestDate.toISO()}, earliest of file creation and modification for asset ${asset.id}: ${asset.originalPath}`,
       );
       dateTimeOriginal = localDateTime = earliestDate;
     }
 
-    this.logger.verbose(
-      `Found local date time ${localDateTime.toISOString()} for asset ${asset.id}: ${asset.originalPath}`,
-    );
+    this.logger.verbose(`Found local date time ${localDateTime.toISO()} for asset ${asset.id}: ${asset.originalPath}`);
 
     return {
-      dateTimeOriginal,
       timeZone,
-      localDateTime,
+      localDateTime: localDateTime.toJSDate(),
+      dateTimeOriginal: dateTimeOriginal.toJSDate(),
     };
   }
 
-  private hasGeo(tags: ImmichTags): tags is ImmichTags & { GPSLatitude: number; GPSLongitude: number } {
-    return (
-      tags.GPSLatitude !== undefined &&
-      tags.GPSLongitude !== undefined &&
-      (tags.GPSLatitude !== 0 || tags.GPSLatitude !== 0)
-    );
+  private hasGeo(tags: ImmichTags) {
+    const lat = Number(tags.GPSLatitude);
+    const lng = Number(tags.GPSLongitude);
+    return !Number.isNaN(lat) && !Number.isNaN(lng) && (lat !== 0 || lng !== 0);
   }
 
   private getAutoStackId(tags: ImmichTags | null): string | null {
@@ -823,13 +1073,29 @@ export class MetadataService extends BaseService {
     return bitsPerSample;
   }
 
+  private getDuration(tags: ImmichTags): number | null {
+    const duration = tags.Duration;
+    const seconds = typeof duration === 'number' ? duration : Number.parseFloat(duration as string);
+    return Number.isFinite(seconds) ? Math.round(Duration.fromObject({ seconds }).toMillis()) : null;
+  }
+
   private async getVideoTags(originalPath: string) {
-    const { videoStreams, format } = await this.mediaRepository.probe(originalPath);
+    const { videoStreams, audioStreams, format } = await this.mediaRepository.probe(originalPath);
+    const video = videoStreams[0];
+    const audio = audioStreams[0];
+    const packets = video?.timeBase ? await this.mediaRepository.probePackets(originalPath, video.index) : null;
 
-    const tags: Pick<ImmichTags, 'Duration' | 'Orientation'> = {};
+    const tags: Pick<ImmichTags, 'Duration' | 'Orientation' | 'ImageWidth' | 'ImageHeight'> = {};
 
-    if (videoStreams[0]) {
-      switch (videoStreams[0].rotation) {
+    if (video) {
+      if (video.width) {
+        tags.ImageWidth = video.width;
+      }
+      if (video.height) {
+        tags.ImageHeight = video.height;
+      }
+
+      switch (video.rotation) {
         case -90: {
           tags.Orientation = ExifOrientation.Rotate90CW;
           break;
@@ -850,65 +1116,31 @@ export class MetadataService extends BaseService {
     }
 
     if (format.duration) {
-      tags.Duration = Duration.fromObject({ seconds: format.duration }).toFormat('hh:mm:ss.SSS');
+      tags.Duration = format.duration;
     }
 
-    return tags;
+    return { tags, audio, video, packets, format };
   }
 
-  private async processSidecar(id: string, isSync: boolean): Promise<JobStatus> {
-    const [asset] = await this.assetRepository.getByIds([id]);
-
-    if (!asset) {
-      return JobStatus.FAILED;
-    }
-
-    if (isSync && !asset.sidecarPath) {
-      return JobStatus.FAILED;
-    }
-
-    if (!isSync && (asset.visibility === AssetVisibility.HIDDEN || asset.sidecarPath) && !asset.isExternal) {
-      return JobStatus.FAILED;
-    }
-
-    // XMP sidecars can come in two filename formats. For a photo named photo.ext, the filenames are photo.ext.xmp and photo.xmp
-    const assetPath = path.parse(asset.originalPath);
-    const assetPathWithoutExt = path.join(assetPath.dir, assetPath.name);
-    const sidecarPathWithoutExt = `${assetPathWithoutExt}.xmp`;
-    const sidecarPathWithExt = `${asset.originalPath}.xmp`;
-
-    const [sidecarPathWithExtExists, sidecarPathWithoutExtExists] = await Promise.all([
-      this.storageRepository.checkFileExists(sidecarPathWithExt, constants.R_OK),
-      this.storageRepository.checkFileExists(sidecarPathWithoutExt, constants.R_OK),
-    ]);
-
-    let sidecarPath = null;
-    if (sidecarPathWithExtExists) {
-      sidecarPath = sidecarPathWithExt;
-    } else if (sidecarPathWithoutExtExists) {
-      sidecarPath = sidecarPathWithoutExt;
-    }
-
-    if (asset.isExternal) {
-      if (sidecarPath !== asset.sidecarPath) {
-        await this.assetRepository.update({ id: asset.id, sidecarPath });
+  private getHeifOrientation(exifTags: ImmichTags): ExifOrientation | null {
+    // https://exiftool.org/TagNames/QuickTime.html#ItemPropCont
+    const rotation = typeof exifTags.Rotation === 'number' ? exifTags.Rotation : undefined;
+    switch (rotation) {
+      case 0: {
+        return ExifOrientation.Horizontal;
       }
-      return JobStatus.SUCCESS;
+      case 1: {
+        return ExifOrientation.Rotate270CW;
+      }
+      case 2: {
+        return ExifOrientation.Rotate180;
+      }
+      case 3: {
+        return ExifOrientation.Rotate90CW;
+      }
+      default: {
+        return null;
+      }
     }
-
-    if (sidecarPath) {
-      this.logger.debug(`Detected sidecar at '${sidecarPath}' for asset ${asset.id}: ${asset.originalPath}`);
-      await this.assetRepository.update({ id: asset.id, sidecarPath });
-      return JobStatus.SUCCESS;
-    }
-
-    if (!isSync) {
-      return JobStatus.FAILED;
-    }
-
-    this.logger.debug(`No sidecar found for asset ${asset.id}: ${asset.originalPath}`);
-    await this.assetRepository.update({ id: asset.id, sidecarPath: null });
-
-    return JobStatus.SUCCESS;
   }
 }

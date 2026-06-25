@@ -2,6 +2,7 @@ import { AuthController } from 'src/controllers/auth.controller';
 import { LoginResponseDto } from 'src/dtos/auth.dto';
 import { AuthService } from 'src/services/auth.service';
 import request from 'supertest';
+import { mediumFactory } from 'test/medium.factory';
 import { errorDto } from 'test/medium/responses';
 import { ControllerContext, controllerSetup, mockBaseService } from 'test/utils';
 
@@ -27,19 +28,27 @@ describe(AuthController.name, () => {
     it('should require an email address', async () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/admin-sign-up').send({ name, password });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest());
+      expect(body).toEqual(
+        errorDto.validationError([{ path: ['email'], message: 'Invalid input: expected email, received undefined' }]),
+      );
     });
 
     it('should require a password', async () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/admin-sign-up').send({ name, email });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest());
+      expect(body).toEqual(
+        errorDto.validationError([
+          { path: ['password'], message: 'Invalid input: expected string, received undefined' },
+        ]),
+      );
     });
 
     it('should require a name', async () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/admin-sign-up').send({ email, password });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest());
+      expect(body).toEqual(
+        errorDto.validationError([{ path: ['name'], message: 'Invalid input: expected string, received undefined' }]),
+      );
     });
 
     it('should require a valid email', async () => {
@@ -47,7 +56,9 @@ describe(AuthController.name, () => {
         .post('/auth/admin-sign-up')
         .send({ name, email: 'immich', password });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest());
+      expect(body).toEqual(
+        errorDto.validationError([{ path: ['email'], message: 'Invalid input: expected email, received string' }]),
+      );
     });
 
     it('should transform email to lower case', async () => {
@@ -72,11 +83,9 @@ describe(AuthController.name, () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/login').send({ name: 'admin' });
       expect(status).toBe(400);
       expect(body).toEqual(
-        errorDto.badRequest([
-          'email should not be empty',
-          'email must be an email',
-          'password should not be empty',
-          'password must be a string',
+        errorDto.validationError([
+          { path: ['email'], message: 'Invalid input: expected email, received undefined' },
+          { path: ['password'], message: 'Invalid input: expected string, received undefined' },
         ]),
       );
     });
@@ -86,7 +95,9 @@ describe(AuthController.name, () => {
         .post('/auth/login')
         .send({ name: 'admin', email: null, password: 'password' });
       expect(status).toBe(400);
-      expect(body).toEqual(errorDto.badRequest(['email should not be empty', 'email must be an email']));
+      expect(body).toEqual(
+        errorDto.validationError([{ path: ['email'], message: 'Invalid input: expected email, received object' }]),
+      );
     });
 
     it(`should not allow null password`, async () => {
@@ -94,7 +105,9 @@ describe(AuthController.name, () => {
         .post('/auth/login')
         .send({ name: 'admin', email: 'admin@immich.cloud', password: null });
       expect(status).toBe(400);
-      expect(body).toEqual(errorDto.badRequest(['password should not be empty', 'password must be a string']));
+      expect(body).toEqual(
+        errorDto.validationError([{ path: ['password'], message: 'Invalid input: expected string, received null' }]),
+      );
     });
 
     it('should reject an invalid email', async () => {
@@ -105,7 +118,9 @@ describe(AuthController.name, () => {
         .send({ name: 'admin', email: [], password: 'password' });
 
       expect(status).toBe(400);
-      expect(body).toEqual(errorDto.badRequest(['email must be an email']));
+      expect(body).toEqual(
+        errorDto.validationError([{ path: ['email'], message: 'Invalid input: expected email, received object' }]),
+      );
     });
 
     it('should transform the email to all lowercase', async () => {
@@ -132,13 +147,57 @@ describe(AuthController.name, () => {
       expect(status).toEqual(201);
       expect(service.login).toHaveBeenCalledWith(expect.objectContaining({ email: 'admin@local' }), expect.anything());
     });
+
+    it('should auth cookies on a secure connection', async () => {
+      const loginResponse = mediumFactory.loginResponse();
+      service.login.mockResolvedValue(loginResponse);
+      const { status, body, headers } = await request(ctx.getHttpServer())
+        .post('/auth/login')
+        .send({ name: 'admin', email: 'admin@local', password: 'password' });
+
+      expect(status).toEqual(201);
+      expect(body).toEqual(loginResponse);
+
+      const cookies = headers['set-cookie'];
+      expect(cookies).toHaveLength(3);
+      expect(cookies[0].split(';').map((item) => item.trim())).toEqual([
+        `immich_access_token=${loginResponse.accessToken}`,
+        'Max-Age=34560000',
+        'Path=/',
+        expect.stringContaining('Expires='),
+        'HttpOnly',
+        'SameSite=Lax',
+      ]);
+      expect(cookies[1].split(';').map((item) => item.trim())).toEqual([
+        'immich_auth_type=password',
+        'Max-Age=34560000',
+        'Path=/',
+        expect.stringContaining('Expires='),
+        'HttpOnly',
+        'SameSite=Lax',
+      ]);
+      expect(cookies[2].split(';').map((item) => item.trim())).toEqual([
+        'immich_is_authenticated=true',
+        'Max-Age=34560000',
+        'Path=/',
+        expect.stringContaining('Expires='),
+        'SameSite=Lax',
+      ]);
+    });
+  });
+
+  describe('POST /auth/logout', () => {
+    it('should be an authenticated route', async () => {
+      await request(ctx.getHttpServer()).post('/auth/logout');
+      expect(ctx.authenticate).toHaveBeenCalled();
+    });
   });
 
   describe('POST /auth/change-password', () => {
     it('should be an authenticated route', async () => {
       await request(ctx.getHttpServer())
         .post('/auth/change-password')
-        .send({ password: 'password', newPassword: 'Password1234' });
+        .send({ password: 'password', newPassword: 'Password1234', invalidateSessions: false });
       expect(ctx.authenticate).toHaveBeenCalled();
     });
   });
@@ -152,19 +211,31 @@ describe(AuthController.name, () => {
     it('should reject 5 digits', async () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/pin-code').send({ pinCode: '12345' });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest(['pinCode must be a 6-digit numeric string']));
+      expect(body).toEqual(
+        errorDto.validationError([
+          { path: ['pinCode'], message: String.raw`Invalid string: must match pattern /^\d{6}$/` },
+        ]),
+      );
     });
 
     it('should reject 7 digits', async () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/pin-code').send({ pinCode: '1234567' });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest(['pinCode must be a 6-digit numeric string']));
+      expect(body).toEqual(
+        errorDto.validationError([
+          { path: ['pinCode'], message: String.raw`Invalid string: must match pattern /^\d{6}$/` },
+        ]),
+      );
     });
 
     it('should reject non-numbers', async () => {
       const { status, body } = await request(ctx.getHttpServer()).post('/auth/pin-code').send({ pinCode: 'A12345' });
       expect(status).toEqual(400);
-      expect(body).toEqual(errorDto.badRequest(['pinCode must be a 6-digit numeric string']));
+      expect(body).toEqual(
+        errorDto.validationError([
+          { path: ['pinCode'], message: String.raw`Invalid string: must match pattern /^\d{6}$/` },
+        ]),
+      );
     });
   });
 

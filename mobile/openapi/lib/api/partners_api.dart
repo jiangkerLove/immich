@@ -16,11 +16,73 @@ class PartnersApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'POST /partners/{id}' operation and returns the [Response].
+  /// Create a partner
+  ///
+  /// Create a new partner to share assets with.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
+  /// Parameters:
+  ///
+  /// * [PartnerCreateDto] partnerCreateDto (required):
+  Future<Response> createPartnerWithHttpInfo(PartnerCreateDto partnerCreateDto, { Future<void>? abortTrigger, }) async {
+    // ignore: prefer_const_declarations
+    final apiPath = r'/partners';
+
+    // ignore: prefer_final_locals
+    Object? postBody = partnerCreateDto;
+
+    final queryParams = <QueryParam>[];
+    final headerParams = <String, String>{};
+    final formParams = <String, String>{};
+
+    const contentTypes = <String>['application/json'];
+
+
+    return apiClient.invokeAPI(
+      apiPath,
+      'POST',
+      queryParams,
+      postBody,
+      headerParams,
+      formParams,
+      contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
+    );
+  }
+
+  /// Create a partner
+  ///
+  /// Create a new partner to share assets with.
+  ///
+  /// Parameters:
+  ///
+  /// * [PartnerCreateDto] partnerCreateDto (required):
+  Future<PartnerResponseDto?> createPartner(PartnerCreateDto partnerCreateDto, { Future<void>? abortTrigger, }) async {
+    final response = await createPartnerWithHttpInfo(partnerCreateDto, abortTrigger: abortTrigger,);
+    if (response.statusCode >= HttpStatus.badRequest) {
+      throw ApiException(response.statusCode, await _decodeBodyBytes(response));
+    }
+    // When a remote server returns no body with a status of 204, we shall not decode it.
+    // At the time of writing this, `dart:convert` will throw an "Unexpected end of input"
+    // FormatException when trying to decode an empty string.
+    if (response.body.isNotEmpty && response.statusCode != HttpStatus.noContent) {
+      return await apiClient.deserializeAsync(await _decodeBodyBytes(response), 'PartnerResponseDto',) as PartnerResponseDto;
+    
+    }
+    return null;
+  }
+
+  /// Create a partner
+  ///
+  /// Create a new partner to share assets with.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> createPartnerWithHttpInfo(String id,) async {
+  Future<Response> createPartnerDeprecatedWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/partners/{id}'
       .replaceAll('{id}', id);
@@ -43,14 +105,19 @@ class PartnersApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Create a partner
+  ///
+  /// Create a new partner to share assets with.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<PartnerResponseDto?> createPartner(String id,) async {
-    final response = await createPartnerWithHttpInfo(id,);
+  Future<PartnerResponseDto?> createPartnerDeprecated(String id, { Future<void>? abortTrigger, }) async {
+    final response = await createPartnerDeprecatedWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -64,11 +131,16 @@ class PartnersApi {
     return null;
   }
 
-  /// Performs an HTTP 'GET /partners' operation and returns the [Response].
+  /// Retrieve partners
+  ///
+  /// Retrieve a list of partners with whom assets are shared.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [PartnerDirection] direction (required):
-  Future<Response> getPartnersWithHttpInfo(PartnerDirection direction,) async {
+  Future<Response> getPartnersWithHttpInfo(PartnerDirection direction, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/partners';
 
@@ -92,14 +164,19 @@ class PartnersApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Retrieve partners
+  ///
+  /// Retrieve a list of partners with whom assets are shared.
+  ///
   /// Parameters:
   ///
   /// * [PartnerDirection] direction (required):
-  Future<List<PartnerResponseDto>?> getPartners(PartnerDirection direction,) async {
-    final response = await getPartnersWithHttpInfo(direction,);
+  Future<List<PartnerResponseDto>?> getPartners(PartnerDirection direction, { Future<void>? abortTrigger, }) async {
+    final response = await getPartnersWithHttpInfo(direction, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -116,11 +193,16 @@ class PartnersApi {
     return null;
   }
 
-  /// Performs an HTTP 'DELETE /partners/{id}' operation and returns the [Response].
+  /// Remove a partner
+  ///
+  /// Stop sharing assets with a partner.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<Response> removePartnerWithHttpInfo(String id,) async {
+  Future<Response> removePartnerWithHttpInfo(String id, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/partners/{id}'
       .replaceAll('{id}', id);
@@ -143,32 +225,42 @@ class PartnersApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Remove a partner
+  ///
+  /// Stop sharing assets with a partner.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
-  Future<void> removePartner(String id,) async {
-    final response = await removePartnerWithHttpInfo(id,);
+  Future<void> removePartner(String id, { Future<void>? abortTrigger, }) async {
+    final response = await removePartnerWithHttpInfo(id, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
   }
 
-  /// Performs an HTTP 'PUT /partners/{id}' operation and returns the [Response].
+  /// Update a partner
+  ///
+  /// Specify whether a partner's assets should appear in the user's timeline.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
-  /// * [UpdatePartnerDto] updatePartnerDto (required):
-  Future<Response> updatePartnerWithHttpInfo(String id, UpdatePartnerDto updatePartnerDto,) async {
+  /// * [PartnerUpdateDto] partnerUpdateDto (required):
+  Future<Response> updatePartnerWithHttpInfo(String id, PartnerUpdateDto partnerUpdateDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/partners/{id}'
       .replaceAll('{id}', id);
 
     // ignore: prefer_final_locals
-    Object? postBody = updatePartnerDto;
+    Object? postBody = partnerUpdateDto;
 
     final queryParams = <QueryParam>[];
     final headerParams = <String, String>{};
@@ -185,16 +277,21 @@ class PartnersApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Update a partner
+  ///
+  /// Specify whether a partner's assets should appear in the user's timeline.
+  ///
   /// Parameters:
   ///
   /// * [String] id (required):
   ///
-  /// * [UpdatePartnerDto] updatePartnerDto (required):
-  Future<PartnerResponseDto?> updatePartner(String id, UpdatePartnerDto updatePartnerDto,) async {
-    final response = await updatePartnerWithHttpInfo(id, updatePartnerDto,);
+  /// * [PartnerUpdateDto] partnerUpdateDto (required):
+  Future<PartnerResponseDto?> updatePartner(String id, PartnerUpdateDto partnerUpdateDto, { Future<void>? abortTrigger, }) async {
+    final response = await updatePartnerWithHttpInfo(id, partnerUpdateDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }

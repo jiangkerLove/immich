@@ -1,4 +1,4 @@
-import { WatchOptions } from 'chokidar';
+import { ChokidarOptions } from 'chokidar';
 import { StorageCore } from 'src/cores/storage.core';
 import { StorageRepository, WatchEvents } from 'src/repositories/storage.repository';
 import { RepositoryInterface } from 'src/types';
@@ -11,7 +11,7 @@ interface MockWatcherOptions {
 
 export const makeMockWatcher =
   ({ items, close }: MockWatcherOptions) =>
-  (paths: string[], options: WatchOptions, events: Partial<WatchEvents>) => {
+  (paths: string[], options: ChokidarOptions, events: Partial<WatchEvents>) => {
     events.onReady?.();
     for (const item of items || []) {
       switch (item.event) {
@@ -29,6 +29,7 @@ export const makeMockWatcher =
         }
         case 'error': {
           events.onError?.(new Error(item.value));
+          break;
         }
       }
     }
@@ -37,21 +38,27 @@ export const makeMockWatcher =
       return () => close();
     }
 
+    // eslint-disable-next-line unicorn/consistent-function-scoping
     return () => Promise.resolve();
   };
 
-export const newStorageRepositoryMock = (reset = true): Mocked<RepositoryInterface<StorageRepository>> => {
-  if (reset) {
-    StorageCore.reset();
-  }
+export const newStorageRepositoryMock = (): Mocked<RepositoryInterface<StorageRepository>> => {
+  StorageCore.reset();
+  StorageCore.setMediaLocation('/data');
 
   return {
     createZipStream: vitest.fn(),
+    createPlainReadStream: vitest.fn(),
     createReadStream: vitest.fn(),
+    createGzip: vitest.fn(),
+    createGunzip: vitest.fn(),
     readFile: vitest.fn(),
+    readJsonFile: vitest.fn() as Mocked<StorageRepository>['readJsonFile'],
+    readdirWithTypes: vitest.fn(),
     createFile: vitest.fn(),
     createWriteStream: vitest.fn(),
     createOrOverwriteFile: vitest.fn(),
+    existsSync: vitest.fn(),
     overwriteFile: vitest.fn(),
     unlink: vitest.fn(),
     unlinkDir: vitest.fn().mockResolvedValue(true),
@@ -68,5 +75,6 @@ export const newStorageRepositoryMock = (reset = true): Mocked<RepositoryInterfa
     copyFile: vitest.fn(),
     utimes: vitest.fn(),
     watch: vitest.fn().mockImplementation(makeMockWatcher({})),
+    watchDir: vitest.fn().mockImplementation(() => ({ close: vitest.fn(), on: vitest.fn() })),
   };
 };

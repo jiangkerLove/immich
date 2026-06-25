@@ -23,6 +23,7 @@ export type SendEmailOptions = {
 export type SmtpOptions = {
   host: string;
   port?: number;
+  secure?: boolean;
   username?: string;
   password?: string;
   ignoreCert?: boolean;
@@ -161,6 +162,7 @@ export class EmailRepository {
       host: options.host,
       port: options.port,
       tls: { rejectUnauthorized: !options.ignoreCert },
+      secure: options.secure,
       auth:
         options.username || options.password
           ? {

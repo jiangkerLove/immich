@@ -3,7 +3,6 @@ import { INestApplication } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { Test } from '@nestjs/testing';
-import { ClassConstructor } from 'class-transformer';
 import { ClsModule } from 'nestjs-cls';
 import { KyselyModule } from 'nestjs-kysely';
 import { OpenTelemetryModule } from 'nestjs-otel';
@@ -15,6 +14,8 @@ import { repositories } from 'src/repositories';
 import { AccessRepository } from 'src/repositories/access.repository';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { LoggingRepository } from 'src/repositories/logging.repository';
+import { MachineLearningRepository } from 'src/repositories/machine-learning.repository';
+import { SyncRepository } from 'src/repositories/sync.repository';
 import { AuthService } from 'src/services/auth.service';
 import { getKyselyConfig } from 'src/utils/database';
 
@@ -42,7 +43,7 @@ export class SqlLogger {
 
 const reflector = new Reflector();
 
-type Repository = ClassConstructor<any>;
+type Repository = new (...args: any[]) => any;
 type SqlGeneratorOptions = { targetDir: string };
 
 class SqlGenerator {
@@ -56,7 +57,7 @@ class SqlGenerator {
     try {
       await this.setup();
       for (const Repository of repositories) {
-        if (Repository === LoggingRepository) {
+        if (Repository === LoggingRepository || Repository === MachineLearningRepository) {
           continue;
         }
         await this.process(Repository);
@@ -111,7 +112,7 @@ class SqlGenerator {
     data.push(...(await this.runTargets(instance, `${Repository.name}`)));
 
     // nested repositories
-    if (Repository.name === AccessRepository.name) {
+    if (Repository.name === AccessRepository.name || Repository.name === SyncRepository.name) {
       for (const key of Object.keys(instance)) {
         const subInstance = (instance as any)[key];
         data.push(...(await this.runTargets(subInstance, `${Repository.name}.${key}`)));

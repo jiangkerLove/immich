@@ -13,133 +13,144 @@ part of openapi.api;
 class RandomSearchDto {
   /// Returns a new [RandomSearchDto] instance.
   RandomSearchDto({
-    this.city,
-    this.country,
-    this.createdAfter,
-    this.createdBefore,
-    this.deviceId,
-    this.isEncoded,
-    this.isFavorite,
-    this.isMotion,
-    this.isNotInAlbum,
-    this.isOffline,
-    this.lensModel,
-    this.libraryId,
-    this.make,
-    this.model,
-    this.personIds = const [],
-    this.rating,
-    this.size,
-    this.state,
-    this.tagIds = const [],
-    this.takenAfter,
-    this.takenBefore,
-    this.trashedAfter,
-    this.trashedBefore,
-    this.type,
-    this.updatedAfter,
-    this.updatedBefore,
-    this.visibility,
-    this.withDeleted,
-    this.withExif,
-    this.withPeople,
-    this.withStacked,
+    this.albumIds = const Optional.present(const []),
+    this.city = const Optional.absent(),
+    this.country = const Optional.absent(),
+    this.createdAfter = const Optional.absent(),
+    this.createdBefore = const Optional.absent(),
+    this.isEncoded = const Optional.absent(),
+    this.isFavorite = const Optional.absent(),
+    this.isMotion = const Optional.absent(),
+    this.isNotInAlbum = const Optional.absent(),
+    this.isOffline = const Optional.absent(),
+    this.lensModel = const Optional.absent(),
+    this.libraryId = const Optional.absent(),
+    this.make = const Optional.absent(),
+    this.model = const Optional.absent(),
+    this.ocr = const Optional.absent(),
+    this.personIds = const Optional.present(const []),
+    this.rating = const Optional.absent(),
+    this.size = const Optional.absent(),
+    this.state = const Optional.absent(),
+    this.tagIds = const Optional.present(const []),
+    this.takenAfter = const Optional.absent(),
+    this.takenBefore = const Optional.absent(),
+    this.trashedAfter = const Optional.absent(),
+    this.trashedBefore = const Optional.absent(),
+    this.type = const Optional.absent(),
+    this.updatedAfter = const Optional.absent(),
+    this.updatedBefore = const Optional.absent(),
+    this.visibility = const Optional.absent(),
+    this.withDeleted = const Optional.absent(),
+    this.withExif = const Optional.absent(),
+    this.withPeople = const Optional.absent(),
+    this.withStacked = const Optional.absent(),
   });
 
-  String? city;
+  /// Filter by album IDs
+  Optional<List<String>?> albumIds;
 
-  String? country;
+  /// Filter by city name
+  Optional<String?> city;
 
+  /// Filter by country name
+  Optional<String?> country;
+
+  /// Filter by creation date (after)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? createdAfter;
+  Optional<DateTime?> createdAfter;
 
+  /// Filter by creation date (before)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? createdBefore;
+  Optional<DateTime?> createdBefore;
 
+  /// Filter by encoded status
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? deviceId;
+  Optional<bool?> isEncoded;
 
+  /// Filter by favorite status
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? isEncoded;
+  Optional<bool?> isFavorite;
 
+  /// Filter by motion photo status
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? isFavorite;
+  Optional<bool?> isMotion;
 
+  /// Filter assets not in any album
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? isMotion;
+  Optional<bool?> isNotInAlbum;
 
+  /// Filter by offline status
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? isNotInAlbum;
+  Optional<bool?> isOffline;
 
+  /// Filter by lens model
+  Optional<String?> lensModel;
+
+  /// Library ID to filter by
+  Optional<String?> libraryId;
+
+  /// Filter by camera make
+  Optional<String?> make;
+
+  /// Filter by camera model
+  Optional<String?> model;
+
+  /// Filter by OCR text content
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? isOffline;
+  Optional<String?> ocr;
 
-  String? lensModel;
+  /// Filter by person IDs
+  Optional<List<String>?> personIds;
 
-  String? libraryId;
-
+  /// Filter by rating [1-5], or null for unrated
   ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  String? make;
-
-  String? model;
-
-  List<String> personIds;
-
-  /// Minimum value: -1
+  /// Minimum value: 1
   /// Maximum value: 5
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  num? rating;
+  Optional<int?> rating;
 
+  /// Number of results to return
+  ///
   /// Minimum value: 1
   /// Maximum value: 1000
   ///
@@ -148,11 +159,49 @@ class RandomSearchDto {
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  num? size;
+  Optional<int?> size;
 
-  String? state;
+  /// Filter by state/province name
+  Optional<String?> state;
 
-  List<String> tagIds;
+  /// Filter by tag IDs
+  Optional<List<String>?> tagIds;
+
+  /// Filter by taken date (after)
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<DateTime?> takenAfter;
+
+  /// Filter by taken date (before)
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<DateTime?> takenBefore;
+
+  /// Filter by trash date (after)
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<DateTime?> trashedAfter;
+
+  /// Filter by trash date (before)
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<DateTime?> trashedBefore;
 
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
@@ -160,7 +209,25 @@ class RandomSearchDto {
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? takenAfter;
+  Optional<AssetTypeEnum?> type;
+
+  /// Filter by update date (after)
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<DateTime?> updatedAfter;
+
+  /// Filter by update date (before)
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<DateTime?> updatedBefore;
 
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
@@ -168,95 +235,51 @@ class RandomSearchDto {
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? takenBefore;
+  Optional<AssetVisibility?> visibility;
 
+  /// Include deleted assets
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? trashedAfter;
+  Optional<bool?> withDeleted;
 
+  /// Include EXIF data in response
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? trashedBefore;
+  Optional<bool?> withExif;
 
+  /// Include people data in response
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  AssetTypeEnum? type;
+  Optional<bool?> withPeople;
 
+  /// Include stacked assets
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? updatedAfter;
-
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  DateTime? updatedBefore;
-
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  AssetVisibility? visibility;
-
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  bool? withDeleted;
-
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  bool? withExif;
-
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  bool? withPeople;
-
-  ///
-  /// Please note: This property should have been non-nullable! Since the specification file
-  /// does not include a default value (using the "default:" property), however, the generated
-  /// source code must fall back to having a nullable type.
-  /// Consider adding a "default:" property in the specification file to hide this note.
-  ///
-  bool? withStacked;
+  Optional<bool?> withStacked;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is RandomSearchDto &&
+    _deepEquality.equals(other.albumIds, albumIds) &&
     other.city == city &&
     other.country == country &&
     other.createdAfter == createdAfter &&
     other.createdBefore == createdBefore &&
-    other.deviceId == deviceId &&
     other.isEncoded == isEncoded &&
     other.isFavorite == isFavorite &&
     other.isMotion == isMotion &&
@@ -266,6 +289,7 @@ class RandomSearchDto {
     other.libraryId == libraryId &&
     other.make == make &&
     other.model == model &&
+    other.ocr == ocr &&
     _deepEquality.equals(other.personIds, personIds) &&
     other.rating == rating &&
     other.size == size &&
@@ -287,11 +311,11 @@ class RandomSearchDto {
   @override
   int get hashCode =>
     // ignore: unnecessary_parenthesis
+    (albumIds.hashCode) +
     (city == null ? 0 : city!.hashCode) +
     (country == null ? 0 : country!.hashCode) +
     (createdAfter == null ? 0 : createdAfter!.hashCode) +
     (createdBefore == null ? 0 : createdBefore!.hashCode) +
-    (deviceId == null ? 0 : deviceId!.hashCode) +
     (isEncoded == null ? 0 : isEncoded!.hashCode) +
     (isFavorite == null ? 0 : isFavorite!.hashCode) +
     (isMotion == null ? 0 : isMotion!.hashCode) +
@@ -301,11 +325,12 @@ class RandomSearchDto {
     (libraryId == null ? 0 : libraryId!.hashCode) +
     (make == null ? 0 : make!.hashCode) +
     (model == null ? 0 : model!.hashCode) +
+    (ocr == null ? 0 : ocr!.hashCode) +
     (personIds.hashCode) +
     (rating == null ? 0 : rating!.hashCode) +
     (size == null ? 0 : size!.hashCode) +
     (state == null ? 0 : state!.hashCode) +
-    (tagIds.hashCode) +
+    (tagIds == null ? 0 : tagIds!.hashCode) +
     (takenAfter == null ? 0 : takenAfter!.hashCode) +
     (takenBefore == null ? 0 : takenBefore!.hashCode) +
     (trashedAfter == null ? 0 : trashedAfter!.hashCode) +
@@ -320,156 +345,153 @@ class RandomSearchDto {
     (withStacked == null ? 0 : withStacked!.hashCode);
 
   @override
-  String toString() => 'RandomSearchDto[city=$city, country=$country, createdAfter=$createdAfter, createdBefore=$createdBefore, deviceId=$deviceId, isEncoded=$isEncoded, isFavorite=$isFavorite, isMotion=$isMotion, isNotInAlbum=$isNotInAlbum, isOffline=$isOffline, lensModel=$lensModel, libraryId=$libraryId, make=$make, model=$model, personIds=$personIds, rating=$rating, size=$size, state=$state, tagIds=$tagIds, takenAfter=$takenAfter, takenBefore=$takenBefore, trashedAfter=$trashedAfter, trashedBefore=$trashedBefore, type=$type, updatedAfter=$updatedAfter, updatedBefore=$updatedBefore, visibility=$visibility, withDeleted=$withDeleted, withExif=$withExif, withPeople=$withPeople, withStacked=$withStacked]';
+  String toString() => 'RandomSearchDto[albumIds=$albumIds, city=$city, country=$country, createdAfter=$createdAfter, createdBefore=$createdBefore, isEncoded=$isEncoded, isFavorite=$isFavorite, isMotion=$isMotion, isNotInAlbum=$isNotInAlbum, isOffline=$isOffline, lensModel=$lensModel, libraryId=$libraryId, make=$make, model=$model, ocr=$ocr, personIds=$personIds, rating=$rating, size=$size, state=$state, tagIds=$tagIds, takenAfter=$takenAfter, takenBefore=$takenBefore, trashedAfter=$trashedAfter, trashedBefore=$trashedBefore, type=$type, updatedAfter=$updatedAfter, updatedBefore=$updatedBefore, visibility=$visibility, withDeleted=$withDeleted, withExif=$withExif, withPeople=$withPeople, withStacked=$withStacked]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.city != null) {
-      json[r'city'] = this.city;
-    } else {
-    //  json[r'city'] = null;
+    if (this.albumIds.isPresent) {
+      final value = this.albumIds.value;
+      json[r'albumIds'] = value;
     }
-    if (this.country != null) {
-      json[r'country'] = this.country;
-    } else {
-    //  json[r'country'] = null;
+    if (this.city.isPresent) {
+      final value = this.city.value;
+      json[r'city'] = value;
     }
-    if (this.createdAfter != null) {
-      json[r'createdAfter'] = this.createdAfter!.toUtc().toIso8601String();
-    } else {
-    //  json[r'createdAfter'] = null;
+    if (this.country.isPresent) {
+      final value = this.country.value;
+      json[r'country'] = value;
     }
-    if (this.createdBefore != null) {
-      json[r'createdBefore'] = this.createdBefore!.toUtc().toIso8601String();
-    } else {
-    //  json[r'createdBefore'] = null;
+    if (this.createdAfter.isPresent) {
+      final value = this.createdAfter.value;
+      json[r'createdAfter'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.deviceId != null) {
-      json[r'deviceId'] = this.deviceId;
-    } else {
-    //  json[r'deviceId'] = null;
+    if (this.createdBefore.isPresent) {
+      final value = this.createdBefore.value;
+      json[r'createdBefore'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.isEncoded != null) {
-      json[r'isEncoded'] = this.isEncoded;
-    } else {
-    //  json[r'isEncoded'] = null;
+    if (this.isEncoded.isPresent) {
+      final value = this.isEncoded.value;
+      json[r'isEncoded'] = value;
     }
-    if (this.isFavorite != null) {
-      json[r'isFavorite'] = this.isFavorite;
-    } else {
-    //  json[r'isFavorite'] = null;
+    if (this.isFavorite.isPresent) {
+      final value = this.isFavorite.value;
+      json[r'isFavorite'] = value;
     }
-    if (this.isMotion != null) {
-      json[r'isMotion'] = this.isMotion;
-    } else {
-    //  json[r'isMotion'] = null;
+    if (this.isMotion.isPresent) {
+      final value = this.isMotion.value;
+      json[r'isMotion'] = value;
     }
-    if (this.isNotInAlbum != null) {
-      json[r'isNotInAlbum'] = this.isNotInAlbum;
-    } else {
-    //  json[r'isNotInAlbum'] = null;
+    if (this.isNotInAlbum.isPresent) {
+      final value = this.isNotInAlbum.value;
+      json[r'isNotInAlbum'] = value;
     }
-    if (this.isOffline != null) {
-      json[r'isOffline'] = this.isOffline;
-    } else {
-    //  json[r'isOffline'] = null;
+    if (this.isOffline.isPresent) {
+      final value = this.isOffline.value;
+      json[r'isOffline'] = value;
     }
-    if (this.lensModel != null) {
-      json[r'lensModel'] = this.lensModel;
-    } else {
-    //  json[r'lensModel'] = null;
+    if (this.lensModel.isPresent) {
+      final value = this.lensModel.value;
+      json[r'lensModel'] = value;
     }
-    if (this.libraryId != null) {
-      json[r'libraryId'] = this.libraryId;
-    } else {
-    //  json[r'libraryId'] = null;
+    if (this.libraryId.isPresent) {
+      final value = this.libraryId.value;
+      json[r'libraryId'] = value;
     }
-    if (this.make != null) {
-      json[r'make'] = this.make;
-    } else {
-    //  json[r'make'] = null;
+    if (this.make.isPresent) {
+      final value = this.make.value;
+      json[r'make'] = value;
     }
-    if (this.model != null) {
-      json[r'model'] = this.model;
-    } else {
-    //  json[r'model'] = null;
+    if (this.model.isPresent) {
+      final value = this.model.value;
+      json[r'model'] = value;
     }
-      json[r'personIds'] = this.personIds;
-    if (this.rating != null) {
-      json[r'rating'] = this.rating;
-    } else {
-    //  json[r'rating'] = null;
+    if (this.ocr.isPresent) {
+      final value = this.ocr.value;
+      json[r'ocr'] = value;
     }
-    if (this.size != null) {
-      json[r'size'] = this.size;
-    } else {
-    //  json[r'size'] = null;
+    if (this.personIds.isPresent) {
+      final value = this.personIds.value;
+      json[r'personIds'] = value;
     }
-    if (this.state != null) {
-      json[r'state'] = this.state;
-    } else {
-    //  json[r'state'] = null;
+    if (this.rating.isPresent) {
+      final value = this.rating.value;
+      json[r'rating'] = value;
     }
-      json[r'tagIds'] = this.tagIds;
-    if (this.takenAfter != null) {
-      json[r'takenAfter'] = this.takenAfter!.toUtc().toIso8601String();
-    } else {
-    //  json[r'takenAfter'] = null;
+    if (this.size.isPresent) {
+      final value = this.size.value;
+      json[r'size'] = value;
     }
-    if (this.takenBefore != null) {
-      json[r'takenBefore'] = this.takenBefore!.toUtc().toIso8601String();
-    } else {
-    //  json[r'takenBefore'] = null;
+    if (this.state.isPresent) {
+      final value = this.state.value;
+      json[r'state'] = value;
     }
-    if (this.trashedAfter != null) {
-      json[r'trashedAfter'] = this.trashedAfter!.toUtc().toIso8601String();
-    } else {
-    //  json[r'trashedAfter'] = null;
+    if (this.tagIds.isPresent) {
+      final value = this.tagIds.value;
+      json[r'tagIds'] = value;
     }
-    if (this.trashedBefore != null) {
-      json[r'trashedBefore'] = this.trashedBefore!.toUtc().toIso8601String();
-    } else {
-    //  json[r'trashedBefore'] = null;
+    if (this.takenAfter.isPresent) {
+      final value = this.takenAfter.value;
+      json[r'takenAfter'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.type != null) {
-      json[r'type'] = this.type;
-    } else {
-    //  json[r'type'] = null;
+    if (this.takenBefore.isPresent) {
+      final value = this.takenBefore.value;
+      json[r'takenBefore'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.updatedAfter != null) {
-      json[r'updatedAfter'] = this.updatedAfter!.toUtc().toIso8601String();
-    } else {
-    //  json[r'updatedAfter'] = null;
+    if (this.trashedAfter.isPresent) {
+      final value = this.trashedAfter.value;
+      json[r'trashedAfter'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.updatedBefore != null) {
-      json[r'updatedBefore'] = this.updatedBefore!.toUtc().toIso8601String();
-    } else {
-    //  json[r'updatedBefore'] = null;
+    if (this.trashedBefore.isPresent) {
+      final value = this.trashedBefore.value;
+      json[r'trashedBefore'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.visibility != null) {
-      json[r'visibility'] = this.visibility;
-    } else {
-    //  json[r'visibility'] = null;
+    if (this.type.isPresent) {
+      final value = this.type.value;
+      json[r'type'] = value;
     }
-    if (this.withDeleted != null) {
-      json[r'withDeleted'] = this.withDeleted;
-    } else {
-    //  json[r'withDeleted'] = null;
+    if (this.updatedAfter.isPresent) {
+      final value = this.updatedAfter.value;
+      json[r'updatedAfter'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.withExif != null) {
-      json[r'withExif'] = this.withExif;
-    } else {
-    //  json[r'withExif'] = null;
+    if (this.updatedBefore.isPresent) {
+      final value = this.updatedBefore.value;
+      json[r'updatedBefore'] = value == null ? null : (_isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? value.millisecondsSinceEpoch
+        : value.toUtc().toIso8601String());
     }
-    if (this.withPeople != null) {
-      json[r'withPeople'] = this.withPeople;
-    } else {
-    //  json[r'withPeople'] = null;
+    if (this.visibility.isPresent) {
+      final value = this.visibility.value;
+      json[r'visibility'] = value;
     }
-    if (this.withStacked != null) {
-      json[r'withStacked'] = this.withStacked;
-    } else {
-    //  json[r'withStacked'] = null;
+    if (this.withDeleted.isPresent) {
+      final value = this.withDeleted.value;
+      json[r'withDeleted'] = value;
+    }
+    if (this.withExif.isPresent) {
+      final value = this.withExif.value;
+      json[r'withExif'] = value;
+    }
+    if (this.withPeople.isPresent) {
+      final value = this.withPeople.value;
+      json[r'withPeople'] = value;
+    }
+    if (this.withStacked.isPresent) {
+      final value = this.withStacked.value;
+      json[r'withStacked'] = value;
     }
     return json;
   }
@@ -483,41 +505,44 @@ class RandomSearchDto {
       final json = value.cast<String, dynamic>();
 
       return RandomSearchDto(
-        city: mapValueOfType<String>(json, r'city'),
-        country: mapValueOfType<String>(json, r'country'),
-        createdAfter: mapDateTime(json, r'createdAfter', r''),
-        createdBefore: mapDateTime(json, r'createdBefore', r''),
-        deviceId: mapValueOfType<String>(json, r'deviceId'),
-        isEncoded: mapValueOfType<bool>(json, r'isEncoded'),
-        isFavorite: mapValueOfType<bool>(json, r'isFavorite'),
-        isMotion: mapValueOfType<bool>(json, r'isMotion'),
-        isNotInAlbum: mapValueOfType<bool>(json, r'isNotInAlbum'),
-        isOffline: mapValueOfType<bool>(json, r'isOffline'),
-        lensModel: mapValueOfType<String>(json, r'lensModel'),
-        libraryId: mapValueOfType<String>(json, r'libraryId'),
-        make: mapValueOfType<String>(json, r'make'),
-        model: mapValueOfType<String>(json, r'model'),
-        personIds: json[r'personIds'] is Iterable
+        albumIds: json.containsKey(r'albumIds') ? Optional.present(json[r'albumIds'] is Iterable
+            ? (json[r'albumIds'] as Iterable).cast<String>().toList(growable: false)
+            : const []) : const Optional.absent(),
+        city: json.containsKey(r'city') ? Optional.present(mapValueOfType<String>(json, r'city')) : const Optional.absent(),
+        country: json.containsKey(r'country') ? Optional.present(mapValueOfType<String>(json, r'country')) : const Optional.absent(),
+        createdAfter: json.containsKey(r'createdAfter') ? Optional.present(mapDateTime(json, r'createdAfter', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        createdBefore: json.containsKey(r'createdBefore') ? Optional.present(mapDateTime(json, r'createdBefore', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        isEncoded: json.containsKey(r'isEncoded') ? Optional.present(mapValueOfType<bool>(json, r'isEncoded')) : const Optional.absent(),
+        isFavorite: json.containsKey(r'isFavorite') ? Optional.present(mapValueOfType<bool>(json, r'isFavorite')) : const Optional.absent(),
+        isMotion: json.containsKey(r'isMotion') ? Optional.present(mapValueOfType<bool>(json, r'isMotion')) : const Optional.absent(),
+        isNotInAlbum: json.containsKey(r'isNotInAlbum') ? Optional.present(mapValueOfType<bool>(json, r'isNotInAlbum')) : const Optional.absent(),
+        isOffline: json.containsKey(r'isOffline') ? Optional.present(mapValueOfType<bool>(json, r'isOffline')) : const Optional.absent(),
+        lensModel: json.containsKey(r'lensModel') ? Optional.present(mapValueOfType<String>(json, r'lensModel')) : const Optional.absent(),
+        libraryId: json.containsKey(r'libraryId') ? Optional.present(mapValueOfType<String>(json, r'libraryId')) : const Optional.absent(),
+        make: json.containsKey(r'make') ? Optional.present(mapValueOfType<String>(json, r'make')) : const Optional.absent(),
+        model: json.containsKey(r'model') ? Optional.present(mapValueOfType<String>(json, r'model')) : const Optional.absent(),
+        ocr: json.containsKey(r'ocr') ? Optional.present(mapValueOfType<String>(json, r'ocr')) : const Optional.absent(),
+        personIds: json.containsKey(r'personIds') ? Optional.present(json[r'personIds'] is Iterable
             ? (json[r'personIds'] as Iterable).cast<String>().toList(growable: false)
-            : const [],
-        rating: num.parse('${json[r'rating']}'),
-        size: num.parse('${json[r'size']}'),
-        state: mapValueOfType<String>(json, r'state'),
-        tagIds: json[r'tagIds'] is Iterable
+            : const []) : const Optional.absent(),
+        rating: json.containsKey(r'rating') ? Optional.present(json[r'rating'] == null ? null : int.parse('${json[r'rating']}')) : const Optional.absent(),
+        size: json.containsKey(r'size') ? Optional.present(json[r'size'] == null ? null : int.parse('${json[r'size']}')) : const Optional.absent(),
+        state: json.containsKey(r'state') ? Optional.present(mapValueOfType<String>(json, r'state')) : const Optional.absent(),
+        tagIds: json.containsKey(r'tagIds') ? Optional.present(json[r'tagIds'] is Iterable
             ? (json[r'tagIds'] as Iterable).cast<String>().toList(growable: false)
-            : const [],
-        takenAfter: mapDateTime(json, r'takenAfter', r''),
-        takenBefore: mapDateTime(json, r'takenBefore', r''),
-        trashedAfter: mapDateTime(json, r'trashedAfter', r''),
-        trashedBefore: mapDateTime(json, r'trashedBefore', r''),
-        type: AssetTypeEnum.fromJson(json[r'type']),
-        updatedAfter: mapDateTime(json, r'updatedAfter', r''),
-        updatedBefore: mapDateTime(json, r'updatedBefore', r''),
-        visibility: AssetVisibility.fromJson(json[r'visibility']),
-        withDeleted: mapValueOfType<bool>(json, r'withDeleted'),
-        withExif: mapValueOfType<bool>(json, r'withExif'),
-        withPeople: mapValueOfType<bool>(json, r'withPeople'),
-        withStacked: mapValueOfType<bool>(json, r'withStacked'),
+            : const []) : const Optional.absent(),
+        takenAfter: json.containsKey(r'takenAfter') ? Optional.present(mapDateTime(json, r'takenAfter', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        takenBefore: json.containsKey(r'takenBefore') ? Optional.present(mapDateTime(json, r'takenBefore', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        trashedAfter: json.containsKey(r'trashedAfter') ? Optional.present(mapDateTime(json, r'trashedAfter', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        trashedBefore: json.containsKey(r'trashedBefore') ? Optional.present(mapDateTime(json, r'trashedBefore', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        type: json.containsKey(r'type') ? Optional.present(AssetTypeEnum.fromJson(json[r'type'])) : const Optional.absent(),
+        updatedAfter: json.containsKey(r'updatedAfter') ? Optional.present(mapDateTime(json, r'updatedAfter', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        updatedBefore: json.containsKey(r'updatedBefore') ? Optional.present(mapDateTime(json, r'updatedBefore', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')) : const Optional.absent(),
+        visibility: json.containsKey(r'visibility') ? Optional.present(AssetVisibility.fromJson(json[r'visibility'])) : const Optional.absent(),
+        withDeleted: json.containsKey(r'withDeleted') ? Optional.present(mapValueOfType<bool>(json, r'withDeleted')) : const Optional.absent(),
+        withExif: json.containsKey(r'withExif') ? Optional.present(mapValueOfType<bool>(json, r'withExif')) : const Optional.absent(),
+        withPeople: json.containsKey(r'withPeople') ? Optional.present(mapValueOfType<bool>(json, r'withPeople')) : const Optional.absent(),
+        withStacked: json.containsKey(r'withStacked') ? Optional.present(mapValueOfType<bool>(json, r'withStacked')) : const Optional.absent(),
       );
     }
     return null;

@@ -1,37 +1,35 @@
 <script lang="ts">
   import { afterNavigate, goto, invalidateAll } from '$app/navigation';
-  import { page } from '$app/stores';
-  import SkipLink from '$lib/components/elements/buttons/skip-link.svelte';
-  import UserPageLayout, { headerId } from '$lib/components/layouts/user-page-layout.svelte';
-  import AddToAlbum from '$lib/components/photos-page/actions/add-to-album.svelte';
-  import ArchiveAction from '$lib/components/photos-page/actions/archive-action.svelte';
-  import AssetJobActions from '$lib/components/photos-page/actions/asset-job-actions.svelte';
-  import ChangeDate from '$lib/components/photos-page/actions/change-date-action.svelte';
-  import ChangeDescription from '$lib/components/photos-page/actions/change-description-action.svelte';
-  import ChangeLocation from '$lib/components/photos-page/actions/change-location-action.svelte';
-  import CreateSharedLink from '$lib/components/photos-page/actions/create-shared-link.svelte';
-  import DeleteAssets from '$lib/components/photos-page/actions/delete-assets.svelte';
-  import DownloadAction from '$lib/components/photos-page/actions/download-action.svelte';
-  import FavoriteAction from '$lib/components/photos-page/actions/favorite-action.svelte';
-  import TagAction from '$lib/components/photos-page/actions/tag-action.svelte';
-  import AssetSelectControlBar from '$lib/components/photos-page/asset-select-control-bar.svelte';
-  import ButtonContextMenu from '$lib/components/shared-components/context-menu/button-context-menu.svelte';
-  import GalleryViewer from '$lib/components/shared-components/gallery-viewer/gallery-viewer.svelte';
-  import Breadcrumbs from '$lib/components/shared-components/tree/breadcrumbs.svelte';
-  import TreeItemThumbnails from '$lib/components/shared-components/tree/tree-item-thumbnails.svelte';
-  import TreeItems from '$lib/components/shared-components/tree/tree-items.svelte';
-  import Sidebar from '$lib/components/sidebar/sidebar.svelte';
-  import { AppRoute, QueryParameter } from '$lib/constants';
-  import { AssetInteraction } from '$lib/stores/asset-interaction.svelte';
-  import type { Viewport } from '$lib/stores/assets-store.svelte';
+  import ActionMenuItem from '$lib/components/ActionMenuItem.svelte';
+  import UserPageLayout, { headerId } from '$lib/components/layouts/UserPageLayout.svelte';
+  import ButtonContextMenu from '$lib/components/shared-components/context-menu/ButtonContextMenu.svelte';
+  import GalleryViewer from '$lib/components/shared-components/gallery-viewer/GalleryViewer.svelte';
+  import Breadcrumbs from '$lib/components/shared-components/tree/Breadcrumbs.svelte';
+  import TreeItemThumbnails from '$lib/components/shared-components/tree/TreeItemThumbnails.svelte';
+  import TreeItems from '$lib/components/shared-components/tree/TreeItems.svelte';
+  import Sidebar from '$lib/components/sidebar/Sidebar.svelte';
+  import ArchiveAction from '$lib/components/timeline/actions/ArchiveAction.svelte';
+  import ChangeDate from '$lib/components/timeline/actions/ChangeDateAction.svelte';
+  import ChangeDescription from '$lib/components/timeline/actions/ChangeDescriptionAction.svelte';
+  import ChangeLocation from '$lib/components/timeline/actions/ChangeLocationAction.svelte';
+  import CreateSharedLink from '$lib/components/timeline/actions/CreateSharedLinkAction.svelte';
+  import DeleteAssets from '$lib/components/timeline/actions/DeleteAssetsAction.svelte';
+  import DownloadAction from '$lib/components/timeline/actions/DownloadAction.svelte';
+  import FavoriteAction from '$lib/components/timeline/actions/FavoriteAction.svelte';
+  import SetVisibilityAction from '$lib/components/timeline/actions/SetVisibilityAction.svelte';
+  import TagAction from '$lib/components/timeline/actions/TagAction.svelte';
+  import AssetSelectControlBar from '$lib/components/timeline/AssetSelectControlBar.svelte';
+  import SkipLink from '$lib/elements/SkipLink.svelte';
+  import { assetMultiSelectManager } from '$lib/managers/asset-multi-select-manager.svelte';
+  import { authManager } from '$lib/managers/auth-manager.svelte';
+  import type { Viewport } from '$lib/managers/timeline-manager/types';
+  import { Route } from '$lib/route';
+  import { getAssetBulkActions } from '$lib/services/asset.service';
   import { foldersStore } from '$lib/stores/folders.svelte';
-  import { preferences } from '$lib/stores/user.store';
-  import { cancelMultiselect } from '$lib/utils/asset-utils';
   import { toTimelineAsset } from '$lib/utils/timeline-util';
-  import { buildTree, normalizeTreePath } from '$lib/utils/tree-utils';
-  import { IconButton } from '@immich/ui';
-  import { mdiDotsVertical, mdiFolder, mdiFolderHome, mdiFolderOutline, mdiPlus, mdiSelectAll } from '@mdi/js';
-  import { onMount } from 'svelte';
+  import { joinPaths } from '$lib/utils/tree-utils';
+  import { ActionButton, CommandPaletteDefaultProvider, IconButton, Text } from '@immich/ui';
+  import { mdiDotsVertical, mdiFolder, mdiFolderHome, mdiFolderOutline, mdiSelectAll } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';
 
@@ -43,50 +41,36 @@
 
   const viewport: Viewport = $state({ width: 0, height: 0 });
 
-  let pathSegments = $derived(data.path ? data.path.split('/') : []);
-  let tree = $derived(buildTree(foldersStore.uniquePaths));
-  let currentPath = $derived($page.url.searchParams.get(QueryParameter.PATH) || '');
-  let currentTreeItems = $derived(currentPath ? data.currentFolders : Object.keys(tree).sort());
+  const handleNavigateToFolder = (folderName: string) => navigateToView(joinPaths(data.tree.path, folderName));
 
-  const assetInteraction = new AssetInteraction();
+  const getLinkForPath = (path: string) => Route.folders({ path });
 
-  onMount(async function initializeFolders() {
-    await foldersStore.fetchUniquePaths();
+  afterNavigate(() => {
+    assetMultiSelectManager.clear();
   });
 
-  const handleNavigateToFolder = async function handleNavigateToFolder(folderName: string) {
-    await navigateToView(normalizeTreePath(`${data.path || ''}/${folderName}`));
+  const navigateToView = (path: string) => {
+    return goto(getLinkForPath(path), { keepFocus: true, noScroll: true });
   };
 
-  const getLinkForPath = function getLinkForPath(path: string) {
-    const url = new URL(AppRoute.FOLDERS, globalThis.location.href);
-    if (path) {
-      url.searchParams.set(QueryParameter.PATH, path);
+  const triggerAssetUpdate = async () => {
+    assetMultiSelectManager.clear();
+    if (data.tree.path) {
+      await foldersStore.refreshAssetsByPath(data.tree.path);
     }
-    return url.href;
-  };
-
-  afterNavigate(function clearAssetSelection() {
-    // Clear the asset selection when we navigate (like going to another folder)
-    cancelMultiselect(assetInteraction);
-  });
-
-  const navigateToView = function navigateToView(path: string) {
-    return goto(getLinkForPath(path));
-  };
-
-  const triggerAssetUpdate = async function updateAssets() {
-    cancelMultiselect(assetInteraction);
-    await foldersStore.refreshAssetsByPath(data.path);
     await invalidateAll();
   };
 
-  const handleSelectAllAssets = function handleSelectAllAssets() {
+  const handleSetVisibility = () => {
+    void triggerAssetUpdate();
+  };
+
+  const handleSelectAllAssets = () => {
     if (!data.pathAssets) {
       return;
     }
 
-    assetInteraction.selectAssets(data.pathAssets.map((asset) => toTimelineAsset(asset)));
+    assetMultiSelectManager.selectAssets(data.pathAssets.map((asset) => toTimelineAsset(asset)));
   };
 </script>
 
@@ -95,12 +79,12 @@
     <Sidebar>
       <SkipLink target={`#${headerId}`} text={$t('skip_to_folders')} breakpoint="md" />
       <section>
-        <div class="text-xs ps-4 mb-2 dark:text-white">{$t('explorer').toUpperCase()}</div>
+        <Text class="mb-4 ps-4" size="small">{$t('explorer')}</Text>
         <div class="h-full">
           <TreeItems
             icons={{ default: mdiFolderOutline, active: mdiFolder }}
-            items={tree}
-            active={currentPath}
+            tree={foldersStore.folders!}
+            active={data.tree.path}
             getLink={getLinkForPath}
           />
         </div>
@@ -108,32 +92,32 @@
     </Sidebar>
   {/snippet}
 
-  <Breadcrumbs {pathSegments} icon={mdiFolderHome} title={$t('folders')} getLink={getLinkForPath} />
+  <Breadcrumbs node={data.tree} icon={mdiFolderHome} title={$t('folders')} getLink={getLinkForPath} />
 
-  <section class="mt-2 h-[calc(100%-(--spacing(20)))] overflow-auto immich-scrollbar">
-    <TreeItemThumbnails items={currentTreeItems} icon={mdiFolder} onClick={handleNavigateToFolder} />
+  <section class="mt-2 h-[calc(100%-(--spacing(25)))] immich-scrollbar overflow-auto">
+    <TreeItemThumbnails items={data.tree.children} icon={mdiFolder} onClick={handleNavigateToFolder} />
 
     <!-- Assets -->
     {#if data.pathAssets && data.pathAssets.length > 0}
       <div bind:clientHeight={viewport.height} bind:clientWidth={viewport.width} class="mt-2">
         <GalleryViewer
           assets={data.pathAssets}
-          {assetInteraction}
+          assetInteraction={assetMultiSelectManager}
           {viewport}
           showAssetName={true}
           pageHeaderOffset={54}
+          onReload={triggerAssetUpdate}
         />
       </div>
     {/if}
   </section>
 </UserPageLayout>
 
-{#if assetInteraction.selectionActive}
-  <div class="fixed top-0 start-0 w-full">
-    <AssetSelectControlBar
-      assets={assetInteraction.selectedAssets}
-      clearSelect={() => cancelMultiselect(assetInteraction)}
-    >
+{#if assetMultiSelectManager.selectionActive}
+  <div class="fixed inset-s-0 top-0 w-full">
+    <AssetSelectControlBar>
+      {@const Actions = getAssetBulkActions($t)}
+      <CommandPaletteDefaultProvider name={$t('assets')} actions={Object.values(Actions)} />
       <CreateSharedLink />
       <IconButton
         shape="round"
@@ -143,12 +127,9 @@
         icon={mdiSelectAll}
         onclick={handleSelectAllAssets}
       />
-      <ButtonContextMenu icon={mdiPlus} title={$t('add_to')}>
-        <AddToAlbum onAddToAlbum={() => cancelMultiselect(assetInteraction)} />
-        <AddToAlbum onAddToAlbum={() => cancelMultiselect(assetInteraction)} shared />
-      </ButtonContextMenu>
+      <ActionButton action={Actions.AddToAlbum} />
       <FavoriteAction
-        removeFavorite={assetInteraction.isAllFavorite}
+        removeFavorite={assetMultiSelectManager.isAllFavorite}
         onFavorite={function handleFavoriteUpdate(ids, isFavorite) {
           if (data.pathAssets && data.pathAssets.length > 0) {
             for (const id of ids) {
@@ -166,13 +147,17 @@
         <ChangeDate menuItem />
         <ChangeDescription menuItem />
         <ChangeLocation menuItem />
-        <ArchiveAction menuItem unarchive={assetInteraction.isAllArchived} onArchive={triggerAssetUpdate} />
-        {#if $preferences.tags.enabled && assetInteraction.isAllUserOwned}
+        <ArchiveAction menuItem unarchive={assetMultiSelectManager.isAllArchived} onArchive={triggerAssetUpdate} />
+        <SetVisibilityAction menuItem onVisibilitySet={handleSetVisibility} />
+        {#if authManager.preferences.tags.enabled && assetMultiSelectManager.isAllUserOwned}
           <TagAction menuItem />
         {/if}
-        <DeleteAssets menuItem onAssetDelete={triggerAssetUpdate} />
+        <DeleteAssets menuItem onAssetDelete={triggerAssetUpdate} onUndoDelete={triggerAssetUpdate} />
         <hr />
-        <AssetJobActions />
+
+        <ActionMenuItem action={Actions.RegenerateThumbnailJob} />
+        <ActionMenuItem action={Actions.RefreshMetadataJob} />
+        <ActionMenuItem action={Actions.TranscodeVideoJob} />
       </ButtonContextMenu>
     </AssetSelectControlBar>
   </div>

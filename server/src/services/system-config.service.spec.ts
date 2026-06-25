@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { defaults, SystemConfig } from 'src/config';
+import { ReleaseChannel } from 'src/dtos/system-config.dto';
 import {
   AudioCodec,
   Colorspace,
@@ -9,7 +10,7 @@ import {
   OAuthTokenEndpointAuthMethod,
   QueueName,
   ToneMapping,
-  TranscodeHWAccel,
+  TranscodeHardwareAcceleration,
   TranscodePolicy,
   VideoCodec,
   VideoContainer,
@@ -28,17 +29,21 @@ const partialConfig = {
 
 const updatedConfig = Object.freeze<SystemConfig>({
   job: {
-    [QueueName.BACKGROUND_TASK]: { concurrency: 5 },
-    [QueueName.SMART_SEARCH]: { concurrency: 2 },
-    [QueueName.METADATA_EXTRACTION]: { concurrency: 5 },
-    [QueueName.FACE_DETECTION]: { concurrency: 2 },
-    [QueueName.SEARCH]: { concurrency: 5 },
-    [QueueName.SIDECAR]: { concurrency: 5 },
-    [QueueName.LIBRARY]: { concurrency: 5 },
-    [QueueName.MIGRATION]: { concurrency: 5 },
-    [QueueName.THUMBNAIL_GENERATION]: { concurrency: 3 },
-    [QueueName.VIDEO_CONVERSION]: { concurrency: 1 },
-    [QueueName.NOTIFICATION]: { concurrency: 5 },
+    [QueueName.BackgroundTask]: { concurrency: 5 },
+    [QueueName.SmartSearch]: { concurrency: 2 },
+    [QueueName.MetadataExtraction]: { concurrency: 5 },
+    [QueueName.FaceDetection]: { concurrency: 2 },
+    [QueueName.Search]: { concurrency: 5 },
+    [QueueName.Sidecar]: { concurrency: 5 },
+    [QueueName.Library]: { concurrency: 5 },
+    [QueueName.Migration]: { concurrency: 5 },
+    [QueueName.ThumbnailGeneration]: { concurrency: 3 },
+    [QueueName.VideoConversion]: { concurrency: 1 },
+    [QueueName.Notification]: { concurrency: 5 },
+    [QueueName.Ocr]: { concurrency: 1 },
+    [QueueName.Workflow]: { concurrency: 5 },
+    [QueueName.IntegrityCheck]: { concurrency: 1 },
+    [QueueName.Editor]: { concurrency: 2 },
   },
   backup: {
     database: {
@@ -51,28 +56,47 @@ const updatedConfig = Object.freeze<SystemConfig>({
     crf: 30,
     threads: 0,
     preset: 'ultrafast',
-    targetAudioCodec: AudioCodec.AAC,
-    acceptedAudioCodecs: [AudioCodec.AAC, AudioCodec.MP3, AudioCodec.LIBOPUS, AudioCodec.PCMS16LE],
+    targetAudioCodec: AudioCodec.Aac,
+    acceptedAudioCodecs: [AudioCodec.Aac, AudioCodec.Mp3, AudioCodec.Opus],
     targetResolution: '720',
     targetVideoCodec: VideoCodec.H264,
     acceptedVideoCodecs: [VideoCodec.H264],
-    acceptedContainers: [VideoContainer.MOV, VideoContainer.OGG, VideoContainer.WEBM],
+    acceptedContainers: [VideoContainer.Mov, VideoContainer.Ogg, VideoContainer.Webm],
     maxBitrate: '0',
     bframes: -1,
     refs: 0,
     gopSize: 0,
     temporalAQ: false,
-    cqMode: CQMode.AUTO,
+    cqMode: CQMode.Auto,
     twoPass: false,
     preferredHwDevice: 'auto',
-    transcode: TranscodePolicy.REQUIRED,
-    accel: TranscodeHWAccel.DISABLED,
-    accelDecode: false,
-    tonemap: ToneMapping.HABLE,
+    transcode: TranscodePolicy.Required,
+    accel: TranscodeHardwareAcceleration.Disabled,
+    accelDecode: true,
+    tonemap: ToneMapping.Hable,
+    realtime: {
+      enabled: false,
+    },
+  },
+  integrityChecks: {
+    untrackedFiles: {
+      enabled: true,
+      cronExpression: '0 03 * * *',
+    },
+    missingFiles: {
+      enabled: true,
+      cronExpression: '0 03 * * *',
+    },
+    checksumFiles: {
+      enabled: true,
+      cronExpression: '0 03 * * *',
+      timeLimit: 60 * 60 * 1000,
+      percentageLimit: 1,
+    },
   },
   logging: {
     enabled: true,
-    level: LogLevel.LOG,
+    level: LogLevel.Log,
   },
   metadata: {
     faces: {
@@ -82,6 +106,11 @@ const updatedConfig = Object.freeze<SystemConfig>({
   machineLearning: {
     enabled: true,
     urls: ['http://immich-machine-learning:3003'],
+    availabilityChecks: {
+      enabled: true,
+      interval: 30_000,
+      timeout: 2000,
+    },
     clip: {
       enabled: true,
       modelName: 'ViT-B-32__openai',
@@ -97,11 +126,26 @@ const updatedConfig = Object.freeze<SystemConfig>({
       maxDistance: 0.5,
       minFaces: 3,
     },
+    ocr: {
+      enabled: true,
+      modelName: 'PP-OCRv5_mobile',
+      minDetectionScore: 0.5,
+      minRecognitionScore: 0.8,
+      maxResolution: 736,
+    },
   },
   map: {
     enabled: true,
     lightStyle: 'https://tiles.immich.cloud/v1/style/light.json',
     darkStyle: 'https://tiles.immich.cloud/v1/style/dark.json',
+  },
+  nightlyTasks: {
+    startTime: '00:00',
+    databaseCleanup: true,
+    clusterNewFaces: true,
+    missingThumbnails: true,
+    generateMemories: true,
+    syncQuotaUsage: true,
   },
   reverseGeocoding: {
     enabled: true,
@@ -112,18 +156,22 @@ const updatedConfig = Object.freeze<SystemConfig>({
     buttonText: 'Login with OAuth',
     clientId: '',
     clientSecret: '',
-    defaultStorageQuota: 0,
+    defaultStorageQuota: null,
     enabled: false,
     issuerUrl: '',
+    endSessionEndpoint: '',
     mobileOverrideEnabled: false,
     mobileRedirectUri: '',
+    prompt: '',
     scope: 'openid email profile',
     signingAlgorithm: 'RS256',
     profileSigningAlgorithm: 'none',
-    tokenEndpointAuthMethod: OAuthTokenEndpointAuthMethod.CLIENT_SECRET_POST,
+    tokenEndpointAuthMethod: OAuthTokenEndpointAuthMethod.ClientSecretPost,
     timeout: 30_000,
+    allowInsecureRequests: false,
     storageLabelClaim: 'preferred_username',
     storageQuotaClaim: 'immich_quota',
+    roleClaim: 'immich_role',
   },
   passwordLogin: {
     enabled: true,
@@ -141,20 +189,23 @@ const updatedConfig = Object.freeze<SystemConfig>({
   image: {
     thumbnail: {
       size: 250,
-      format: ImageFormat.WEBP,
+      format: ImageFormat.Webp,
       quality: 80,
+      progressive: false,
     },
     preview: {
       size: 1440,
-      format: ImageFormat.JPEG,
+      format: ImageFormat.Jpeg,
       quality: 80,
+      progressive: false,
     },
-    fullsize: { enabled: false, format: ImageFormat.JPEG, quality: 80 },
+    fullsize: { enabled: false, format: ImageFormat.Jpeg, quality: 80, progressive: false },
     colorspace: Colorspace.P3,
     extractEmbedded: false,
   },
   newVersionCheck: {
     enabled: true,
+    channel: ReleaseChannel.Stable,
   },
   trash: {
     enabled: true,
@@ -183,6 +234,7 @@ const updatedConfig = Object.freeze<SystemConfig>({
       transport: {
         host: '',
         port: 587,
+        secure: false,
         username: '',
         password: '',
         ignoreCert: false,
@@ -267,26 +319,33 @@ describe(SystemConfigService.name, () => {
     it('should accept valid cron expressions', async () => {
       mocks.config.getEnv.mockReturnValue(mockEnvData({ configFile: 'immich-config.json' }));
       mocks.systemMetadata.readFile.mockResolvedValue(
-        JSON.stringify({ library: { scan: { cronExpression: '0 0 * * *' } } }),
+        JSON.stringify({ library: { scan: { cronExpression: '0 0 */3 * *' } } }),
       );
 
       await expect(sut.getSystemConfig()).resolves.toMatchObject({
         library: {
           scan: {
             enabled: true,
-            cronExpression: '0 0 * * *',
+            cronExpression: '0 0 */3 * *',
           },
         },
       });
+    });
+
+    it('should reject an invalid issuer URL', async () => {
+      mocks.config.getEnv.mockReturnValue(mockEnvData({ configFile: 'immich-config.json' }));
+      mocks.systemMetadata.readFile.mockResolvedValue(JSON.stringify({ oauth: { issuerUrl: 'accounts.google.com' } }));
+
+      await expect(sut.getSystemConfig()).rejects.toThrow(
+        '[oauth.issuerUrl] Issuer URL must be an empty string or a valid URL',
+      );
     });
 
     it('should reject invalid cron expressions', async () => {
       mocks.config.getEnv.mockReturnValue(mockEnvData({ configFile: 'immich-config.json' }));
       mocks.systemMetadata.readFile.mockResolvedValue(JSON.stringify({ library: { scan: { cronExpression: 'foo' } } }));
 
-      await expect(sut.getSystemConfig()).rejects.toThrow(
-        'library.scan.cronExpression has failed the following constraints: cronValidator',
-      );
+      await expect(sut.getSystemConfig()).rejects.toThrow('[library.scan.cronExpression] Invalid cron expression');
     });
 
     it('should log errors with the config file', async () => {
@@ -345,6 +404,11 @@ describe(SystemConfigService.name, () => {
       { should: 'with a trailing slash', externalDomain: 'https://demo.immich.app/' },
       { should: 'without a trailing slash', externalDomain: 'https://demo.immich.app' },
       { should: 'with a port', externalDomain: 'https://demo.immich.app:42', result: 'https://demo.immich.app:42' },
+      {
+        should: 'with basic auth',
+        externalDomain: 'https://user:password@example.com:123',
+        result: 'https://user:password@example.com:123',
+      },
     ];
 
     for (const { should, externalDomain, result } of externalDomainTests) {
@@ -370,10 +434,26 @@ describe(SystemConfigService.name, () => {
     });
 
     const tests = [
-      { should: 'validate numbers', config: { ffmpeg: { crf: 'not-a-number' } } },
-      { should: 'validate booleans', config: { oauth: { enabled: 'invalid' } } },
-      { should: 'validate enums', config: { ffmpeg: { transcode: 'unknown' } } },
-      { should: 'validate required oauth fields', config: { oauth: { enabled: true } } },
+      {
+        should: 'validate numbers',
+        config: { ffmpeg: { crf: 'not-a-number' } },
+        throws: '[ffmpeg.crf] Invalid input: expected number, received NaN',
+      },
+      {
+        should: 'validate booleans',
+        config: { oauth: { enabled: 'invalid' } },
+        throws: '[oauth.enabled] Invalid input: expected boolean, received string',
+      },
+      {
+        should: 'validate enums',
+        config: { ffmpeg: { transcode: 'unknown' } },
+        throws: '[ffmpeg.transcode] Invalid option: expected one of',
+      },
+      {
+        should: 'validate required oauth fields',
+        config: { oauth: { enabled: true } },
+        check: (c: SystemConfig) => expect(c.oauth.enabled).toBe(true),
+      },
       { should: 'warn for top level unknown options', warn: true, config: { unknownOption: true } },
       { should: 'warn for nested unknown options', warn: true, config: { ffmpeg: { unknownOption: true } } },
     ];
@@ -383,11 +463,14 @@ describe(SystemConfigService.name, () => {
         mocks.config.getEnv.mockReturnValue(mockEnvData({ configFile: 'immich-config.json' }));
         mocks.systemMetadata.readFile.mockResolvedValue(JSON.stringify(test.config));
 
-        if (test.warn) {
+        if (test.throws) {
+          await expect(sut.getSystemConfig()).rejects.toThrow(test.throws);
+        } else if (test.warn) {
           await sut.getSystemConfig();
           expect(mocks.logger.warn).toHaveBeenCalled();
         } else {
-          await expect(sut.getSystemConfig()).rejects.toBeInstanceOf(Error);
+          const config = await sut.getSystemConfig();
+          test.check!(config);
         }
       });
     }
@@ -398,7 +481,7 @@ describe(SystemConfigService.name, () => {
       mocks.systemMetadata.get.mockResolvedValue(partialConfig);
       await expect(sut.updateSystemConfig(updatedConfig)).resolves.toEqual(updatedConfig);
       expect(mocks.event.emit).toHaveBeenCalledWith(
-        'config.update',
+        'ConfigUpdate',
         expect.objectContaining({ oldConfig: expect.any(Object), newConfig: updatedConfig }),
       );
     });

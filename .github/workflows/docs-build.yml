@@ -18,57 +18,69 @@ jobs:
     permissions:
       contents: read
     outputs:
-      should_run: ${{ steps.found_paths.outputs.docs == 'true' ||  steps.should_force.outputs.should_force == 'true' }}
+      should_run: ${{ steps.check.outputs.should_run }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
         with:
-          persist-credentials: false
-      - id: found_paths
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - name: Check what should run
+        id: check
+        uses: immich-app/devtools/actions/pre-job@91f342bb4477c4bc10c576ae739da875d85aa164 # pre-job-action-v2.0.4
         with:
+          github-token: ${{ steps.token.outputs.token }}
           filters: |
             docs:
               - 'docs/**'
-            workflow:
-              - '.github/workflows/docs-build.yml'
-      - name: Check if we should force jobs to run
-        id: should_force
-        run: echo "should_force=${{ steps.found_paths.outputs.workflow == 'true' || github.event_name == 'release' || github.ref_name == 'main' }}" >> "$GITHUB_OUTPUT"
+            open-api:
+              - 'open-api/immich-openapi-specs.json'
+          force-filters: |
+            - '.github/workflows/docs-build.yml'
+          force-events: 'release'
+          force-branches: 'main'
 
   build:
     name: Docs Build
     needs: pre-job
     permissions:
       contents: read
-    if: ${{ needs.pre-job.outputs.should_run == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).docs == true }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./docs
 
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './docs/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run npm install
-        run: npm ci
+      - name: Run install
+        run: pnpm install
 
       - name: Check formatting
-        run: npm run format
+        run: pnpm format
 
       - name: Run build
-        run: npm run build
+        run: pnpm build
 
       - name: Upload build output
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: docs-build-output
           path: docs/build/

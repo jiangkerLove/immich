@@ -27,7 +27,8 @@
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_nl_NL.md">Nederlands</a>
   <a href="README_tr_TR.md">Türkçe</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_ru_RU.md">Русский</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
   <a href="README_sv_SE.md">Svenska</a>
@@ -35,26 +36,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## 免責事項
+> [!WARNING]
+> ⚠️ 大切な写真やビデオは、常に [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) のバックアッププランに従ってください！
+>
 
-- ⚠️ このプロジェクトは **非常に活発に** 開発中です。
-- ⚠️ バグの存在や変更が入ることも予想されます。
-- ⚠️ **写真やビデオを保存する唯一の方法としてこのアプリを使用しないでください。**
-- ⚠️ 大切な写真やビデオは、常に [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) のバックアッププランに従ってください！
+> [!NOTE]
+> インストールガイドを含む主なドキュメントは、https://immich.app/ です。
 
 ## コンテンツ
 
-- [公式ドキュメント](https://immich.app/docs)
-- [ロードマップ](https://github.com/orgs/immich-app/projects/1)
+- [公式ドキュメント](https://docs.immich.app/)
+- [紹介](https://docs.immich.app/overview/introduction)
+- [インストール](https://docs.immich.app/install/requirements)
+- [ロードマップ](https://immich.app/roadmap)
 - [デモ](#デモ)
 - [機能](#機能)
-- [紹介](https://immich.app/docs/overview/introduction)
-- [インストール](https://immich.app/docs/install/requirements)
-- [コントリビューションガイド](https://immich.app/docs/overview/support-the-project)
-
-## ドキュメント
-
-インストールガイドを含む主なドキュメントは、https://immich.app/ です。
+- [翻訳](https://docs.immich.app/developer/translations)
+- [コントリビューションガイド](https://docs.immich.app/overview/support-the-project)
 
 ## デモ
 

@@ -13,76 +13,101 @@ part of openapi.api;
 class SessionCreateResponseDto {
   /// Returns a new [SessionCreateResponseDto] instance.
   SessionCreateResponseDto({
+    required this.appVersion,
     required this.createdAt,
     required this.current,
     required this.deviceOS,
     required this.deviceType,
-    this.expiresAt,
+    this.expiresAt = const Optional.absent(),
     required this.id,
+    required this.isPendingSyncReset,
     required this.token,
     required this.updatedAt,
   });
 
+  /// App version
+  String? appVersion;
+
+  /// Creation date
   String createdAt;
 
+  /// Is current session
   bool current;
 
+  /// Device OS
   String deviceOS;
 
+  /// Device type
   String deviceType;
 
+  /// Expiration date
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? expiresAt;
+  Optional<String?> expiresAt;
 
+  /// Session ID
   String id;
 
+  /// Is pending sync reset
+  bool isPendingSyncReset;
+
+  /// Session token
   String token;
 
+  /// Last update date
   String updatedAt;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is SessionCreateResponseDto &&
+    other.appVersion == appVersion &&
     other.createdAt == createdAt &&
     other.current == current &&
     other.deviceOS == deviceOS &&
     other.deviceType == deviceType &&
     other.expiresAt == expiresAt &&
     other.id == id &&
+    other.isPendingSyncReset == isPendingSyncReset &&
     other.token == token &&
     other.updatedAt == updatedAt;
 
   @override
   int get hashCode =>
     // ignore: unnecessary_parenthesis
+    (appVersion == null ? 0 : appVersion!.hashCode) +
     (createdAt.hashCode) +
     (current.hashCode) +
     (deviceOS.hashCode) +
     (deviceType.hashCode) +
     (expiresAt == null ? 0 : expiresAt!.hashCode) +
     (id.hashCode) +
+    (isPendingSyncReset.hashCode) +
     (token.hashCode) +
     (updatedAt.hashCode);
 
   @override
-  String toString() => 'SessionCreateResponseDto[createdAt=$createdAt, current=$current, deviceOS=$deviceOS, deviceType=$deviceType, expiresAt=$expiresAt, id=$id, token=$token, updatedAt=$updatedAt]';
+  String toString() => 'SessionCreateResponseDto[appVersion=$appVersion, createdAt=$createdAt, current=$current, deviceOS=$deviceOS, deviceType=$deviceType, expiresAt=$expiresAt, id=$id, isPendingSyncReset=$isPendingSyncReset, token=$token, updatedAt=$updatedAt]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
+    if (this.appVersion != null) {
+      json[r'appVersion'] = this.appVersion;
+    } else {
+      json[r'appVersion'] = null;
+    }
       json[r'createdAt'] = this.createdAt;
       json[r'current'] = this.current;
       json[r'deviceOS'] = this.deviceOS;
       json[r'deviceType'] = this.deviceType;
-    if (this.expiresAt != null) {
-      json[r'expiresAt'] = this.expiresAt;
-    } else {
-    //  json[r'expiresAt'] = null;
+    if (this.expiresAt.isPresent) {
+      final value = this.expiresAt.value;
+      json[r'expiresAt'] = value;
     }
       json[r'id'] = this.id;
+      json[r'isPendingSyncReset'] = this.isPendingSyncReset;
       json[r'token'] = this.token;
       json[r'updatedAt'] = this.updatedAt;
     return json;
@@ -97,12 +122,14 @@ class SessionCreateResponseDto {
       final json = value.cast<String, dynamic>();
 
       return SessionCreateResponseDto(
+        appVersion: mapValueOfType<String>(json, r'appVersion'),
         createdAt: mapValueOfType<String>(json, r'createdAt')!,
         current: mapValueOfType<bool>(json, r'current')!,
         deviceOS: mapValueOfType<String>(json, r'deviceOS')!,
         deviceType: mapValueOfType<String>(json, r'deviceType')!,
-        expiresAt: mapValueOfType<String>(json, r'expiresAt'),
+        expiresAt: json.containsKey(r'expiresAt') ? Optional.present(mapValueOfType<String>(json, r'expiresAt')) : const Optional.absent(),
         id: mapValueOfType<String>(json, r'id')!,
+        isPendingSyncReset: mapValueOfType<bool>(json, r'isPendingSyncReset')!,
         token: mapValueOfType<String>(json, r'token')!,
         updatedAt: mapValueOfType<String>(json, r'updatedAt')!,
       );
@@ -152,11 +179,13 @@ class SessionCreateResponseDto {
 
   /// The list of required keys that must be present in a JSON.
   static const requiredKeys = <String>{
+    'appVersion',
     'createdAt',
     'current',
     'deviceOS',
     'deviceType',
     'id',
+    'isPendingSyncReset',
     'token',
     'updatedAt',
   };

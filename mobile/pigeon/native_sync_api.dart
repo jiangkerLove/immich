@@ -5,22 +5,35 @@ import 'package:pigeon/pigeon.dart';
     dartOut: 'lib/platform/native_sync_api.g.dart',
     swiftOut: 'ios/Runner/Sync/Messages.g.swift',
     swiftOptions: SwiftOptions(),
-    kotlinOut:
-        'android/app/src/main/kotlin/app/alextran/immich/sync/Messages.g.kt',
+    kotlinOut: 'android/app/src/main/kotlin/app/alextran/immich/sync/Messages.g.kt',
     kotlinOptions: KotlinOptions(package: 'app.alextran.immich.sync'),
     dartOptions: DartOptions(),
     dartPackageName: 'immich_mobile',
   ),
 )
+enum PlatformAssetPlaybackStyle { unknown, image, video, imageAnimated, livePhoto, videoLooping }
+
 class PlatformAsset {
   final String id;
   final String name;
+
   // Follows AssetType enum from base_asset.model.dart
   final int type;
+
   // Seconds since epoch
   final int? createdAt;
   final int? updatedAt;
-  final int durationInSeconds;
+  final int? width;
+  final int? height;
+  final int durationMs;
+  final int orientation;
+  final bool isFavorite;
+
+  final int? adjustmentTime;
+  final double? latitude;
+  final double? longitude;
+
+  final PlatformAssetPlaybackStyle playbackStyle;
 
   const PlatformAsset({
     required this.id,
@@ -28,13 +41,22 @@ class PlatformAsset {
     required this.type,
     this.createdAt,
     this.updatedAt,
-    this.durationInSeconds = 0,
+    this.width,
+    this.height,
+    this.durationMs = 0,
+    this.orientation = 0,
+    this.isFavorite = false,
+    this.adjustmentTime,
+    this.latitude,
+    this.longitude,
+    this.playbackStyle = PlatformAssetPlaybackStyle.unknown,
   });
 }
 
 class PlatformAlbum {
   final String id;
   final String name;
+
   // Seconds since epoch
   final int? updatedAt;
   final bool isCloud;
@@ -53,6 +75,7 @@ class SyncDelta {
   final bool hasChanges;
   final List<PlatformAsset> updates;
   final List<String> deletes;
+
   // Asset -> Album mapping
   final Map<String, List<String>> assetAlbums;
 
@@ -64,26 +87,60 @@ class SyncDelta {
   });
 }
 
+class HashResult {
+  final String assetId;
+  final String? error;
+  final String? hash;
+
+  const HashResult({required this.assetId, this.error, this.hash});
+}
+
+class CloudIdResult {
+  final String assetId;
+  final String? error;
+  final String? cloudId;
+
+  const CloudIdResult({required this.assetId, this.error, this.cloudId});
+}
+
 @HostApi()
 abstract class NativeSyncApi {
+  @async
   bool shouldFullSync();
 
-  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
   SyncDelta getMediaChanges();
 
   void checkpointSync();
 
   void clearSyncCheckpoint();
 
-  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
   List<String> getAssetIdsForAlbum(String albumId);
 
-  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
   List<PlatformAlbum> getAlbums();
 
   @TaskQueue(type: TaskQueueType.serialBackgroundThread)
   int getAssetsCountSince(String albumId, int timestamp);
 
-  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  @async
   List<PlatformAsset> getAssetsForAlbum(String albumId, {int? updatedTimeCond});
+
+  @async
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  List<HashResult> hashAssets(List<String> assetIds, {bool allowNetworkAccess = false});
+
+  void cancelHashing();
+
+  void cancelSync();
+
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  Map<String, List<PlatformAsset>> getTrashedAssets();
+
+  @async
+  bool restoreFromTrashById(String mediaId, int type);
+
+  @TaskQueue(type: TaskQueueType.serialBackgroundThread)
+  List<CloudIdResult> getCloudIdForAssetIds(List<String> assetIds);
 }

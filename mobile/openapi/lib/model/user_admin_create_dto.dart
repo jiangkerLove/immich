@@ -13,52 +13,77 @@ part of openapi.api;
 class UserAdminCreateDto {
   /// Returns a new [UserAdminCreateDto] instance.
   UserAdminCreateDto({
-    this.avatarColor,
+    this.avatarColor = const Optional.absent(),
     required this.email,
+    this.isAdmin = const Optional.absent(),
     required this.name,
-    this.notify,
+    this.notify = const Optional.absent(),
     required this.password,
-    this.quotaSizeInBytes,
-    this.shouldChangePassword,
-    this.storageLabel,
+    this.pinCode = const Optional.absent(),
+    this.quotaSizeInBytes = const Optional.absent(),
+    this.shouldChangePassword = const Optional.absent(),
+    this.storageLabel = const Optional.absent(),
   });
 
-  UserAvatarColor? avatarColor;
+  Optional<UserAvatarColor?> avatarColor;
 
+  /// User email
   String email;
 
+  /// Grant admin privileges
+  ///
+  /// Please note: This property should have been non-nullable! Since the specification file
+  /// does not include a default value (using the "default:" property), however, the generated
+  /// source code must fall back to having a nullable type.
+  /// Consider adding a "default:" property in the specification file to hide this note.
+  ///
+  Optional<bool?> isAdmin;
+
+  /// User name
   String name;
 
+  /// Send notification email
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? notify;
+  Optional<bool?> notify;
 
+  /// User password
   String password;
 
-  /// Minimum value: 0
-  int? quotaSizeInBytes;
+  /// PIN code
+  Optional<String?> pinCode;
 
+  /// Storage quota in bytes
+  ///
+  /// Minimum value: 0
+  /// Maximum value: 9007199254740991
+  Optional<int?> quotaSizeInBytes;
+
+  /// Require password change on next login
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? shouldChangePassword;
+  Optional<bool?> shouldChangePassword;
 
-  String? storageLabel;
+  /// Storage label
+  Optional<String?> storageLabel;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is UserAdminCreateDto &&
     other.avatarColor == avatarColor &&
     other.email == email &&
+    other.isAdmin == isAdmin &&
     other.name == name &&
     other.notify == notify &&
     other.password == password &&
+    other.pinCode == pinCode &&
     other.quotaSizeInBytes == quotaSizeInBytes &&
     other.shouldChangePassword == shouldChangePassword &&
     other.storageLabel == storageLabel;
@@ -68,45 +93,50 @@ class UserAdminCreateDto {
     // ignore: unnecessary_parenthesis
     (avatarColor == null ? 0 : avatarColor!.hashCode) +
     (email.hashCode) +
+    (isAdmin == null ? 0 : isAdmin!.hashCode) +
     (name.hashCode) +
     (notify == null ? 0 : notify!.hashCode) +
     (password.hashCode) +
+    (pinCode == null ? 0 : pinCode!.hashCode) +
     (quotaSizeInBytes == null ? 0 : quotaSizeInBytes!.hashCode) +
     (shouldChangePassword == null ? 0 : shouldChangePassword!.hashCode) +
     (storageLabel == null ? 0 : storageLabel!.hashCode);
 
   @override
-  String toString() => 'UserAdminCreateDto[avatarColor=$avatarColor, email=$email, name=$name, notify=$notify, password=$password, quotaSizeInBytes=$quotaSizeInBytes, shouldChangePassword=$shouldChangePassword, storageLabel=$storageLabel]';
+  String toString() => 'UserAdminCreateDto[avatarColor=$avatarColor, email=$email, isAdmin=$isAdmin, name=$name, notify=$notify, password=$password, pinCode=$pinCode, quotaSizeInBytes=$quotaSizeInBytes, shouldChangePassword=$shouldChangePassword, storageLabel=$storageLabel]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.avatarColor != null) {
-      json[r'avatarColor'] = this.avatarColor;
-    } else {
-    //  json[r'avatarColor'] = null;
+    if (this.avatarColor.isPresent) {
+      final value = this.avatarColor.value;
+      json[r'avatarColor'] = value;
     }
       json[r'email'] = this.email;
+    if (this.isAdmin.isPresent) {
+      final value = this.isAdmin.value;
+      json[r'isAdmin'] = value;
+    }
       json[r'name'] = this.name;
-    if (this.notify != null) {
-      json[r'notify'] = this.notify;
-    } else {
-    //  json[r'notify'] = null;
+    if (this.notify.isPresent) {
+      final value = this.notify.value;
+      json[r'notify'] = value;
     }
       json[r'password'] = this.password;
-    if (this.quotaSizeInBytes != null) {
-      json[r'quotaSizeInBytes'] = this.quotaSizeInBytes;
-    } else {
-    //  json[r'quotaSizeInBytes'] = null;
+    if (this.pinCode.isPresent) {
+      final value = this.pinCode.value;
+      json[r'pinCode'] = value;
     }
-    if (this.shouldChangePassword != null) {
-      json[r'shouldChangePassword'] = this.shouldChangePassword;
-    } else {
-    //  json[r'shouldChangePassword'] = null;
+    if (this.quotaSizeInBytes.isPresent) {
+      final value = this.quotaSizeInBytes.value;
+      json[r'quotaSizeInBytes'] = value;
     }
-    if (this.storageLabel != null) {
-      json[r'storageLabel'] = this.storageLabel;
-    } else {
-    //  json[r'storageLabel'] = null;
+    if (this.shouldChangePassword.isPresent) {
+      final value = this.shouldChangePassword.value;
+      json[r'shouldChangePassword'] = value;
+    }
+    if (this.storageLabel.isPresent) {
+      final value = this.storageLabel.value;
+      json[r'storageLabel'] = value;
     }
     return json;
   }
@@ -120,14 +150,16 @@ class UserAdminCreateDto {
       final json = value.cast<String, dynamic>();
 
       return UserAdminCreateDto(
-        avatarColor: UserAvatarColor.fromJson(json[r'avatarColor']),
+        avatarColor: json.containsKey(r'avatarColor') ? Optional.present(UserAvatarColor.fromJson(json[r'avatarColor'])) : const Optional.absent(),
         email: mapValueOfType<String>(json, r'email')!,
+        isAdmin: json.containsKey(r'isAdmin') ? Optional.present(mapValueOfType<bool>(json, r'isAdmin')) : const Optional.absent(),
         name: mapValueOfType<String>(json, r'name')!,
-        notify: mapValueOfType<bool>(json, r'notify'),
+        notify: json.containsKey(r'notify') ? Optional.present(mapValueOfType<bool>(json, r'notify')) : const Optional.absent(),
         password: mapValueOfType<String>(json, r'password')!,
-        quotaSizeInBytes: mapValueOfType<int>(json, r'quotaSizeInBytes'),
-        shouldChangePassword: mapValueOfType<bool>(json, r'shouldChangePassword'),
-        storageLabel: mapValueOfType<String>(json, r'storageLabel'),
+        pinCode: json.containsKey(r'pinCode') ? Optional.present(mapValueOfType<String>(json, r'pinCode')) : const Optional.absent(),
+        quotaSizeInBytes: json.containsKey(r'quotaSizeInBytes') ? Optional.present(json[r'quotaSizeInBytes'] == null ? null : int.parse('${json[r'quotaSizeInBytes']}')) : const Optional.absent(),
+        shouldChangePassword: json.containsKey(r'shouldChangePassword') ? Optional.present(mapValueOfType<bool>(json, r'shouldChangePassword')) : const Optional.absent(),
+        storageLabel: json.containsKey(r'storageLabel') ? Optional.present(mapValueOfType<String>(json, r'storageLabel')) : const Optional.absent(),
       );
     }
     return null;

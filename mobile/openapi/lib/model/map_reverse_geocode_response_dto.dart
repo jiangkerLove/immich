@@ -18,10 +18,13 @@ class MapReverseGeocodeResponseDto {
     required this.state,
   });
 
+  /// City name
   String? city;
 
+  /// Country name
   String? country;
 
+  /// State/Province name
   String? state;
 
   @override
@@ -45,17 +48,17 @@ class MapReverseGeocodeResponseDto {
     if (this.city != null) {
       json[r'city'] = this.city;
     } else {
-    //  json[r'city'] = null;
+      json[r'city'] = null;
     }
     if (this.country != null) {
       json[r'country'] = this.country;
     } else {
-    //  json[r'country'] = null;
+      json[r'country'] = null;
     }
     if (this.state != null) {
       json[r'state'] = this.state;
     } else {
-    //  json[r'state'] = null;
+      json[r'state'] = null;
     }
     return json;
   }

@@ -1,12 +1,7 @@
 <script lang="ts">
-  import {
-    notificationController,
-    NotificationType,
-  } from '$lib/components/shared-components/notification/notification';
-  import PinCodeInput from '$lib/components/user-settings-page/PinCodeInput.svelte';
   import { handleError } from '$lib/utils/handle-error';
   import { setupPinCode } from '@immich/sdk';
-  import { Button } from '@immich/ui';
+  import { Button, Field, Heading, PinInput, toastManager } from '@immich/ui';
   import { t } from 'svelte-i18n';
 
   interface Props {
@@ -30,12 +25,7 @@
     isLoading = true;
     try {
       await setupPinCode({ pinCodeSetupDto: { pinCode: newPinCode } });
-
-      notificationController.show({
-        message: $t('pin_code_setup_successfully'),
-        type: NotificationType.Info,
-      });
-
+      toastManager.primary($t('pin_code_setup_successfully'));
       onCreated?.(newPinCode);
       resetForm();
     } catch (error) {
@@ -52,16 +42,19 @@
 </script>
 
 <form autocomplete="off" onsubmit={handleSubmit}>
-  <div class="flex flex-col gap-6 place-items-center place-content-center">
+  <div class="flex flex-col place-content-center place-items-center gap-6">
     {#if showLabel}
-      <p class="text-dark">{$t('setup_pin_code')}</p>
+      <Heading>{$t('setup_pin_code')}</Heading>
     {/if}
-    <PinCodeInput label={$t('new_pin_code')} bind:value={newPinCode} tabindexStart={1} pinLength={6} />
-
-    <PinCodeInput label={$t('confirm_new_pin_code')} bind:value={confirmPinCode} tabindexStart={7} pinLength={6} />
+    <Field label={$t('new_pin_code')}>
+      <PinInput bind:value={newPinCode} />
+    </Field>
+    <Field label={$t('confirm_new_pin_code')}>
+      <PinInput bind:value={confirmPinCode} />
+    </Field>
   </div>
 
-  <div class="flex justify-end gap-2 mt-4">
+  <div class="mt-4 flex justify-end gap-2">
     <Button shape="round" color="secondary" type="button" size="small" onclick={resetForm}>
       {$t('clear')}
     </Button>

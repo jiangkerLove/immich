@@ -5,21 +5,9 @@ import 'dart:io';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:path/path.dart';
 
-enum ShareIntentAttachmentType {
-  image,
-  video,
-}
+enum ShareIntentAttachmentType { image, video }
 
-enum UploadStatus {
-  enqueued,
-  running,
-  complete,
-  notFound,
-  failed,
-  canceled,
-  waitingtoRetry,
-  paused,
-}
+enum UploadStatus { enqueued, running, complete, failed }
 
 class ShareIntentAttachment {
   final String path;
@@ -91,9 +79,7 @@ class ShareIntentAttachment {
   String toJson() => json.encode(toMap());
 
   factory ShareIntentAttachment.fromJson(String source) =>
-      ShareIntentAttachment.fromMap(
-        json.decode(source) as Map<String, dynamic>,
-      );
+      ShareIntentAttachment.fromMap(json.decode(source) as Map<String, dynamic>);
 
   @override
   String toString() {
@@ -102,7 +88,9 @@ class ShareIntentAttachment {
 
   @override
   bool operator ==(covariant ShareIntentAttachment other) {
-    if (identical(this, other)) return true;
+    if (identical(this, other)) {
+      return true;
+    }
 
     return other.path == path && other.type == type;
   }

@@ -1,27 +1,37 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
-  import SkipLink from '$lib/components/elements/buttons/skip-link.svelte';
-  import UserPageLayout, { headerId } from '$lib/components/layouts/user-page-layout.svelte';
-  import AssetGrid from '$lib/components/photos-page/asset-grid.svelte';
-  import {
-    notificationController,
-    NotificationType,
-  } from '$lib/components/shared-components/notification/notification';
-  import SettingInputField from '$lib/components/shared-components/settings/setting-input-field.svelte';
-  import Breadcrumbs from '$lib/components/shared-components/tree/breadcrumbs.svelte';
-  import TreeItemThumbnails from '$lib/components/shared-components/tree/tree-item-thumbnails.svelte';
-  import TreeItems from '$lib/components/shared-components/tree/tree-items.svelte';
-  import Sidebar from '$lib/components/sidebar/sidebar.svelte';
-  import { AppRoute, AssetAction, QueryParameter, SettingInputFieldType } from '$lib/constants';
-  import { modalManager } from '$lib/managers/modal-manager.svelte';
-  import { AssetInteraction } from '$lib/stores/asset-interaction.svelte';
-  import { AssetStore } from '$lib/stores/assets-store.svelte';
-  import { buildTree, normalizeTreePath } from '$lib/utils/tree-utils';
-  import { deleteTag, getAllTags, updateTag, upsertTags, type TagResponseDto } from '@immich/sdk';
-  import { Button, HStack, Modal, ModalBody, ModalFooter, Text } from '@immich/ui';
-  import { mdiPencil, mdiPlus, mdiTag, mdiTagMultiple, mdiTrashCanOutline } from '@mdi/js';
-  import { onDestroy } from 'svelte';
+  import OnEvents from '$lib/components/OnEvents.svelte';
+  import UserPageLayout, { headerId } from '$lib/components/layouts/UserPageLayout.svelte';
+  import ButtonContextMenu from '$lib/components/shared-components/context-menu/ButtonContextMenu.svelte';
+  import Breadcrumbs from '$lib/components/shared-components/tree/Breadcrumbs.svelte';
+  import TreeItemThumbnails from '$lib/components/shared-components/tree/TreeItemThumbnails.svelte';
+  import TreeItems from '$lib/components/shared-components/tree/TreeItems.svelte';
+  import Sidebar from '$lib/components/sidebar/Sidebar.svelte';
+  import AssetSelectControlBar from '$lib/components/timeline/AssetSelectControlBar.svelte';
+  import Timeline from '$lib/components/timeline/Timeline.svelte';
+  import ArchiveAction from '$lib/components/timeline/actions/ArchiveAction.svelte';
+  import ChangeDate from '$lib/components/timeline/actions/ChangeDateAction.svelte';
+  import ChangeDescription from '$lib/components/timeline/actions/ChangeDescriptionAction.svelte';
+  import ChangeLocation from '$lib/components/timeline/actions/ChangeLocationAction.svelte';
+  import CreateSharedLink from '$lib/components/timeline/actions/CreateSharedLinkAction.svelte';
+  import DeleteAssets from '$lib/components/timeline/actions/DeleteAssetsAction.svelte';
+  import DownloadAction from '$lib/components/timeline/actions/DownloadAction.svelte';
+  import FavoriteAction from '$lib/components/timeline/actions/FavoriteAction.svelte';
+  import SelectAllAssets from '$lib/components/timeline/actions/SelectAllAction.svelte';
+  import SetVisibilityAction from '$lib/components/timeline/actions/SetVisibilityAction.svelte';
+  import TagAction from '$lib/components/timeline/actions/TagAction.svelte';
+  import { AssetAction } from '$lib/constants';
+  import SkipLink from '$lib/elements/SkipLink.svelte';
+  import { assetMultiSelectManager } from '$lib/managers/asset-multi-select-manager.svelte';
+  import { authManager } from '$lib/managers/auth-manager.svelte';
+  import { TimelineManager } from '$lib/managers/timeline-manager/timeline-manager.svelte';
+  import { Route } from '$lib/route';
+  import { getAssetBulkActions } from '$lib/services/asset.service';
+  import { getTagActions } from '$lib/services/tag.service';
+  import { joinPaths, TreeNode } from '$lib/utils/tree-utils';
+  import { getAllTags, type TagResponseDto } from '@immich/sdk';
+  import { ActionButton, CommandPaletteDefaultProvider, Text } from '@immich/ui';
+  import { mdiDotsVertical, mdiTag, mdiTagMultiple } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';
 
@@ -31,215 +41,108 @@
 
   let { data }: Props = $props();
 
-  let pathSegments = $derived(data.path ? data.path.split('/') : []);
-  let currentPath = $derived($page.url.searchParams.get(QueryParameter.PATH) || '');
-
-  const assetInteraction = new AssetInteraction();
-
-  const buildMap = (tags: TagResponseDto[]) => {
-    return Object.fromEntries(tags.map((tag) => [tag.value, tag]));
-  };
-  const assetStore = new AssetStore();
-  $effect(() => void assetStore.updateOptions({ deferInit: !tag, tagId }));
-  onDestroy(() => assetStore.destroy());
-
   let tags = $derived<TagResponseDto[]>(data.tags);
-  let tagsMap = $derived(buildMap(tags));
-  let tag = $derived(currentPath ? tagsMap[currentPath] : null);
-  let tagId = $derived(tag?.id);
-  let tree = $derived(buildTree(tags.map((tag) => tag.value)));
+  const tree = $derived(TreeNode.fromTags(tags));
+  const tag = $derived(tree.traverse(data.path));
 
-  const handleNavigation = async (tag: string) => {
-    await navigateToView(normalizeTreePath(`${data.path || ''}/${tag}`));
-  };
+  let timelineManager = $state<TimelineManager>() as TimelineManager;
+  const options = $derived({ deferInit: !tag, tagId: tag?.id });
 
-  const getLink = (path: string) => {
-    const url = new URL(AppRoute.TAGS, globalThis.location.href);
-    if (path) {
-      url.searchParams.set(QueryParameter.PATH, path);
-    }
-    return url.href;
-  };
+  const handleNavigation = (tag: string) => navigateToView(joinPaths(data.path, tag));
 
-  const getColor = (path: string) => tagsMap[path]?.color;
+  const getLink = (path: string) => Route.tags({ path });
 
   const navigateToView = (path: string) => goto(getLink(path));
 
-  let isNewOpen = $state(false);
-  let newTagValue = $state('');
-  const handleCreate = () => {
-    newTagValue = tag ? tag.value + '/' : '';
-    isNewOpen = true;
+  const handleSetVisibility = (assetIds: string[]) => {
+    timelineManager.removeAssets(assetIds);
+    assetMultiSelectManager.clear();
   };
 
-  let isEditOpen = $state(false);
-  let newTagColor = $state('');
-  const handleEdit = () => {
-    newTagColor = tag?.color ?? '';
-    isEditOpen = true;
-  };
-
-  const handleCancel = () => {
-    isNewOpen = false;
-    isEditOpen = false;
-  };
-
-  const handleSubmit = async () => {
-    if (tag && isEditOpen && newTagColor) {
-      await updateTag({ id: tag.id, tagUpdateDto: { color: newTagColor } });
-
-      notificationController.show({
-        message: $t('tag_updated', { values: { tag: tag.value } }),
-        type: NotificationType.Info,
-      });
-
-      tags = await getAllTags();
-      isEditOpen = false;
-    }
-
-    if (isNewOpen && newTagValue) {
-      const [newTag] = await upsertTags({ tagUpsertDto: { tags: [newTagValue] } });
-
-      notificationController.show({
-        message: $t('tag_created', { values: { tag: newTag.value } }),
-        type: NotificationType.Info,
-      });
-
-      tags = await getAllTags();
-      isNewOpen = false;
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!tag) {
-      return;
-    }
-
-    const isConfirm = await modalManager.showDialog({
-      title: $t('delete_tag'),
-      prompt: $t('delete_tag_confirmation_prompt', { values: { tagName: tag.value } }),
-      confirmText: $t('delete'),
-    });
-
-    if (!isConfirm) {
-      return;
-    }
-
-    await deleteTag({ id: tag.id });
+  const onRefresh = async () => {
     tags = await getAllTags();
-
-    // navigate to parent
-    const parentPath = pathSegments.slice(0, -1).join('/');
-    await navigateToView(parentPath);
   };
 
-  const onsubmit = async (event: Event) => {
-    event.preventDefault();
-    await handleSubmit();
+  const onTagDelete = async (response: TreeNode) => {
+    if (response.path === tag.path) {
+      await navigateToView(tag.parent ? tag.parent.path : '');
+    }
+
+    await onRefresh();
   };
+
+  const { Create, Update, Delete } = $derived(getTagActions($t, tag));
 </script>
 
-<UserPageLayout title={data.meta.title}>
+<OnEvents onTagCreate={onRefresh} onTagUpdate={onRefresh} {onTagDelete} />
+
+<UserPageLayout title={data.meta.title} actions={[Create, Update, Delete]}>
   {#snippet sidebar()}
     <Sidebar>
       <SkipLink target={`#${headerId}`} text={$t('skip_to_tags')} breakpoint="md" />
       <section>
-        <div class="text-xs ps-4 mb-2 dark:text-white">{$t('explorer').toUpperCase()}</div>
+        <Text class="mb-4 ps-4" size="small">{$t('explorer')}</Text>
         <div class="h-full">
-          <TreeItems
-            icons={{ default: mdiTag, active: mdiTag }}
-            items={tree}
-            active={currentPath}
-            {getLink}
-            {getColor}
-          />
+          <TreeItems icons={{ default: mdiTag, active: mdiTag }} {tree} active={tag.path} {getLink} />
         </div>
       </section>
     </Sidebar>
   {/snippet}
 
-  {#snippet buttons()}
-    <HStack>
-      <Button leadingIcon={mdiPlus} onclick={handleCreate} size="small" variant="ghost" color="secondary">
-        <Text class="hidden md:block">{$t('create_tag')}</Text>
-      </Button>
+  <Breadcrumbs node={tag} icon={mdiTagMultiple} title={$t('tags')} {getLink} />
 
-      {#if pathSegments.length > 0 && tag}
-        <Button leadingIcon={mdiPencil} onclick={handleEdit} size="small" variant="ghost" color="secondary">
-          <Text class="hidden md:block">{$t('edit_tag')}</Text>
-        </Button>
-        <Button leadingIcon={mdiTrashCanOutline} onclick={handleDelete} size="small" variant="ghost" color="secondary">
-          <Text class="hidden md:block">{$t('delete_tag')}</Text>
-        </Button>
-      {/if}
-    </HStack>
-  {/snippet}
-
-  <Breadcrumbs {pathSegments} icon={mdiTagMultiple} title={$t('tags')} {getLink} />
-
-  <section class="mt-2 h-[calc(100%-(--spacing(20)))] overflow-auto immich-scrollbar">
-    {#if tag}
-      <AssetGrid enableRouting={true} {assetStore} {assetInteraction} removeAction={AssetAction.UNARCHIVE}>
+  <section class="mt-2 h-[calc(100%-(--spacing(20)))] immich-scrollbar overflow-auto">
+    {#if tag.hasAssets}
+      <Timeline
+        enableRouting={true}
+        bind:timelineManager
+        {options}
+        assetInteraction={assetMultiSelectManager}
+        removeAction={AssetAction.UNARCHIVE}
+      >
         {#snippet empty()}
-          <TreeItemThumbnails items={data.children} icon={mdiTag} onClick={handleNavigation} />
+          <TreeItemThumbnails items={tag.children} icon={mdiTag} onClick={handleNavigation} />
         {/snippet}
-      </AssetGrid>
+      </Timeline>
     {:else}
-      <TreeItemThumbnails items={Object.keys(tree)} icon={mdiTag} onClick={handleNavigation} />
+      <TreeItemThumbnails items={tag.children} icon={mdiTag} onClick={handleNavigation} />
     {/if}
   </section>
 </UserPageLayout>
 
-{#if isNewOpen}
-  <Modal size="small" title={$t('create_tag')} icon={mdiTag} onClose={handleCancel}>
-    <ModalBody>
-      <div class="text-immich-primary dark:text-immich-dark-primary">
-        <p class="text-sm dark:text-immich-dark-fg">
-          {$t('create_tag_description')}
-        </p>
-      </div>
-
-      <form {onsubmit} autocomplete="off" id="create-tag-form">
-        <div class="my-4 flex flex-col gap-2">
-          <SettingInputField
-            inputType={SettingInputFieldType.TEXT}
-            label={$t('tag').toUpperCase()}
-            bind:value={newTagValue}
-            required={true}
-            autofocus={true}
+<section>
+  {#if assetMultiSelectManager.selectionActive}
+    <div class="fixed inset-s-0 top-0 w-full">
+      <AssetSelectControlBar>
+        {@const Actions = getAssetBulkActions($t)}
+        <CommandPaletteDefaultProvider name={$t('assets')} actions={Object.values(Actions)} />
+        <CreateSharedLink />
+        <SelectAllAssets {timelineManager} assetInteraction={assetMultiSelectManager} />
+        <ActionButton action={Actions.AddToAlbum} />
+        <FavoriteAction
+          removeFavorite={assetMultiSelectManager.isAllFavorite}
+          onFavorite={(ids, isFavorite) => timelineManager.update(ids, (asset) => (asset.isFavorite = isFavorite))}
+        ></FavoriteAction>
+        <ButtonContextMenu icon={mdiDotsVertical} title={$t('menu')}>
+          <DownloadAction menuItem />
+          <ChangeDate menuItem />
+          <ChangeDescription menuItem />
+          <ChangeLocation menuItem />
+          <ArchiveAction
+            menuItem
+            onArchive={(ids, visibility) => timelineManager.update(ids, (asset) => (asset.visibility = visibility))}
           />
-        </div>
-      </form>
-    </ModalBody>
-
-    <ModalFooter>
-      <div class="flex w-full gap-2">
-        <Button color="secondary" fullWidth shape="round" onclick={() => handleCancel()}>{$t('cancel')}</Button>
-        <Button type="submit" fullWidth shape="round" form="create-tag-form">{$t('create')}</Button>
-      </div>
-    </ModalFooter>
-  </Modal>
-{/if}
-
-{#if isEditOpen}
-  <Modal title={$t('edit_tag')} icon={mdiTag} onClose={handleCancel}>
-    <ModalBody>
-      <form {onsubmit} autocomplete="off" id="edit-tag-form">
-        <div class="my-4 flex flex-col gap-2">
-          <SettingInputField
-            inputType={SettingInputFieldType.COLOR}
-            label={$t('color').toUpperCase()}
-            bind:value={newTagColor}
+          {#if authManager.preferences.tags.enabled}
+            <TagAction menuItem />
+          {/if}
+          <DeleteAssets
+            menuItem
+            onAssetDelete={(assetIds) => timelineManager.removeAssets(assetIds)}
+            onUndoDelete={(assets) => timelineManager.upsertAssets(assets)}
           />
-        </div>
-      </form>
-    </ModalBody>
-
-    <ModalFooter>
-      <div class="flex w-full gap-2">
-        <Button color="secondary" fullWidth shape="round" onclick={() => handleCancel()}>{$t('cancel')}</Button>
-        <Button type="submit" fullWidth shape="round" form="edit-tag-form">{$t('save')}</Button>
-      </div>
-    </ModalFooter>
-  </Modal>
-{/if}
+          <SetVisibilityAction menuItem onVisibilitySet={handleSetVisibility} />
+        </ButtonContextMenu>
+      </AssetSelectControlBar>
+    </div>
+  {/if}
+</section>

@@ -2,85 +2,35 @@
 /// <reference no-default-lib="true"/>
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
-import { version } from '$service-worker';
+import { installMessageListener } from './messaging';
+import { handleFetch as handleAssetFetch } from './request';
 
-const useCache = true;
+const ASSET_REQUEST_REGEX = /^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/;
+
 const sw = globalThis as unknown as ServiceWorkerGlobalScope;
-const pendingLoads = new Map<string, AbortController>();
 
-// Create a unique cache name for this deployment
-const CACHE = `cache-${version}`;
-
-sw.addEventListener('install', (event) => {
-  event.waitUntil(sw.skipWaiting());
-});
-
-sw.addEventListener('activate', (event) => {
+const handleActivate = (event: ExtendableEvent) => {
   event.waitUntil(sw.clients.claim());
-  // Remove previous cached data from disk
-  event.waitUntil(deleteOldCaches());
-});
+};
 
-sw.addEventListener('fetch', (event) => {
+const handleInstall = (event: ExtendableEvent) => {
+  event.waitUntil(sw.skipWaiting());
+};
+
+const handleFetch = (event: FetchEvent): void => {
   if (event.request.method !== 'GET') {
     return;
   }
+
+  // Cache requests for thumbnails
   const url = new URL(event.request.url);
-  if (/^\/api\/assets\/[a-f0-9-]+\/(original|thumbnail)/.test(url.pathname)) {
-    event.respondWith(immichAsset(url));
-  }
-});
-
-async function deleteOldCaches() {
-  for (const key of await caches.keys()) {
-    if (key !== CACHE) {
-      await caches.delete(key);
-    }
-  }
-}
-
-async function immichAsset(url: URL) {
-  const cache = await caches.open(CACHE);
-  let response = useCache ? await cache.match(url) : undefined;
-  if (response) {
-    return response;
-  }
-  try {
-    const cancelToken = new AbortController();
-    const request = fetch(url, {
-      signal: cancelToken.signal,
-    });
-    pendingLoads.set(url.toString(), cancelToken);
-    response = await request;
-    if (!(response instanceof Response)) {
-      throw new TypeError('invalid response from fetch');
-    }
-    if (response.status === 200) {
-      cache.put(url, response.clone());
-    }
-    return response;
-  } catch {
-    return Response.error();
-  } finally {
-    pendingLoads.delete(url.toString());
-  }
-}
-
-const broadcast = new BroadcastChannel('immich');
-// eslint-disable-next-line  unicorn/prefer-add-event-listener
-broadcast.onmessage = (event) => {
-  if (!event.data) {
+  if (url.origin === self.location.origin && ASSET_REQUEST_REGEX.test(url.pathname)) {
+    event.respondWith(handleAssetFetch(event.request));
     return;
   }
-  const urlstring = event.data.url;
-  const url = new URL(urlstring, event.origin);
-  if (event.data.type === 'cancel') {
-    const pending = pendingLoads.get(url.toString());
-    if (pending) {
-      pending.abort();
-      pendingLoads.delete(url.toString());
-    }
-  } else if (event.data.type === 'preload') {
-    immichAsset(url);
-  }
 };
+
+sw.addEventListener('install', handleInstall, { passive: true });
+sw.addEventListener('activate', handleActivate, { passive: true });
+sw.addEventListener('fetch', handleFetch, { passive: true });
+installMessageListener();

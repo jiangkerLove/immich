@@ -27,7 +27,8 @@
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_nl_NL.md">Nederlands</a>
   <a href="README_tr_TR.md">Türkçe</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_uk_UA.md">Українська</a>
   <a href="README_ru_RU.md">Русский</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
@@ -36,26 +37,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## Advertencia
+> [!WARNING]
+> ⚠️ Siempre sigue el plan de backups [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) para tus fotos y videos.
+>
 
-- ⚠️ El proyecto está en **activo desarrollo**.
-- ⚠️ Es probable que haya errores y cambios disruptivos.
-- ⚠️ **¡No utilices la aplicación como única forma de almacenar tus fotos y videos!**
-- ⚠️ Siempre sigue el plan de backups [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) para tus fotos y videos.
+> [!NOTE]
+> Puedes encontrar la documentación oficial, incluidas las guías de instalación, en <https://immich.app/>.
 
 ## Contenido
 
-- [Documentación oficial](https://immich.app/docs)
-- [Hoja de ruta](https://github.com/orgs/immich-app/projects/1)
+- [Documentación](https://docs.immich.app/)
+- [Introducción](https://docs.immich.app/overview/introduction)
+- [Instalación](https://docs.immich.app/install/requirements)
+- [Hoja de ruta](https://immich.app/roadmap)
 - [Demo](#demo)
 - [Funciones](#funciones)
-- [Introducción](https://immich.app/docs/overview/introduction)
-- [Instalación](https://immich.app/docs/install/requirements)
-- [Directrices para contribuir](https://immich.app/docs/overview/support-the-project)
-
-## Documentación
-
-Puedes encontrar la documentación oficial, incluidas las guías de instalación, en <https://immich.app/>.
+- [Traducciones](https://docs.immich.app/developer/translations)
+- [Directrices para contribuir](https://docs.immich.app/overview/support-the-project)
 
 ## Demo
 
@@ -99,7 +97,7 @@ contraseña: demo
 
 ## Traducciones
 
-Lea mas acerca de las traducciones [acá](https://immich.app/docs/developer/translations).
+Lea mas acerca de las traducciones [acá](https://docs.immich.app/developer/translations).
 
 <a href="https://hosted.weblate.org/engage/immich/">
 <img src="https://hosted.weblate.org/widget/immich/immich/multi-auto.svg" alt="Translation status" />

@@ -1,38 +1,28 @@
 import 'dart:io';
 
-import 'package:background_downloader/background_downloader.dart';
-import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:immich_mobile/constants/constants.dart';
-import 'package:immich_mobile/extensions/string_extensions.dart';
 import 'package:immich_mobile/models/upload/share_intent_attachment.model.dart';
 import 'package:immich_mobile/routing/router.dart';
+import 'package:immich_mobile/services/foreground_upload.service.dart';
 import 'package:immich_mobile/services/share_intent_service.dart';
-import 'package:immich_mobile/services/upload.service.dart';
+import 'package:logging/logging.dart';
+import 'package:path/path.dart' as p;
 
-final shareIntentUploadProvider = StateNotifierProvider<
-    ShareIntentUploadStateNotifier, List<ShareIntentAttachment>>(
+final shareIntentUploadProvider = StateNotifierProvider<ShareIntentUploadStateNotifier, List<ShareIntentAttachment>>(
   ((ref) => ShareIntentUploadStateNotifier(
-        ref.watch(appRouterProvider),
-        ref.watch(uploadServiceProvider),
-        ref.watch(shareIntentServiceProvider),
-      )),
+    ref.watch(appRouterProvider),
+    ref.read(foregroundUploadServiceProvider),
+    ref.read(shareIntentServiceProvider),
+  )),
 );
 
-class ShareIntentUploadStateNotifier
-    extends StateNotifier<List<ShareIntentAttachment>> {
+class ShareIntentUploadStateNotifier extends StateNotifier<List<ShareIntentAttachment>> {
   final AppRouter router;
-  final UploadService _uploadService;
+  final ForegroundUploadService _foregroundUploadService;
   final ShareIntentService _shareIntentService;
+  final Logger _logger = Logger('ShareIntentUploadStateNotifier');
 
-  ShareIntentUploadStateNotifier(
-    this.router,
-    this._uploadService,
-    this._shareIntentService,
-  ) : super([]) {
-    _uploadService.onUploadStatus = _uploadStatusCallback;
-    _uploadService.onTaskProgress = _taskProgressCallback;
-  }
+  ShareIntentUploadStateNotifier(this.router, this._foregroundUploadService, this._shareIntentService) : super([]);
 
   void init() {
     _shareIntentService.onSharedMedia = onSharedMedia;
@@ -54,8 +44,7 @@ class ShareIntentUploadStateNotifier
   }
 
   void removeAttachment(ShareIntentAttachment attachment) {
-    final updatedState =
-        state.where((element) => element != attachment).toList();
+    final updatedState = state.where((element) => element != attachment).toList();
     if (updatedState.length != state.length) {
       state = updatedState;
     }
@@ -69,75 +58,44 @@ class ShareIntentUploadStateNotifier
     state = [];
   }
 
-  void _updateUploadStatus(TaskStatusUpdate task, TaskStatus status) async {
-    if (status == TaskStatus.canceled) {
-      return;
+  Future<void> uploadAll(List<File> files) async {
+    for (final file in files) {
+      final fileId = p.hash(file.path).toString();
+      _updateStatus(fileId, UploadStatus.running);
     }
 
-    final taskId = task.task.taskId;
-    final uploadStatus = switch (task.status) {
-      TaskStatus.complete => UploadStatus.complete,
-      TaskStatus.failed => UploadStatus.failed,
-      TaskStatus.canceled => UploadStatus.canceled,
-      TaskStatus.enqueued => UploadStatus.enqueued,
-      TaskStatus.running => UploadStatus.running,
-      TaskStatus.paused => UploadStatus.paused,
-      TaskStatus.notFound => UploadStatus.notFound,
-      TaskStatus.waitingToRetry => UploadStatus.waitingtoRetry
-    };
+    await _foregroundUploadService.uploadShareIntent(
+      files,
+      onProgress: (fileId, bytes, totalBytes) {
+        final progress = totalBytes > 0 ? bytes / totalBytes : 0.0;
+        _updateProgress(fileId, progress);
+      },
+      onSuccess: (fileId, _) {
+        _updateStatus(fileId, UploadStatus.complete, progress: 1.0);
+      },
+      onError: (fileId, errorMessage) {
+        _logger.warning("Upload failed for file: $fileId, error: $errorMessage");
+        _updateStatus(fileId, UploadStatus.failed);
+      },
+    );
+  }
 
+  void _updateStatus(String fileId, UploadStatus status, {double? progress}) {
+    final id = int.parse(fileId);
     state = [
       for (final attachment in state)
-        if (attachment.id == taskId.toInt())
-          attachment.copyWith(status: uploadStatus)
+        if (attachment.id == id)
+          attachment.copyWith(status: status, uploadProgress: progress ?? attachment.uploadProgress)
         else
           attachment,
     ];
   }
 
-  void _uploadStatusCallback(TaskStatusUpdate update) {
-    _updateUploadStatus(update, update.status);
-
-    switch (update.status) {
-      case TaskStatus.complete:
-        if (update.responseStatusCode == 200) {
-          if (kDebugMode) {
-            debugPrint("[COMPLETE] ${update.task.taskId} - DUPLICATE");
-          }
-        } else {
-          if (kDebugMode) {
-            debugPrint("[COMPLETE] ${update.task.taskId}");
-          }
-        }
-        break;
-
-      default:
-        break;
-    }
-  }
-
-  void _taskProgressCallback(TaskProgressUpdate update) {
-    // Ignore if the task is canceled or completed
-    if (update.progress == downloadFailed ||
-        update.progress == downloadCompleted) {
-      return;
-    }
-
-    final taskId = update.task.taskId;
+  void _updateProgress(String fileId, double progress) {
+    final id = int.parse(fileId);
     state = [
       for (final attachment in state)
-        if (attachment.id == taskId.toInt())
-          attachment.copyWith(uploadProgress: update.progress)
-        else
-          attachment,
+        if (attachment.id == id) attachment.copyWith(uploadProgress: progress) else attachment,
     ];
-  }
-
-  Future<void> upload(File file) {
-    return _uploadService.upload(file);
-  }
-
-  Future<bool> cancelUpload(String id) {
-    return _uploadService.cancelUpload(id);
   }
 }

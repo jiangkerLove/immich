@@ -1,23 +1,55 @@
 import { Injectable } from '@nestjs/common';
 import { join } from 'node:path';
+import { ErrorMessages } from 'src/constants';
 import { StorageCore } from 'src/cores/storage.core';
 import { OnEvent, OnJob } from 'src/decorators';
-import { DatabaseLock, JobName, JobStatus, QueueName, StorageFolder, SystemMetadataKey } from 'src/enum';
+import {
+  BootstrapEventPriority,
+  DatabaseLock,
+  JobName,
+  JobStatus,
+  QueueName,
+  StorageFolder,
+  SystemMetadataKey,
+} from 'src/enum';
 import { BaseService } from 'src/services/base.service';
 import { JobOf, SystemFlags } from 'src/types';
 import { ImmichStartupError } from 'src/utils/misc';
 
-const docsMessage = `Please see https://immich.app/docs/administration/system-integrity#folder-checks for more information.`;
+const docsMessage = `Please see https://docs.immich.app/administration/system-integrity#folder-checks for more information.`;
 
 @Injectable()
 export class StorageService extends BaseService {
-  @OnEvent({ name: 'app.bootstrap' })
-  async onBootstrap() {
+  private detectMediaLocation(): string {
     const envData = this.configRepository.getEnv();
+    if (envData.storage.mediaLocation) {
+      return envData.storage.mediaLocation;
+    }
+
+    const targets: string[] = [];
+    const candidates = ['/data', '/usr/src/app/upload'];
+
+    for (const candidate of candidates) {
+      const exists = this.storageRepository.existsSync(candidate);
+      if (exists) {
+        targets.push(candidate);
+      }
+    }
+
+    if (targets.length === 1) {
+      return targets[0];
+    }
+
+    return '/usr/src/app/upload';
+  }
+
+  @OnEvent({ name: 'AppBootstrap', priority: BootstrapEventPriority.StorageService })
+  async onBootstrap() {
+    StorageCore.setMediaLocation(this.detectMediaLocation());
 
     await this.databaseRepository.withLock(DatabaseLock.SystemFileMounts, async () => {
       const flags =
-        (await this.systemMetadataRepository.get(SystemMetadataKey.SYSTEM_FLAGS)) ||
+        (await this.systemMetadataRepository.get(SystemMetadataKey.SystemFlags)) ||
         ({ mountChecks: {} } as SystemFlags);
 
       if (!flags.mountChecks) {
@@ -46,12 +78,13 @@ export class StorageService extends BaseService {
         }
 
         if (updated) {
-          await this.systemMetadataRepository.set(SystemMetadataKey.SYSTEM_FLAGS, flags);
+          await this.systemMetadataRepository.set(SystemMetadataKey.SystemFlags, flags);
           this.logger.log('Successfully enabled system mount folders checks');
         }
 
         this.logger.log('Successfully verified system mount folder checks');
       } catch (error) {
+        const envData = this.configRepository.getEnv();
         if (envData.storage.ignoreMountCheckErrors) {
           this.logger.error(error as Error);
           this.logger.warn('Ignoring mount folder errors');
@@ -60,10 +93,47 @@ export class StorageService extends BaseService {
         }
       }
     });
+
+    await this.databaseRepository.withLock(DatabaseLock.MediaLocation, async () => {
+      const current = StorageCore.getMediaLocation();
+      const samples = await this.assetRepository.getFileSamples();
+      const savedValue = await this.systemMetadataRepository.get(SystemMetadataKey.MediaLocation);
+      if (samples.length > 0) {
+        const path = samples[0].path;
+
+        let previous = savedValue?.location || '';
+
+        if (!previous && this.configRepository.getEnv().storage.mediaLocation) {
+          previous = current;
+        }
+
+        if (!previous) {
+          previous = path.startsWith('upload/') ? 'upload' : '/usr/src/app/upload';
+        }
+
+        if (previous !== current) {
+          this.logger.log(`Media location changed (from=${previous}, to=${current})`);
+
+          if (!path.startsWith(previous)) {
+            throw new Error(ErrorMessages.InconsistentMediaLocation);
+          }
+
+          this.logger.warn(
+            `Detected a change to media location, performing an automatic migration of file paths from ${previous} to ${current}, this may take awhile`,
+          );
+          await this.databaseRepository.migrateFilePaths(previous, current);
+        }
+      }
+
+      // Only set MediaLocation in systemMetadataRepository if needed
+      if (savedValue?.location !== current) {
+        await this.systemMetadataRepository.set(SystemMetadataKey.MediaLocation, { location: current });
+      }
+    });
   }
 
-  @OnJob({ name: JobName.DELETE_FILES, queue: QueueName.BACKGROUND_TASK })
-  async handleDeleteFiles(job: JobOf<JobName.DELETE_FILES>): Promise<JobStatus> {
+  @OnJob({ name: JobName.FileDelete, queue: QueueName.BackgroundTask })
+  async handleDeleteFiles(job: JobOf<JobName.FileDelete>): Promise<JobStatus> {
     const { files } = job;
 
     // TODO: one job per file
@@ -79,7 +149,7 @@ export class StorageService extends BaseService {
       }
     }
 
-    return JobStatus.SUCCESS;
+    return JobStatus.Success;
   }
 
   private async verifyReadAccess(folder: StorageFolder) {
@@ -87,8 +157,8 @@ export class StorageService extends BaseService {
     try {
       await this.storageRepository.readFile(internalPath);
     } catch (error) {
-      this.logger.error(`Failed to read ${internalPath}: ${error}`);
-      throw new ImmichStartupError(`Failed to read "${externalPath} - ${docsMessage}"`);
+      this.logger.error(`Failed to read (${internalPath}): ${error}`);
+      throw new ImmichStartupError(`Failed to read: "${externalPath} (${internalPath}) - ${docsMessage}"`);
     }
   }
 

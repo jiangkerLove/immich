@@ -1,27 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:immich_mobile/widgets/activities/activity_tile.dart';
 import 'package:immich_mobile/widgets/common/confirm_dialog.dart';
 
-/// Wraps an [ActivityTile] and makes it dismissible
 class DismissibleActivity extends StatelessWidget {
   final String activityId;
-  final ActivityTile body;
+  final Widget body;
   final Function(String)? onDismiss;
 
-  const DismissibleActivity(
-    this.activityId,
-    this.body, {
-    this.onDismiss,
-    super.key,
-  });
+  const DismissibleActivity(this.activityId, this.body, {this.onDismiss, super.key});
 
   @override
   Widget build(BuildContext context) {
+    if (onDismiss == null) {
+      return body;
+    }
+
     return Dismissible(
       key: Key(activityId),
-      dismissThresholds: const {
-        DismissDirection.horizontal: 0.7,
-      },
+      dismissThresholds: const {DismissDirection.horizontal: 0.7},
       direction: DismissDirection.horizontal,
       confirmDismiss: (direction) => onDismiss != null
           ? showDialog(
@@ -51,10 +46,7 @@ class _DismissBackground extends StatelessWidget {
   final AlignmentDirectional alignment;
   final bool withDeleteIcon;
 
-  const _DismissBackground({
-    required this.withDeleteIcon,
-    this.alignment = AlignmentDirectional.centerStart,
-  });
+  const _DismissBackground({required this.withDeleteIcon, this.alignment = AlignmentDirectional.centerStart});
 
   @override
   Widget build(BuildContext context) {
@@ -64,10 +56,7 @@ class _DismissBackground extends StatelessWidget {
       child: withDeleteIcon
           ? const Padding(
               padding: EdgeInsets.all(15),
-              child: Icon(
-                Icons.delete_sweep_rounded,
-                color: Colors.black,
-              ),
+              child: Icon(Icons.delete_sweep_rounded, color: Colors.black),
             )
           : null,
     );

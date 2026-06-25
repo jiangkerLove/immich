@@ -1,17 +1,12 @@
-import { browser } from '$app/environment';
-import { Theme, defaultLang } from '$lib/constants';
-import { getPreferredLocale } from '$lib/utils/i18n';
 import { persisted } from 'svelte-persisted-store';
-
-export interface ThemeSetting {
-  value: Theme;
-  system: boolean;
-}
+import { browser } from '$app/environment';
+import { defaultLang } from '$lib/constants';
+import { convertBCP47, getPreferredLocale } from '$lib/utils/i18n';
 
 // Locale to use for formatting dates, numbers, etc.
-export const locale = persisted<string | undefined>('locale', 'default', {
+export const locale = persisted('locale', 'default', {
   serializer: {
-    parse: (text) => text || 'default',
+    parse: (text) => convertBCP47(text) || 'default',
     stringify: (object) => object ?? '',
   },
 });
@@ -19,7 +14,7 @@ export const locale = persisted<string | undefined>('locale', 'default', {
 const preferredLocale = browser ? getPreferredLocale() : undefined;
 export const lang = persisted<string>('lang', preferredLocale || defaultLang.code, {
   serializer: {
-    parse: (text) => text,
+    parse: (text) => convertBCP47(text),
     stringify: (object) => object ?? '',
   },
 });
@@ -31,8 +26,8 @@ export interface MapSettings {
   withPartners: boolean;
   withSharedAlbums: boolean;
   relativeDate: string;
-  dateAfter: string;
-  dateBefore: string;
+  dateAfter?: string;
+  dateBefore?: string;
 }
 
 const defaultMapSettings = {
@@ -42,24 +37,17 @@ const defaultMapSettings = {
   withPartners: false,
   withSharedAlbums: false,
   relativeDate: '',
-  dateAfter: '',
-  dateBefore: '',
 };
 
 const persistedObject = <T>(key: string, defaults: T) =>
   persisted<T>(key, defaults, {
     serializer: {
-      parse: (text) => ({ ...defaultMapSettings, ...JSON.parse(text ?? null) }),
+      parse: (text) => ({ ...defaults, ...JSON.parse(text ?? null) }),
       stringify: JSON.stringify,
     },
   });
 
 export const mapSettings = persistedObject<MapSettings>('map-settings', defaultMapSettings);
-
-export const videoViewerVolume = persisted<number>('video-viewer-volume', 1, {});
-export const videoViewerMuted = persisted<boolean>('video-viewer-muted', false, {});
-
-export const isShowDetail = persisted<boolean>('info-opened', false, {});
 
 export interface AlbumViewSettings {
   view: string;
@@ -145,5 +133,9 @@ export const alwaysLoadOriginalFile = persisted<boolean>('always-load-original-f
 export const playVideoThumbnailOnHover = persisted<boolean>('play-video-thumbnail-on-hover', true, {});
 
 export const loopVideo = persisted<boolean>('loop-video', true, {});
+
+export const autoPlayVideo = persisted<boolean>('auto-play-video', true, {});
+
+export const alwaysLoadOriginalVideo = persisted<boolean>('always-load-original-video', false, {});
 
 export const recentAlbumsDropdown = persisted<boolean>('recent-albums-open', true, {});

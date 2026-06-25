@@ -25,19 +25,14 @@ mixin HitCornersDetector on PhotoViewControllerDelegate {
     return HitCorners(y <= cornersY.min, y >= cornersY.max);
   }
 
-  bool _shouldMoveAxis(
-    HitCorners hitCorners,
-    double mainAxisMove,
-    double crossAxisMove,
-  ) {
+  bool _shouldMoveAxis(HitCorners hitCorners, double mainAxisMove) {
     if (mainAxisMove == 0) {
       return false;
     }
     if (!hitCorners.hasHitAny) {
       return true;
     }
-    final axisBlocked = hitCorners.hasHitBoth ||
-        (hitCorners.hasHitMax ? mainAxisMove > 0 : mainAxisMove < 0);
+    final axisBlocked = hitCorners.hasHitBoth || (hitCorners.hasHitMax ? mainAxisMove > 0 : mainAxisMove < 0);
     if (axisBlocked) {
       return false;
     }
@@ -47,17 +42,15 @@ mixin HitCornersDetector on PhotoViewControllerDelegate {
   bool _shouldMoveX(Offset move) {
     final hitCornersX = _hitCornersX();
     final mainAxisMove = move.dx;
-    final crossAxisMove = move.dy;
 
-    return _shouldMoveAxis(hitCornersX, mainAxisMove, crossAxisMove);
+    return _shouldMoveAxis(hitCornersX, mainAxisMove);
   }
 
   bool _shouldMoveY(Offset move) {
     final hitCornersY = _hitCornersY();
     final mainAxisMove = move.dy;
-    final crossAxisMove = move.dx;
 
-    return _shouldMoveAxis(hitCornersY, mainAxisMove, crossAxisMove);
+    return _shouldMoveAxis(hitCornersY, mainAxisMove);
   }
 
   bool shouldMove(Offset move, Axis mainAxis) {

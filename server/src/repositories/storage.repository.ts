@@ -1,11 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import archiver from 'archiver';
-import chokidar, { WatchOptions } from 'chokidar';
+import chokidar, { ChokidarOptions } from 'chokidar';
 import { escapePath, glob, globStream } from 'fast-glob';
-import { constants, createReadStream, createWriteStream, existsSync, mkdirSync } from 'node:fs';
+import {
+  constants,
+  createReadStream,
+  createWriteStream,
+  Dirent,
+  existsSync,
+  mkdirSync,
+  ReadOptionsWithBuffer,
+  watch,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Readable, Writable } from 'node:stream';
+import { PassThrough, Readable, Writable } from 'node:stream';
+import { createGunzip, createGzip } from 'node:zlib';
 import { CrawlOptionsDto, WalkOptionsDto } from 'src/dtos/library.dto';
 import { LoggingRepository } from 'src/repositories/logging.repository';
 import { mimeTypes } from 'src/utils/mime-types';
@@ -49,6 +59,10 @@ export class StorageRepository {
     return fs.readdir(folder);
   }
 
+  readdirWithTypes(folder: string): Promise<Dirent[]> {
+    return fs.readdir(folder, { withFileTypes: true });
+  }
+
   copyFile(source: string, target: string) {
     return fs.copyFile(source, target);
   }
@@ -62,7 +76,7 @@ export class StorageRepository {
   }
 
   createWriteStream(filepath: string): Writable {
-    return createWriteStream(filepath, { flags: 'w' });
+    return createWriteStream(filepath, { flags: 'w', flush: true });
   }
 
   createOrOverwriteFile(filepath: string, buffer: Buffer) {
@@ -93,6 +107,18 @@ export class StorageRepository {
     return { stream: archive, addFile, finalize };
   }
 
+  createGzip(): PassThrough {
+    return createGzip();
+  }
+
+  createGunzip(): PassThrough {
+    return createGunzip();
+  }
+
+  createPlainReadStream(filepath: string): Readable {
+    return createReadStream(filepath);
+  }
+
   async createReadStream(filepath: string, mimeType?: string | null): Promise<ImmichReadStream> {
     const { size } = await fs.stat(filepath);
     await fs.access(filepath, constants.R_OK);
@@ -103,14 +129,25 @@ export class StorageRepository {
     };
   }
 
-  async readFile(filepath: string, options?: fs.FileReadOptions<Buffer>): Promise<Buffer> {
-    const file = await fs.open(filepath);
-    try {
-      const { buffer } = await file.read(options);
-      return buffer;
-    } finally {
-      await file.close();
+  async readFile(filepath: string, options?: ReadOptionsWithBuffer<Buffer>): Promise<Buffer> {
+    // read a slice
+    if (options) {
+      const file = await fs.open(filepath);
+      try {
+        const { buffer } = await file.read(options);
+        return buffer as Buffer;
+      } finally {
+        await file.close();
+      }
     }
+
+    // read everything
+    return fs.readFile(filepath);
+  }
+
+  async readJsonFile<T>(filepath: string): Promise<T> {
+    const file = await fs.readFile(filepath, 'utf8');
+    return JSON.parse(file) as T;
   }
 
   async checkFileExists(filepath: string, mode = constants.F_OK): Promise<boolean> {
@@ -135,7 +172,7 @@ export class StorageRepository {
   }
 
   async unlinkDir(folder: string, options: { recursive?: boolean; force?: boolean }) {
-    await fs.rm(folder, options);
+    await fs.rm(folder, { ...options, maxRetries: 5, retryDelay: 100 });
   }
 
   async removeEmptyDirs(directory: string, self: boolean = false) {
@@ -151,7 +188,13 @@ export class StorageRepository {
     if (self) {
       const updated = await fs.readdir(directory);
       if (updated.length === 0) {
-        await fs.rmdir(directory);
+        try {
+          await fs.rmdir(directory);
+        } catch (error: Error | any) {
+          if (error.code !== 'ENOTEMPTY') {
+            this.logger.warn(`Attempted to remove directory, but failed: ${error}`);
+          }
+        }
       }
     }
   }
@@ -160,6 +203,10 @@ export class StorageRepository {
     if (!existsSync(filepath)) {
       mkdirSync(filepath, { recursive: true });
     }
+  }
+
+  existsSync(filepath: string) {
+    return existsSync(filepath);
   }
 
   async checkDiskUsage(folder: string): Promise<DiskUsage> {
@@ -219,17 +266,19 @@ export class StorageRepository {
     }
   }
 
-  watch(paths: string[], options: WatchOptions, events: Partial<WatchEvents>) {
+  watch(paths: string[], options: ChokidarOptions, events: Partial<WatchEvents>) {
     const watcher = chokidar.watch(paths, options);
 
     watcher.on('ready', () => events.onReady?.());
     watcher.on('add', (path) => events.onAdd?.(path));
     watcher.on('change', (path) => events.onChange?.(path));
     watcher.on('unlink', (path) => events.onUnlink?.(path));
-    watcher.on('error', (error) => events.onError?.(error));
+    watcher.on('error', (error) => events.onError?.(error as Error));
 
     return () => watcher.close();
   }
+
+  watchDir = watch; // Native fs.watch without chokidar overhead
 
   private asGlob(pathToCrawl: string): string {
     const escapedPath = escapePath(pathToCrawl).replaceAll('"', '["]').replaceAll("'", "[']").replaceAll('`', '[`]');

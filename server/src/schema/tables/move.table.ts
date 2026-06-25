@@ -1,5 +1,5 @@
+import { Column, Generated, PrimaryGeneratedColumn, Table, Unique } from '@immich/sql-tools';
 import { PathType } from 'src/enum';
-import { Column, PrimaryGeneratedColumn, Table, Unique } from 'src/sql-tools';
 
 @Table('move_history')
 // path lock (per entity)
@@ -8,7 +8,7 @@ import { Column, PrimaryGeneratedColumn, Table, Unique } from 'src/sql-tools';
 @Unique({ name: 'UQ_newPath', columns: ['newPath'] })
 export class MoveTable {
   @PrimaryGeneratedColumn()
-  id!: string;
+  id!: Generated<string>;
 
   @Column({ type: 'uuid' })
   entityId!: string;

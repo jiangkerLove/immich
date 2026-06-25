@@ -13,7 +13,7 @@ part of openapi.api;
 class SharedLinkResponseDto {
   /// Returns a new [SharedLinkResponseDto] instance.
   SharedLinkResponseDto({
-    this.album,
+    this.album = const Optional.absent(),
     required this.allowDownload,
     required this.allowUpload,
     this.assets = const [],
@@ -24,7 +24,7 @@ class SharedLinkResponseDto {
     required this.key,
     required this.password,
     required this.showMetadata,
-    this.token,
+    required this.slug,
     required this.type,
     required this.userId,
   });
@@ -35,32 +35,43 @@ class SharedLinkResponseDto {
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  AlbumResponseDto? album;
+  Optional<AlbumResponseDto?> album;
 
+  /// Allow downloads
   bool allowDownload;
 
+  /// Allow uploads
   bool allowUpload;
 
   List<AssetResponseDto> assets;
 
+  /// Creation date
   DateTime createdAt;
 
+  /// Link description
   String? description;
 
+  /// Expiration date
   DateTime? expiresAt;
 
+  /// Shared link ID
   String id;
 
+  /// Encryption key (base64url)
   String key;
 
+  /// Has password
   String? password;
 
+  /// Show metadata
   bool showMetadata;
 
-  String? token;
+  /// Custom URL slug
+  String? slug;
 
   SharedLinkType type;
 
+  /// Owner user ID
   String userId;
 
   @override
@@ -76,7 +87,7 @@ class SharedLinkResponseDto {
     other.key == key &&
     other.password == password &&
     other.showMetadata == showMetadata &&
-    other.token == token &&
+    other.slug == slug &&
     other.type == type &&
     other.userId == userId;
 
@@ -94,46 +105,49 @@ class SharedLinkResponseDto {
     (key.hashCode) +
     (password == null ? 0 : password!.hashCode) +
     (showMetadata.hashCode) +
-    (token == null ? 0 : token!.hashCode) +
+    (slug == null ? 0 : slug!.hashCode) +
     (type.hashCode) +
     (userId.hashCode);
 
   @override
-  String toString() => 'SharedLinkResponseDto[album=$album, allowDownload=$allowDownload, allowUpload=$allowUpload, assets=$assets, createdAt=$createdAt, description=$description, expiresAt=$expiresAt, id=$id, key=$key, password=$password, showMetadata=$showMetadata, token=$token, type=$type, userId=$userId]';
+  String toString() => 'SharedLinkResponseDto[album=$album, allowDownload=$allowDownload, allowUpload=$allowUpload, assets=$assets, createdAt=$createdAt, description=$description, expiresAt=$expiresAt, id=$id, key=$key, password=$password, showMetadata=$showMetadata, slug=$slug, type=$type, userId=$userId]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.album != null) {
-      json[r'album'] = this.album;
-    } else {
-    //  json[r'album'] = null;
+    if (this.album.isPresent) {
+      final value = this.album.value;
+      json[r'album'] = value;
     }
       json[r'allowDownload'] = this.allowDownload;
       json[r'allowUpload'] = this.allowUpload;
       json[r'assets'] = this.assets;
-      json[r'createdAt'] = this.createdAt.toUtc().toIso8601String();
+      json[r'createdAt'] = _isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? this.createdAt.millisecondsSinceEpoch
+        : this.createdAt.toUtc().toIso8601String();
     if (this.description != null) {
       json[r'description'] = this.description;
     } else {
-    //  json[r'description'] = null;
+      json[r'description'] = null;
     }
     if (this.expiresAt != null) {
-      json[r'expiresAt'] = this.expiresAt!.toUtc().toIso8601String();
+      json[r'expiresAt'] = _isEpochMarker(r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')
+        ? this.expiresAt!.millisecondsSinceEpoch
+        : this.expiresAt!.toUtc().toIso8601String();
     } else {
-    //  json[r'expiresAt'] = null;
+      json[r'expiresAt'] = null;
     }
       json[r'id'] = this.id;
       json[r'key'] = this.key;
     if (this.password != null) {
       json[r'password'] = this.password;
     } else {
-    //  json[r'password'] = null;
+      json[r'password'] = null;
     }
       json[r'showMetadata'] = this.showMetadata;
-    if (this.token != null) {
-      json[r'token'] = this.token;
+    if (this.slug != null) {
+      json[r'slug'] = this.slug;
     } else {
-    //  json[r'token'] = null;
+      json[r'slug'] = null;
     }
       json[r'type'] = this.type;
       json[r'userId'] = this.userId;
@@ -149,18 +163,18 @@ class SharedLinkResponseDto {
       final json = value.cast<String, dynamic>();
 
       return SharedLinkResponseDto(
-        album: AlbumResponseDto.fromJson(json[r'album']),
+        album: json.containsKey(r'album') ? Optional.present(AlbumResponseDto.fromJson(json[r'album'])) : const Optional.absent(),
         allowDownload: mapValueOfType<bool>(json, r'allowDownload')!,
         allowUpload: mapValueOfType<bool>(json, r'allowUpload')!,
         assets: AssetResponseDto.listFromJson(json[r'assets']),
-        createdAt: mapDateTime(json, r'createdAt', r'')!,
+        createdAt: mapDateTime(json, r'createdAt', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/')!,
         description: mapValueOfType<String>(json, r'description'),
-        expiresAt: mapDateTime(json, r'expiresAt', r''),
+        expiresAt: mapDateTime(json, r'expiresAt', r'/^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$/'),
         id: mapValueOfType<String>(json, r'id')!,
         key: mapValueOfType<String>(json, r'key')!,
         password: mapValueOfType<String>(json, r'password'),
         showMetadata: mapValueOfType<bool>(json, r'showMetadata')!,
-        token: mapValueOfType<String>(json, r'token'),
+        slug: mapValueOfType<String>(json, r'slug'),
         type: SharedLinkType.fromJson(json[r'type'])!,
         userId: mapValueOfType<String>(json, r'userId')!,
       );
@@ -220,6 +234,7 @@ class SharedLinkResponseDto {
     'key',
     'password',
     'showMetadata',
+    'slug',
     'type',
     'userId',
   };

@@ -1,22 +1,28 @@
 <script lang="ts">
-  import UserPageLayout from '$lib/components/layouts/user-page-layout.svelte';
-  import {
-    NotificationType,
-    notificationController,
-  } from '$lib/components/shared-components/notification/notification';
-  import DuplicatesCompareControl from '$lib/components/utilities-page/duplicates/duplicates-compare-control.svelte';
-  import { modalManager } from '$lib/managers/modal-manager.svelte';
-  import DuplicatesInformationModal from '$lib/modals/DuplicatesInformationModal.svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
+  import { shortcuts } from '$lib/actions/shortcut';
+  import UserPageLayout from '$lib/components/layouts/UserPageLayout.svelte';
+  import LinkToDocs from './LinkToDocs.svelte';
+  import DuplicatesCompareControl from './DuplicatesCompareControl.svelte';
+  import { assetViewerManager } from '$lib/managers/asset-viewer-manager.svelte';
+  import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
   import ShortcutsModal from '$lib/modals/ShortcutsModal.svelte';
+  import { Route } from '$lib/route';
   import { locale } from '$lib/stores/preferences.store';
-  import { featureFlags } from '$lib/stores/server-config.store';
-  import { stackAssets } from '$lib/utils/asset-utils';
-  import { suggestDuplicate } from '$lib/utils/duplicate-utils';
   import { handleError } from '$lib/utils/handle-error';
   import type { AssetResponseDto } from '@immich/sdk';
-  import { deleteAssets, updateAssets } from '@immich/sdk';
-  import { Button, HStack, IconButton, Text } from '@immich/ui';
-  import { mdiCheckOutline, mdiInformationOutline, mdiKeyboard, mdiTrashCanOutline } from '@mdi/js';
+  import { createStack, deleteDuplicates, resolveDuplicates, updateAssets } from '@immich/sdk';
+  import { Button, HStack, IconButton, modalManager, Text, toastManager } from '@immich/ui';
+  import {
+    mdiCheckOutline,
+    mdiChevronLeft,
+    mdiChevronRight,
+    mdiKeyboard,
+    mdiPageFirst,
+    mdiPageLast,
+    mdiTrashCanOutline,
+  } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';
 
@@ -48,6 +54,19 @@
   };
 
   let duplicates = $state(data.duplicates);
+
+  const correctDuplicatesIndex = (index: number) => {
+    return Math.max(0, Math.min(index, duplicates.length - 1));
+  };
+
+  let duplicatesIndex = $derived(
+    (() => {
+      const indexParam = page.url.searchParams.get('index') ?? '0';
+      const parsedIndex = Number.parseInt(indexParam, 10);
+      return correctDuplicatesIndex(Number.isNaN(parsedIndex) ? 0 : parsedIndex);
+    })(),
+  );
+
   let hasDuplicates = $derived(duplicates.length > 0);
   const withConfirmation = async (callback: () => Promise<void>, prompt?: string, confirmText?: string) => {
     if (prompt && confirmText) {
@@ -69,44 +88,58 @@
       return;
     }
 
-    notificationController.show({
-      message: $featureFlags.trash
-        ? $t('assets_moved_to_trash_count', { values: { count: trashedCount } })
-        : $t('permanently_deleted_assets_count', { values: { count: trashedCount } }),
-      type: NotificationType.Info,
-    });
+    const message = featureFlagsManager.value.trash
+      ? $t('assets_moved_to_trash_count', { values: { count: trashedCount } })
+      : $t('permanently_deleted_assets_count', { values: { count: trashedCount } });
+    toastManager.primary(message);
   };
 
   const handleResolve = async (duplicateId: string, duplicateAssetIds: string[], trashIds: string[]) => {
+    const forceDelete = !featureFlagsManager.value.trash;
+    const shouldConfirmDelete = trashIds.length > 0 && forceDelete;
+
     return withConfirmation(
       async () => {
-        await deleteAssets({ assetBulkDeleteDto: { ids: trashIds, force: !$featureFlags.trash } });
-        await updateAssets({ assetBulkUpdateDto: { ids: duplicateAssetIds, duplicateId: null } });
+        const keepAssetIds = duplicateAssetIds.filter((id) => !trashIds.includes(id));
+
+        const response = await resolveDuplicates({
+          duplicateResolveDto: {
+            groups: [{ duplicateId, keepAssetIds, trashAssetIds: trashIds }],
+          },
+        });
+
+        const { success, error, errorMessage } = response[0];
+        if (!success) {
+          throw new Error(errorMessage || error);
+        }
 
         duplicates = duplicates.filter((duplicate) => duplicate.duplicateId !== duplicateId);
 
         deletedNotification(trashIds.length);
+        await navigateToIndex(duplicatesIndex);
       },
-      trashIds.length > 0 && !$featureFlags.trash ? $t('delete_duplicates_confirmation') : undefined,
-      trashIds.length > 0 && !$featureFlags.trash ? $t('permanently_delete') : undefined,
+      shouldConfirmDelete ? $t('delete_duplicates_confirmation') : undefined,
+      shouldConfirmDelete ? $t('permanently_delete') : undefined,
     );
   };
 
   const handleStack = async (duplicateId: string, assets: AssetResponseDto[]) => {
-    await stackAssets(assets, false);
-    const duplicateAssetIds = assets.map((asset) => asset.id);
-    await updateAssets({ assetBulkUpdateDto: { ids: duplicateAssetIds, duplicateId: null } });
+    const assetIds = assets.map((asset) => asset.id);
+    await createStack({ stackCreateDto: { assetIds } });
+    await updateAssets({ assetBulkUpdateDto: { ids: assetIds, duplicateId: null } });
     duplicates = duplicates.filter((duplicate) => duplicate.duplicateId !== duplicateId);
+    await navigateToIndex(duplicatesIndex);
   };
 
   const handleDeduplicateAll = async () => {
-    const idsToKeep = duplicates.map((group) => suggestDuplicate(group.assets)).map((asset) => asset?.id);
-    const idsToDelete = duplicates.flatMap((group, i) =>
-      group.assets.map((asset) => asset.id).filter((asset) => asset !== idsToKeep[i]),
-    );
+    // Use server-provided suggestedKeepAssetIds from each group
+    const idsToDelete = duplicates.flatMap((group) => {
+      const keepIds = new Set(group.suggestedKeepAssetIds);
+      return group.assets.map((asset) => asset.id).filter((id) => !keepIds.has(id));
+    });
 
     let prompt, confirmText;
-    if ($featureFlags.trash) {
+    if (featureFlagsManager.value.trash) {
       prompt = $t('bulk_trash_duplicates_confirmation', { values: { count: idsToDelete.length } });
       confirmText = $t('confirm');
     } else {
@@ -116,17 +149,32 @@
 
     return withConfirmation(
       async () => {
-        await deleteAssets({ assetBulkDeleteDto: { ids: idsToDelete, force: !$featureFlags.trash } });
-        await updateAssets({
-          assetBulkUpdateDto: {
-            ids: [...idsToDelete, ...idsToKeep.filter((id): id is string => !!id)],
-            duplicateId: null,
+        // Resolve all groups in a single batch request
+        const response = await resolveDuplicates({
+          duplicateResolveDto: {
+            groups: duplicates.map((group) => {
+              const keepIds = new Set(group.suggestedKeepAssetIds);
+              return {
+                duplicateId: group.duplicateId,
+                keepAssetIds: group.suggestedKeepAssetIds,
+                trashAssetIds: group.assets.map((asset) => asset.id).filter((id) => !keepIds.has(id)),
+              };
+            }),
           },
         });
+
+        // Count failures and show appropriate message
+        const failedCount = response.filter(({ success }) => !success).length;
+        if (failedCount > 0) {
+          toastManager.danger($t('errors.unable_to_resolve_duplicate'));
+        }
 
         duplicates = [];
 
         deletedNotification(idsToDelete.length);
+
+        page.url.searchParams.delete('index');
+        await goto(Route.duplicatesUtility());
       },
       prompt,
       confirmText,
@@ -134,23 +182,39 @@
   };
 
   const handleKeepAll = async () => {
-    const ids = duplicates.flatMap((group) => group.assets.map((asset) => asset.id));
+    const ids = duplicates.map(({ duplicateId }) => duplicateId);
     return withConfirmation(
       async () => {
-        await updateAssets({ assetBulkUpdateDto: { ids, duplicateId: null } });
+        await deleteDuplicates({ bulkIdsDto: { ids } });
 
         duplicates = [];
 
-        notificationController.show({
-          message: $t('resolved_all_duplicates'),
-          type: NotificationType.Info,
-        });
+        toastManager.primary($t('resolved_all_duplicates'));
+        page.url.searchParams.delete('index');
+        await goto(Route.duplicatesUtility());
       },
       $t('bulk_keep_duplicates_confirmation', { values: { count: ids.length } }),
       $t('confirm'),
     );
   };
+
+  const handleFirst = () => navigateToIndex(0);
+  const handlePrevious = () => navigateToIndex(Math.max(duplicatesIndex - 1, 0));
+  const handleNext = async () => navigateToIndex(Math.min(duplicatesIndex + 1, duplicates.length - 1));
+  const handleLast = () => navigateToIndex(duplicates.length - 1);
+
+  const navigateToIndex = async (index: number) =>
+    goto(Route.duplicatesUtility({ index: correctDuplicatesIndex(index) }));
 </script>
+
+<svelte:document
+  use:shortcuts={assetViewerManager.isViewing
+    ? []
+    : [
+        { shortcut: { key: 'ArrowLeft' }, onShortcut: handlePrevious },
+        { shortcut: { key: 'ArrowRight' }, onShortcut: handleNext },
+      ]}
+/>
 
 <UserPageLayout title={data.meta.title + ` (${duplicates.length.toLocaleString($locale)})`} scrollbar={true}>
   {#snippet buttons()}
@@ -187,33 +251,74 @@
     </HStack>
   {/snippet}
 
-  <div class="">
+  <div>
     {#if duplicates && duplicates.length > 0}
-      <div class="flex items-center mb-2">
-        <div class="text-sm dark:text-white">
-          <p>{$t('duplicates_description')}</p>
-        </div>
-        <IconButton
-          shape="round"
-          variant="ghost"
-          color="secondary"
-          icon={mdiInformationOutline}
-          aria-label={$t('deduplication_info')}
-          size="small"
-          onclick={() => modalManager.show(DuplicatesInformationModal, {})}
-        />
-      </div>
+      <Text size="small" color="muted" class="mb-4">
+        <p>{$t('duplicates_description')} <LinkToDocs href="https://docs.immich.app/features/duplicates-utility" /></p>
+      </Text>
 
-      {#key duplicates[0].duplicateId}
+      {#key duplicates[duplicatesIndex].duplicateId}
         <DuplicatesCompareControl
-          assets={duplicates[0].assets}
+          assets={duplicates[duplicatesIndex].assets}
+          suggestedKeepAssetIds={duplicates[duplicatesIndex].suggestedKeepAssetIds}
           onResolve={(duplicateAssetIds, trashIds) =>
-            handleResolve(duplicates[0].duplicateId, duplicateAssetIds, trashIds)}
-          onStack={(assets) => handleStack(duplicates[0].duplicateId, assets)}
+            handleResolve(duplicates[duplicatesIndex].duplicateId, duplicateAssetIds, trashIds)}
+          onStack={(assets) => handleStack(duplicates[duplicatesIndex].duplicateId, assets)}
         />
+        <div class="mx-auto mb-16 max-w-5xl">
+          <div class="mb-4 flex w-full place-content-center place-items-center items-center justify-between sm:px-6">
+            <div class="flex text-xs text-black">
+              <Button
+                size="small"
+                leadingIcon={mdiPageFirst}
+                color="primary"
+                class="flex place-items-center gap-2 rounded-s-full px-2 sm:px-4"
+                onclick={handleFirst}
+                disabled={duplicatesIndex === 0}
+              >
+                {$t('first')}
+              </Button>
+              <Button
+                size="small"
+                leadingIcon={mdiChevronLeft}
+                color="primary"
+                class="flex place-items-center gap-2 rounded-e-full px-2 sm:px-4"
+                onclick={handlePrevious}
+                disabled={duplicatesIndex === 0}
+              >
+                {$t('previous')}
+              </Button>
+            </div>
+            <p class="rounded-lg border px-3 py-1 text-xs md:px-6 md:text-sm dark:bg-subtle">
+              {duplicatesIndex + 1} / {duplicates.length.toLocaleString($locale)}
+            </p>
+            <div class="flex text-xs text-black">
+              <Button
+                size="small"
+                trailingIcon={mdiChevronRight}
+                color="primary"
+                class="flex place-items-center gap-2 rounded-s-full px-2 sm:px-4"
+                onclick={handleNext}
+                disabled={duplicatesIndex === duplicates.length - 1}
+              >
+                {$t('next')}
+              </Button>
+              <Button
+                size="small"
+                trailingIcon={mdiPageLast}
+                color="primary"
+                class="flex place-items-center gap-2 rounded-e-full px-2 sm:px-4"
+                onclick={handleLast}
+                disabled={duplicatesIndex === duplicates.length - 1}
+              >
+                {$t('last')}
+              </Button>
+            </div>
+          </div>
+        </div>
       {/key}
     {:else}
-      <p class="text-center text-lg dark:text-white flex place-items-center place-content-center">
+      <p class="flex place-content-center place-items-center text-center text-lg dark:text-white">
         {$t('no_duplicates_found')}
       </p>
     {/if}

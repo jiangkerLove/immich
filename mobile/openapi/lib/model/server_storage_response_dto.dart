@@ -22,18 +22,34 @@ class ServerStorageResponseDto {
     required this.diskUseRaw,
   });
 
+  /// Available disk space (human-readable format)
   String diskAvailable;
 
+  /// Available disk space in bytes
+  ///
+  /// Minimum value: -9007199254740991
+  /// Maximum value: 9007199254740991
   int diskAvailableRaw;
 
+  /// Total disk size (human-readable format)
   String diskSize;
 
+  /// Total disk size in bytes
+  ///
+  /// Minimum value: -9007199254740991
+  /// Maximum value: 9007199254740991
   int diskSizeRaw;
 
+  /// Disk usage percentage (0-100)
   double diskUsagePercentage;
 
+  /// Used disk space (human-readable format)
   String diskUse;
 
+  /// Used disk space in bytes
+  ///
+  /// Minimum value: -9007199254740991
+  /// Maximum value: 9007199254740991
   int diskUseRaw;
 
   @override
@@ -85,7 +101,7 @@ class ServerStorageResponseDto {
         diskAvailableRaw: mapValueOfType<int>(json, r'diskAvailableRaw')!,
         diskSize: mapValueOfType<String>(json, r'diskSize')!,
         diskSizeRaw: mapValueOfType<int>(json, r'diskSizeRaw')!,
-        diskUsagePercentage: (mapValueOfType<num>(json, r'diskUsagePercentage')!).toDouble(),
+        diskUsagePercentage: mapValueOfType<double>(json, r'diskUsagePercentage')!,
         diskUse: mapValueOfType<String>(json, r'diskUse')!,
         diskUseRaw: mapValueOfType<int>(json, r'diskUseRaw')!,
       );

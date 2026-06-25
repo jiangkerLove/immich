@@ -16,8 +16,12 @@ class TrashApi {
 
   final ApiClient apiClient;
 
-  /// Performs an HTTP 'POST /trash/empty' operation and returns the [Response].
-  Future<Response> emptyTrashWithHttpInfo() async {
+  /// Empty trash
+  ///
+  /// Permanently delete all items in the trash.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  Future<Response> emptyTrashWithHttpInfo({ Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/trash/empty';
 
@@ -39,11 +43,15 @@ class TrashApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
-  Future<TrashResponseDto?> emptyTrash() async {
-    final response = await emptyTrashWithHttpInfo();
+  /// Empty trash
+  ///
+  /// Permanently delete all items in the trash.
+  Future<TrashResponseDto?> emptyTrash({ Future<void>? abortTrigger, }) async {
+    final response = await emptyTrashWithHttpInfo(abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -57,11 +65,16 @@ class TrashApi {
     return null;
   }
 
-  /// Performs an HTTP 'POST /trash/restore/assets' operation and returns the [Response].
+  /// Restore assets
+  ///
+  /// Restore specific assets from the trash.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  ///
   /// Parameters:
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<Response> restoreAssetsWithHttpInfo(BulkIdsDto bulkIdsDto,) async {
+  Future<Response> restoreAssetsWithHttpInfo(BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/trash/restore/assets';
 
@@ -83,14 +96,19 @@ class TrashApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
+  /// Restore assets
+  ///
+  /// Restore specific assets from the trash.
+  ///
   /// Parameters:
   ///
   /// * [BulkIdsDto] bulkIdsDto (required):
-  Future<TrashResponseDto?> restoreAssets(BulkIdsDto bulkIdsDto,) async {
-    final response = await restoreAssetsWithHttpInfo(bulkIdsDto,);
+  Future<TrashResponseDto?> restoreAssets(BulkIdsDto bulkIdsDto, { Future<void>? abortTrigger, }) async {
+    final response = await restoreAssetsWithHttpInfo(bulkIdsDto, abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }
@@ -104,8 +122,12 @@ class TrashApi {
     return null;
   }
 
-  /// Performs an HTTP 'POST /trash/restore' operation and returns the [Response].
-  Future<Response> restoreTrashWithHttpInfo() async {
+  /// Restore trash
+  ///
+  /// Restore all items in the trash.
+  ///
+  /// Note: This method returns the HTTP [Response].
+  Future<Response> restoreTrashWithHttpInfo({ Future<void>? abortTrigger, }) async {
     // ignore: prefer_const_declarations
     final apiPath = r'/trash/restore';
 
@@ -127,11 +149,15 @@ class TrashApi {
       headerParams,
       formParams,
       contentTypes.isEmpty ? null : contentTypes.first,
+      abortTrigger: abortTrigger,
     );
   }
 
-  Future<TrashResponseDto?> restoreTrash() async {
-    final response = await restoreTrashWithHttpInfo();
+  /// Restore trash
+  ///
+  /// Restore all items in the trash.
+  Future<TrashResponseDto?> restoreTrash({ Future<void>? abortTrigger, }) async {
+    final response = await restoreTrashWithHttpInfo(abortTrigger: abortTrigger,);
     if (response.statusCode >= HttpStatus.badRequest) {
       throw ApiException(response.statusCode, await _decodeBodyBytes(response));
     }

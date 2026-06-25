@@ -1,5 +1,5 @@
 #
-# WARNING: To install Immich, follow our guide: https://immich.app/docs/install/docker-compose
+# WARNING: To install Immich, follow our guide: https://docs.immich.app/install/docker-compose
 #
 # Make sure to use the docker-compose.yml of the current release:
 #
@@ -8,31 +8,72 @@
 # The compose file on main may not be compatible with the latest release.
 
 # For development see:
-# - https://immich.app/docs/developer/setup
-# - https://immich.app/docs/developer/troubleshooting
+# - https://docs.immich.app/developer/setup
+# - https://docs.immich.app/developer/troubleshooting
 
 name: immich-dev
 
 services:
-  immich-server:
-    container_name: immich_server
-    command: [ '/usr/src/app/bin/immich-dev' ]
+  immich-app-base:
+    profiles: ['_base']
+    tmpfs:
+      - /tmp
+    volumes:
+      - ..:/usr/src/app
+      # - ../../ui:/usr/src/ui
+      - build_cache:/buildcache
+      - server_node_modules:/usr/src/app/server/node_modules
+      - web_node_modules:/usr/src/app/web/node_modules
+      - github_node_modules:/usr/src/app/.github/node_modules
+      - cli_node_modules:/usr/src/app/packages/cli/node_modules
+      - docs_node_modules:/usr/src/app/docs/node_modules
+      - e2e_node_modules:/usr/src/app/e2e/node_modules
+      - sdk_node_modules:/usr/src/app/packages/sdk/node_modules
+      - app_node_modules:/usr/src/app/node_modules
+      - sveltekit:/usr/src/app/web/.svelte-kit
+      - coverage:/usr/src/app/web/coverage
+
+  immich-init:
+    extends:
+      service: immich-app-base
+    profiles: !reset []
+    container_name: immich_init
     image: immich-server-dev:latest
-    # extends:
-    #   file: hwaccel.transcoding.yml
-    #   service: cpu # set to one of [nvenc, quicksync, rkmpp, vaapi, vaapi-wsl] for accelerated transcoding
     build:
       context: ../
-      dockerfile: server/Dockerfile
+      dockerfile: server/Dockerfile.dev
+      target: dev
+    command:
+      - |
+        mise install
+        touch /tmp/init-complete
+        exec tail -f /dev/null
+    volumes:
+      - build_cache:/buildcache
+    restart: 'no'
+    healthcheck:
+      test: ['CMD', 'test', '-f', '/tmp/init-complete']
+      interval: 2s
+      timeout: 3s
+      retries: 300
+      start_period: 300s
+
+  immich-server:
+    extends:
+      service: immich-app-base
+    profiles: !reset []
+    container_name: immich_server
+    command: ['immich-dev']
+    image: immich-server-dev:latest
+    build:
+      context: ../
+      dockerfile: server/Dockerfile.dev
       target: dev
     restart: unless-stopped
     volumes:
-      - ../server:/usr/src/app
-      - ../open-api:/usr/src/open-api
-      - ${UPLOAD_LOCATION}/photos:/usr/src/app/upload
-      - ${UPLOAD_LOCATION}/photos/upload:/usr/src/app/upload/upload
-      - /usr/src/app/node_modules
+      - ${UPLOAD_LOCATION}/photos:/data
       - /etc/localtime:/etc/localtime:ro
+      - ../packages/plugin-core:/build/plugins/immich-plugin-core
     env_file:
       - .env
     environment:
@@ -47,48 +88,45 @@ services:
       IMMICH_BUILD_IMAGE_URL: https://github.com/immich-app/immich/pkgs/container/immich-server
       IMMICH_THIRD_PARTY_SOURCE_URL: https://github.com/immich-app/immich/
       IMMICH_THIRD_PARTY_BUG_FEATURE_URL: https://github.com/immich-app/immich/issues
-      IMMICH_THIRD_PARTY_DOCUMENTATION_URL: https://immich.app/docs
-      IMMICH_THIRD_PARTY_SUPPORT_URL: https://immich.app/docs/community-guides
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
+      IMMICH_THIRD_PARTY_DOCUMENTATION_URL: https://docs.immich.app
+      IMMICH_THIRD_PARTY_SUPPORT_URL: https://docs.immich.app/community-guides
+      IMMICH_HELMET_FILE: 'true'
     ports:
       - 9230:9230
       - 9231:9231
       - 2283:2283
     depends_on:
-      - redis
-      - database
+      immich-init:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      database:
+        condition: service_started
     healthcheck:
       disable: false
 
   immich-web:
+    extends:
+      service: immich-app-base
+    profiles: !reset []
     container_name: immich_web
     image: immich-web-dev:latest
-    # Needed for rootless docker setup, see https://github.com/moby/moby/issues/45919
-    # user: 0:0
     build:
-      context: ../web
-    command: [ '/usr/src/app/bin/immich-web' ]
+      context: ../
+      dockerfile: server/Dockerfile.dev
+      target: dev
+    command: ['immich-web']
     env_file:
       - .env
     ports:
       - 3000:3000
       - 24678:24678
-    volumes:
-      - ../web:/usr/src/app
-      - ../i18n:/usr/src/i18n
-      - ../open-api/:/usr/src/open-api/
-      # - ../../ui:/usr/ui
-      - /usr/src/app/node_modules
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
     restart: unless-stopped
     depends_on:
-      - immich-server
+      immich-init:
+        condition: service_healthy
+      immich-server:
+        condition: service_started
 
   immich-machine-learning:
     container_name: immich_machine_learning
@@ -104,8 +142,8 @@ services:
     ports:
       - 3003:3003
     volumes:
-      - ../machine-learning:/usr/src/app
-      - model-cache:/cache
+      - ../machine-learning/immich_ml:/usr/src/immich_ml
+      - model_cache:/cache
     env_file:
       - .env
     depends_on:
@@ -116,13 +154,13 @@ services:
 
   redis:
     container_name: immich_redis
-    image: docker.io/valkey/valkey:8-bookworm@sha256:ff21bc0f8194dc9c105b769aeabf9585fea6a8ed649c0781caeac5cb3c247884
+    image: docker.io/valkey/valkey:9@sha256:4963247afc4cd33c7d3b2d2816b9f7f8eeebab148d29056c2ca4d7cbc966f2d9
     healthcheck:
       test: redis-cli ping || exit 1
 
   database:
     container_name: immich_postgres
-    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.1-pgvectors0.2.0
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
     env_file:
       - .env
     environment:
@@ -134,6 +172,9 @@ services:
       - ${UPLOAD_LOCATION}/postgres:/var/lib/postgresql/data
     ports:
       - 5432:5432
+    shm_size: 128mb
+    healthcheck:
+      disable: false
   # set IMMICH_TELEMETRY_INCLUDE=all in .env to enable metrics
   # immich-prometheus:
   #   container_name: immich_prometheus
@@ -142,7 +183,7 @@ services:
   #   image: prom/prometheus
   #   volumes:
   #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
-  #     - prometheus-data:/prometheus
+  #     - prometheus_data:/prometheus
 
   # first login uses admin/admin
   # add data source for http://immich-prometheus:9090 to get started
@@ -153,9 +194,20 @@ services:
   #     - 3000:3000
   #   image: grafana/grafana:10.3.3-ubuntu
   #   volumes:
-  #     - grafana-data:/var/lib/grafana
+  #     - grafana_data:/var/lib/grafana
 
 volumes:
-  model-cache:
-  prometheus-data:
-  grafana-data:
+  model_cache:
+  prometheus_data:
+  grafana_data:
+  build_cache:
+  server_node_modules:
+  web_node_modules:
+  github_node_modules:
+  cli_node_modules:
+  docs_node_modules:
+  e2e_node_modules:
+  sdk_node_modules:
+  app_node_modules:
+  sveltekit:
+  coverage:

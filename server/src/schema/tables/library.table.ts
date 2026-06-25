@@ -1,20 +1,22 @@
-import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
-import { UserTable } from 'src/schema/tables/user.table';
 import {
   Column,
   CreateDateColumn,
   DeleteDateColumn,
   ForeignKeyColumn,
+  Generated,
   PrimaryGeneratedColumn,
   Table,
+  Timestamp,
   UpdateDateColumn,
-} from 'src/sql-tools';
+} from '@immich/sql-tools';
+import { UpdatedAtTrigger, UpdateIdColumn } from 'src/decorators';
+import { UserTable } from 'src/schema/tables/user.table';
 
-@Table('libraries')
-@UpdatedAtTrigger('libraries_updated_at')
+@Table('library')
+@UpdatedAtTrigger('library_updatedAt')
 export class LibraryTable {
   @PrimaryGeneratedColumn()
-  id!: string;
+  id!: Generated<string>;
 
   @Column()
   name!: string;
@@ -29,17 +31,17 @@ export class LibraryTable {
   exclusionPatterns!: string[];
 
   @CreateDateColumn()
-  createdAt!: Date;
+  createdAt!: Generated<Timestamp>;
 
   @UpdateDateColumn()
-  updatedAt!: Date;
+  updatedAt!: Generated<Date>;
 
   @DeleteDateColumn()
-  deletedAt?: Date;
+  deletedAt!: Timestamp | null;
 
   @Column({ type: 'timestamp with time zone', nullable: true })
-  refreshedAt!: Date | null;
+  refreshedAt!: Timestamp | null;
 
-  @UpdateIdColumn({ indexName: 'IDX_libraries_update_id' })
-  updateId?: string;
+  @UpdateIdColumn({ index: true })
+  updateId!: Generated<string>;
 }

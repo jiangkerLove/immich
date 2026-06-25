@@ -3,21 +3,21 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:flutter/material.dart';
-import 'package:http/http.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
+import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/settings.repository.dart';
+import 'package:immich_mobile/utils/debug_print.dart';
 import 'package:immich_mobile/utils/url_helper.dart';
 import 'package:logging/logging.dart';
 import 'package:openapi/api.dart';
-import 'package:immich_mobile/utils/user_agent.dart';
 
-class ApiService implements Authentication {
-  late ApiClient _apiClient;
+class ApiService {
+  final ApiClient _apiClient = ApiClient(basePath: '');
 
   late UsersApi usersApi;
   late AuthenticationApi authenticationApi;
-  late OAuthApi oAuthApi;
+  late AuthenticationApi oAuthApi;
   late AlbumsApi albumsApi;
   late AssetsApi assetsApi;
   late SearchApi searchApi;
@@ -32,8 +32,10 @@ class ApiService implements Authentication {
   late DownloadApi downloadApi;
   late TrashApi trashApi;
   late StacksApi stacksApi;
-  late ViewApi viewApi;
+  late ViewsApi viewApi;
   late MemoriesApi memoriesApi;
+  late SessionsApi sessionsApi;
+  late TagsApi tagsApi;
 
   ApiService() {
     // The below line ensures that the api clients are initialized when the service is instantiated
@@ -44,18 +46,19 @@ class ApiService implements Authentication {
       setEndpoint(endpoint);
     }
   }
-  String? _accessToken;
   final _log = Logger("ApiService");
 
+  Future<void> updateHeaders() async {
+    await NetworkRepository.setHeaders(getRequestHeaders(), getServerUrls());
+    _apiClient.client = NetworkRepository.client;
+  }
+
   setEndpoint(String endpoint) {
-    _apiClient = ApiClient(basePath: endpoint, authentication: this);
-    _setUserAgentHeader();
-    if (_accessToken != null) {
-      setAccessToken(_accessToken!);
-    }
+    _apiClient.basePath = endpoint;
+    _apiClient.client = NetworkRepository.client;
     usersApi = UsersApi(_apiClient);
     authenticationApi = AuthenticationApi(_apiClient);
-    oAuthApi = OAuthApi(_apiClient);
+    oAuthApi = AuthenticationApi(_apiClient);
     albumsApi = AlbumsApi(_apiClient);
     assetsApi = AssetsApi(_apiClient);
     serverInfoApi = ServerApi(_apiClient);
@@ -70,13 +73,10 @@ class ApiService implements Authentication {
     downloadApi = DownloadApi(_apiClient);
     trashApi = TrashApi(_apiClient);
     stacksApi = StacksApi(_apiClient);
-    viewApi = ViewApi(_apiClient);
+    viewApi = ViewsApi(_apiClient);
     memoriesApi = MemoriesApi(_apiClient);
-  }
-
-  Future<void> _setUserAgentHeader() async {
-    final userAgent = await getUserAgentString();
-    _apiClient.addDefaultHeader('User-Agent', userAgent);
+    sessionsApi = SessionsApi(_apiClient);
+    tagsApi = TagsApi(_apiClient);
   }
 
   Future<String> resolveAndSetEndpoint(String serverUrl) async {
@@ -84,7 +84,7 @@ class ApiService implements Authentication {
     setEndpoint(endpoint);
 
     // Save in local database for next startup
-    Store.put(StoreKey.serverEndpoint, endpoint);
+    await Store.put(StoreKey.serverEndpoint, endpoint);
     return endpoint;
   }
 
@@ -125,28 +125,16 @@ class ApiService implements Authentication {
     } on SocketException catch (_) {
       return false;
     } catch (error, stackTrace) {
-      _log.severe(
-        "Error while checking server availability",
-        error,
-        stackTrace,
-      );
+      _log.severe("Error while checking server availability", error, stackTrace);
       return false;
     }
     return true;
   }
 
   Future<String> _getWellKnownEndpoint(String baseUrl) async {
-    final Client client = Client();
-
     try {
-      var headers = {"Accept": "application/json"};
-      headers.addAll(getRequestHeaders());
-
-      final res = await client
-          .get(
-            Uri.parse("$baseUrl/.well-known/immich"),
-            headers: headers,
-          )
+      final res = await NetworkRepository.client
+          .get(Uri.parse("$baseUrl/.well-known/immich"))
           .timeout(const Duration(seconds: 5));
 
       if (res.statusCode == 200) {
@@ -160,15 +148,10 @@ class ApiService implements Authentication {
         return endpoint;
       }
     } catch (e) {
-      debugPrint("Could not locate /.well-known/immich at $baseUrl");
+      dPrint(() => "Could not locate /.well-known/immich at $baseUrl");
     }
 
     return "";
-  }
-
-  Future<void> setAccessToken(String accessToken) async {
-    _accessToken = accessToken;
-    await Store.put(StoreKey.accessToken, accessToken);
   }
 
   Future<void> setDeviceInfoHeader() async {
@@ -176,13 +159,11 @@ class ApiService implements Authentication {
 
     if (Platform.isIOS) {
       final iosInfo = await deviceInfoPlugin.iosInfo;
-      authenticationApi.apiClient
-          .addDefaultHeader('deviceModel', iosInfo.utsname.machine);
+      authenticationApi.apiClient.addDefaultHeader('deviceModel', iosInfo.utsname.machine);
       authenticationApi.apiClient.addDefaultHeader('deviceType', 'iOS');
     } else if (Platform.isAndroid) {
       final androidInfo = await deviceInfoPlugin.androidInfo;
-      authenticationApi.apiClient
-          .addDefaultHeader('deviceModel', androidInfo.model);
+      authenticationApi.apiClient.addDefaultHeader('deviceModel', androidInfo.model);
       authenticationApi.apiClient.addDefaultHeader('deviceType', 'Android');
     } else {
       authenticationApi.apiClient.addDefaultHeader('deviceModel', 'Unknown');
@@ -190,35 +171,27 @@ class ApiService implements Authentication {
     }
   }
 
-  static Map<String, String> getRequestHeaders() {
-    var accessToken = Store.get(StoreKey.accessToken, "");
-    var customHeadersStr = Store.get(StoreKey.customHeaders, "");
-    var header = <String, String>{};
-    if (accessToken.isNotEmpty) {
-      header['x-immich-user-token'] = accessToken;
+  static List<String> getServerUrls() {
+    final urls = <String>[];
+    final serverEndpoint = Store.tryGet(StoreKey.serverEndpoint);
+    if (serverEndpoint != null && serverEndpoint.isNotEmpty) {
+      urls.add(serverEndpoint);
     }
-
-    if (customHeadersStr.isEmpty) {
-      return header;
+    final network = SettingsRepository.instance.appConfig.network;
+    final localEndpoint = network.localEndpoint;
+    if (localEndpoint != null && localEndpoint.isNotEmpty) {
+      urls.add(localEndpoint);
     }
-
-    var customHeaders = jsonDecode(customHeadersStr) as Map;
-    customHeaders.forEach((key, value) {
-      header[key] = value;
-    });
-
-    return header;
+    for (final url in network.externalEndpointList) {
+      if (url.isNotEmpty) {
+        urls.add(url);
+      }
+    }
+    return urls;
   }
 
-  @override
-  Future<void> applyToParams(
-    List<QueryParam> queryParams,
-    Map<String, String> headerParams,
-  ) {
-    return Future<void>(() {
-      var headers = ApiService.getRequestHeaders();
-      headerParams.addAll(headers);
-    });
+  static Map<String, String> getRequestHeaders() {
+    return SettingsRepository.instance.appConfig.network.customHeaders;
   }
 
   ApiClient get apiClient => _apiClient;

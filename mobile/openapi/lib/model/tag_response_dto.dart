@@ -13,39 +13,46 @@ part of openapi.api;
 class TagResponseDto {
   /// Returns a new [TagResponseDto] instance.
   TagResponseDto({
-    this.color,
+    this.color = const Optional.absent(),
     required this.createdAt,
     required this.id,
     required this.name,
-    this.parentId,
+    this.parentId = const Optional.absent(),
     required this.updatedAt,
     required this.value,
   });
 
+  /// Tag color (hex)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? color;
+  Optional<String?> color;
 
+  /// Creation date
   DateTime createdAt;
 
+  /// Tag ID
   String id;
 
+  /// Tag name
   String name;
 
+  /// Parent tag ID
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  String? parentId;
+  Optional<String?> parentId;
 
+  /// Last update date
   DateTime updatedAt;
 
+  /// Tag value (full path)
   String value;
 
   @override
@@ -74,18 +81,16 @@ class TagResponseDto {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.color != null) {
-      json[r'color'] = this.color;
-    } else {
-    //  json[r'color'] = null;
+    if (this.color.isPresent) {
+      final value = this.color.value;
+      json[r'color'] = value;
     }
       json[r'createdAt'] = this.createdAt.toUtc().toIso8601String();
       json[r'id'] = this.id;
       json[r'name'] = this.name;
-    if (this.parentId != null) {
-      json[r'parentId'] = this.parentId;
-    } else {
-    //  json[r'parentId'] = null;
+    if (this.parentId.isPresent) {
+      final value = this.parentId.value;
+      json[r'parentId'] = value;
     }
       json[r'updatedAt'] = this.updatedAt.toUtc().toIso8601String();
       json[r'value'] = this.value;
@@ -101,11 +106,11 @@ class TagResponseDto {
       final json = value.cast<String, dynamic>();
 
       return TagResponseDto(
-        color: mapValueOfType<String>(json, r'color'),
+        color: json.containsKey(r'color') ? Optional.present(mapValueOfType<String>(json, r'color')) : const Optional.absent(),
         createdAt: mapDateTime(json, r'createdAt', r'')!,
         id: mapValueOfType<String>(json, r'id')!,
         name: mapValueOfType<String>(json, r'name')!,
-        parentId: mapValueOfType<String>(json, r'parentId'),
+        parentId: json.containsKey(r'parentId') ? Optional.present(mapValueOfType<String>(json, r'parentId')) : const Optional.absent(),
         updatedAt: mapDateTime(json, r'updatedAt', r'')!,
         value: mapValueOfType<String>(json, r'value')!,
       );

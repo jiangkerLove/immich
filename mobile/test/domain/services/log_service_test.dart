@@ -1,11 +1,11 @@
 import 'package:collection/collection.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/constants/constants.dart';
-import 'package:immich_mobile/domain/interfaces/log.interface.dart';
-import 'package:immich_mobile/domain/interfaces/store.interface.dart';
+import 'package:immich_mobile/domain/models/config/app_config.dart';
 import 'package:immich_mobile/domain/models/log.model.dart';
-import 'package:immich_mobile/domain/models/store.model.dart';
+import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/domain/services/log.service.dart';
+import 'package:immich_mobile/infrastructure/repositories/log.repository.dart';
 import 'package:logging/logging.dart';
 import 'package:mocktail/mocktail.dart';
 
@@ -28,27 +28,24 @@ final _kWarnLog = LogMessage(
 
 void main() {
   late LogService sut;
-  late ILogRepository mockLogRepo;
-  late IStoreRepository mockStoreRepo;
+  late LogRepository mockLogRepo;
+  late MockSettingsRepository mockSettingsRepository;
 
   setUp(() async {
     mockLogRepo = MockLogRepository();
-    mockStoreRepo = MockStoreRepository();
+    mockSettingsRepository = MockSettingsRepository();
 
     registerFallbackValue(_kInfoLog);
+    registerFallbackValue(LogLevel.info);
 
-    when(() => mockLogRepo.truncate(limit: any(named: 'limit')))
-        .thenAnswer((_) async => {});
-    when(() => mockStoreRepo.tryGet<int>(StoreKey.logLevel))
-        .thenAnswer((_) async => LogLevel.fine.index);
+    when(() => mockLogRepo.truncate(limit: any(named: 'limit'))).thenAnswer((_) async => {});
+    when(() => mockSettingsRepository.appConfig).thenReturn(const AppConfig(logLevel: LogLevel.fine));
+    when(() => mockSettingsRepository.write<LogLevel, LogLevel>(SettingsKey.logLevel, any())).thenAnswer((_) async {});
     when(() => mockLogRepo.getAll()).thenAnswer((_) async => []);
     when(() => mockLogRepo.insert(any())).thenAnswer((_) async => true);
     when(() => mockLogRepo.insertAll(any())).thenAnswer((_) async => true);
 
-    sut = await LogService.create(
-      logRepository: mockLogRepo,
-      storeRepository: mockStoreRepo,
-    );
+    sut = await LogService.create(logRepository: mockLogRepo, settingsRepository: mockSettingsRepository);
   });
 
   tearDown(() async {
@@ -57,31 +54,26 @@ void main() {
 
   group("Log Service Init:", () {
     test('Truncates the existing logs on init', () {
-      final limit =
-          verify(() => mockLogRepo.truncate(limit: captureAny(named: 'limit')))
-              .captured
-              .firstOrNull as int?;
+      final limit = verify(() => mockLogRepo.truncate(limit: captureAny(named: 'limit'))).captured.firstOrNull as int?;
       expect(limit, kLogTruncateLimit);
     });
 
-    test('Sets log level based on the store setting', () {
-      verify(() => mockStoreRepo.tryGet<int>(StoreKey.logLevel)).called(1);
+    test('Sets log level based on the metadata repository', () {
+      verify(() => mockSettingsRepository.appConfig).called(1);
       expect(Logger.root.level, Level.FINE);
     });
   });
 
   group("Log Service Set Level:", () {
     setUp(() async {
-      when(() => mockStoreRepo.insert<int>(StoreKey.logLevel, any()))
-          .thenAnswer((_) async => true);
-      await sut.setlogLevel(LogLevel.shout);
+      await sut.setLogLevel(LogLevel.shout);
     });
 
-    test('Updates the log level in store', () {
-      final index = verify(
-        () => mockStoreRepo.insert<int>(StoreKey.logLevel, captureAny()),
+    test('Updates the log level via metadata repository', () {
+      final captured = verify(
+        () => mockSettingsRepository.write<LogLevel, LogLevel>(SettingsKey.logLevel, captureAny()),
       ).captured.firstOrNull;
-      expect(index, LogLevel.shout.index);
+      expect(captured, LogLevel.shout);
     });
 
     test('Sets log level on logger', () {
@@ -94,7 +86,7 @@ void main() {
       TestUtils.fakeAsync((time) async {
         sut = await LogService.create(
           logRepository: mockLogRepo,
-          storeRepository: mockStoreRepo,
+          settingsRepository: mockSettingsRepository,
           shouldBuffer: true,
         );
 
@@ -112,7 +104,7 @@ void main() {
       TestUtils.fakeAsync((time) async {
         sut = await LogService.create(
           logRepository: mockLogRepo,
-          storeRepository: mockStoreRepo,
+          settingsRepository: mockSettingsRepository,
           shouldBuffer: true,
         );
 
@@ -121,7 +113,6 @@ void main() {
         time.elapse(const Duration(seconds: 6));
         final insert = verify(() => mockLogRepo.insertAll(captureAny()));
         insert.called(1);
-        // ignore: prefer-correct-json-casts
         final captured = insert.captured.firstOrNull as List<LogMessage>;
         expect(captured.firstOrNull?.message, _kInfoLog.message);
         expect(captured.firstOrNull?.logger, _kInfoLog.logger);
@@ -134,7 +125,7 @@ void main() {
       TestUtils.fakeAsync((time) async {
         sut = await LogService.create(
           logRepository: mockLogRepo,
-          storeRepository: mockStoreRepo,
+          settingsRepository: mockSettingsRepository,
           shouldBuffer: false,
         );
 
@@ -168,7 +159,7 @@ void main() {
       TestUtils.fakeAsync((time) async {
         sut = await LogService.create(
           logRepository: mockLogRepo,
-          storeRepository: mockStoreRepo,
+          settingsRepository: mockSettingsRepository,
           shouldBuffer: true,
         );
 

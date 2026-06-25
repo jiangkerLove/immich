@@ -21,16 +21,22 @@ class MapMarkerResponseDto {
     required this.state,
   });
 
+  /// City name
   String? city;
 
+  /// Country name
   String? country;
 
+  /// Asset ID
   String id;
 
+  /// Latitude
   double lat;
 
+  /// Longitude
   double lon;
 
+  /// State/Province name
   String? state;
 
   @override
@@ -60,12 +66,12 @@ class MapMarkerResponseDto {
     if (this.city != null) {
       json[r'city'] = this.city;
     } else {
-    //  json[r'city'] = null;
+      json[r'city'] = null;
     }
     if (this.country != null) {
       json[r'country'] = this.country;
     } else {
-    //  json[r'country'] = null;
+      json[r'country'] = null;
     }
       json[r'id'] = this.id;
       json[r'lat'] = this.lat;
@@ -73,7 +79,7 @@ class MapMarkerResponseDto {
     if (this.state != null) {
       json[r'state'] = this.state;
     } else {
-    //  json[r'state'] = null;
+      json[r'state'] = null;
     }
     return json;
   }
@@ -90,8 +96,8 @@ class MapMarkerResponseDto {
         city: mapValueOfType<String>(json, r'city'),
         country: mapValueOfType<String>(json, r'country'),
         id: mapValueOfType<String>(json, r'id')!,
-        lat: (mapValueOfType<num>(json, r'lat')!).toDouble(),
-        lon: (mapValueOfType<num>(json, r'lon')!).toDouble(),
+        lat: mapValueOfType<double>(json, r'lat')!,
+        lon: mapValueOfType<double>(json, r'lon')!,
         state: mapValueOfType<String>(json, r'state'),
       );
     }

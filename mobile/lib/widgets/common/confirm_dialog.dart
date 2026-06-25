@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 
 class ConfirmDialog extends StatelessWidget {
-  final Function onOk;
+  final Function? onOk;
   final String title;
   final String content;
   final String cancel;
@@ -11,7 +11,7 @@ class ConfirmDialog extends StatelessWidget {
 
   const ConfirmDialog({
     super.key,
-    required this.onOk,
+    this.onOk,
     required this.title,
     required this.content,
     this.cancel = "cancel",
@@ -21,14 +21,12 @@ class ConfirmDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     void onOkPressed() {
-      onOk();
+      onOk?.call();
       context.pop(true);
     }
 
     return AlertDialog(
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(10)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
       title: Text(title).tr(),
       content: Text(content).tr(),
       actions: [
@@ -36,20 +34,14 @@ class ConfirmDialog extends StatelessWidget {
           onPressed: () => context.pop(false),
           child: Text(
             cancel,
-            style: TextStyle(
-              color: context.primaryColor,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(color: context.primaryColor, fontWeight: FontWeight.bold),
           ).tr(),
         ),
         TextButton(
           onPressed: onOkPressed,
           child: Text(
             ok,
-            style: TextStyle(
-              color: context.colorScheme.error,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(color: context.colorScheme.error, fontWeight: FontWeight.bold),
           ).tr(),
         ),
       ],

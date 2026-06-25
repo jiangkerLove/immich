@@ -1,13 +1,6 @@
-import { NotificationType, notificationController } from '$lib/components/shared-components/notification/notification';
-import { defaultLang, langs, locales } from '$lib/constants';
-import { authManager } from '$lib/managers/auth-manager.svelte';
-import { lang } from '$lib/stores/preferences.store';
-import { serverConfig } from '$lib/stores/server-config.store';
-import { handleError } from '$lib/utils/handle-error';
 import {
-  AssetJobName,
   AssetMediaSize,
-  JobName,
+  AssetTypeEnum,
   MemoryType,
   finishOAuth,
   getAssetOriginalPath,
@@ -19,14 +12,23 @@ import {
   linkOAuthAccount,
   startOAuth,
   unlinkOAuthAccount,
+  type AssetResponseDto,
   type MemoryResponseDto,
   type PersonResponseDto,
+  type ServerVersionResponseDto,
   type SharedLinkResponseDto,
   type UserResponseDto,
 } from '@immich/sdk';
-import { mdiCogRefreshOutline, mdiDatabaseRefreshOutline, mdiHeadSyncOutline, mdiImageRefreshOutline } from '@mdi/js';
+import { toastManager, type ActionItem, type IfLike } from '@immich/ui';
 import { init, register, t } from 'svelte-i18n';
 import { derived, get } from 'svelte/store';
+import { defaultLang, locales } from '$lib/constants';
+import { authManager } from '$lib/managers/auth-manager.svelte';
+import { downloadManager } from '$lib/managers/download-manager.svelte';
+import { alwaysLoadOriginalFile, lang } from '$lib/stores/preferences.store';
+import { isWebCompatibleImage } from '$lib/utils/asset-utils';
+import { handleError } from '$lib/utils/handle-error';
+import { convertBCP47, langs } from '$lib/utils/i18n';
 
 interface DownloadRequestOptions<T = unknown> {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -36,10 +38,16 @@ interface DownloadRequestOptions<T = unknown> {
   onDownloadProgress?: (event: ProgressEvent<XMLHttpRequestEventTarget>) => void;
 }
 
+interface DateFormatter {
+  formatDate: (date: Date) => string;
+  formatTime: (date: Date) => string;
+  formatDateTime: (date: Date) => string;
+}
+
 export const initLanguage = async () => {
   const preferenceLang = get(lang);
   for (const { code, loader } of langs) {
-    register(code, loader);
+    register(convertBCP47(code), loader);
   }
 
   await init({ fallbackLocale: preferenceLang === 'dev' ? 'dev' : defaultLang.code, initialLocale: preferenceLang });
@@ -53,14 +61,14 @@ interface UploadRequestOptions {
 }
 
 export class AbortError extends Error {
-  name = 'AbortError';
+  override name = 'AbortError';
 }
 
 class ApiError extends Error {
-  name = 'ApiError';
+  override name = 'ApiError';
 
   constructor(
-    public message: string,
+    public override message: string,
     public statusCode: number,
     public details: string,
   ) {
@@ -68,17 +76,44 @@ class ApiError extends Error {
   }
 }
 
+export const sleep = (ms: number) => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+let unsubscribeId = 0;
+const uploads: Record<number, () => void> = {};
+
+const trackUpload = (unsubscribe: () => void) => {
+  const id = unsubscribeId++;
+  uploads[id] = unsubscribe;
+  return () => {
+    delete uploads[id];
+  };
+};
+
+export const cancelUploadRequests = () => {
+  for (const unsubscribe of Object.values(uploads)) {
+    unsubscribe();
+  }
+};
+
 export const uploadRequest = async <T>(options: UploadRequestOptions): Promise<{ data: T; status: number }> => {
   const { onUploadProgress: onProgress, data, url } = options;
-
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    const unsubscribe = trackUpload(() => xhr.abort());
 
-    xhr.addEventListener('error', (error) => reject(error));
+    xhr.addEventListener('error', (error) => {
+      unsubscribe();
+      reject(error);
+    });
+
     xhr.addEventListener('load', () => {
       if (xhr.readyState === 4 && xhr.status >= 200 && xhr.status < 300) {
+        unsubscribe();
         resolve({ data: xhr.response as T, status: xhr.status });
       } else {
+        unsubscribe();
         reject(new ApiError(xhr.statusText, xhr.status, xhr.response));
       }
     });
@@ -133,34 +168,10 @@ export const downloadRequest = <TBody = unknown>(options: DownloadRequestOptions
   });
 };
 
-export const getJobName = derived(t, ($t) => {
-  return (jobName: JobName) => {
-    const names: Record<JobName, string> = {
-      [JobName.ThumbnailGeneration]: $t('admin.thumbnail_generation_job'),
-      [JobName.MetadataExtraction]: $t('admin.metadata_extraction_job'),
-      [JobName.Sidecar]: $t('admin.sidecar_job'),
-      [JobName.SmartSearch]: $t('admin.machine_learning_smart_search'),
-      [JobName.DuplicateDetection]: $t('admin.machine_learning_duplicate_detection'),
-      [JobName.FaceDetection]: $t('admin.face_detection'),
-      [JobName.FacialRecognition]: $t('admin.machine_learning_facial_recognition'),
-      [JobName.VideoConversion]: $t('admin.video_conversion_job'),
-      [JobName.StorageTemplateMigration]: $t('admin.storage_template_migration'),
-      [JobName.Migration]: $t('admin.migration_job'),
-      [JobName.BackgroundTask]: $t('admin.background_task_job'),
-      [JobName.Search]: $t('search'),
-      [JobName.Library]: $t('external_libraries'),
-      [JobName.Notifications]: $t('notifications'),
-      [JobName.BackupDatabase]: $t('admin.backup_database'),
-    };
-
-    return names[jobName];
-  };
-});
-
 let _sharedLink: SharedLinkResponseDto | undefined;
 
-export const setSharedLink = (sharedLink: SharedLinkResponseDto) => (_sharedLink = sharedLink);
-export const getSharedLink = (): SharedLinkResponseDto | undefined => _sharedLink;
+export const setSharedLink = (sharedLink: typeof _sharedLink) => (_sharedLink = sharedLink);
+export const getSharedLink = (): typeof _sharedLink => _sharedLink;
 
 const createUrl = (path: string, parameters?: Record<string, unknown>) => {
   const searchParameters = new URLSearchParams();
@@ -177,30 +188,68 @@ const createUrl = (path: string, parameters?: Record<string, unknown>) => {
   return getBaseUrl() + url.pathname + url.search + url.hash;
 };
 
-type AssetUrlOptions = { id: string; cacheKey?: string | null };
+type AssetUrlOptions = { id: string; cacheKey?: string | null; edited?: boolean; size?: AssetMediaSize };
 
-export const getAssetOriginalUrl = (options: string | AssetUrlOptions) => {
-  if (typeof options === 'string') {
-    options = { id: options };
+export const getAssetUrl = ({
+  asset,
+  sharedLink,
+  forceOriginal = false,
+}: {
+  asset: AssetResponseDto | undefined;
+  sharedLink?: SharedLinkResponseDto;
+  forceOriginal?: boolean;
+}) => {
+  if (!asset) {
+    return;
   }
-  const { id, cacheKey } = options;
-  return createUrl(getAssetOriginalPath(id), { key: authManager.key, c: cacheKey });
+  const id = asset.id;
+  const cacheKey = asset.thumbhash;
+  if (sharedLink && (!sharedLink.allowDownload || !sharedLink.showMetadata)) {
+    return getAssetMediaUrl({ id, size: AssetMediaSize.Preview, cacheKey });
+  }
+  const size = targetImageSize(asset, forceOriginal);
+  return getAssetMediaUrl({ id, size, cacheKey });
 };
 
-export const getAssetThumbnailUrl = (options: string | (AssetUrlOptions & { size?: AssetMediaSize })) => {
-  if (typeof options === 'string') {
-    options = { id: options };
-  }
-  const { id, size, cacheKey } = options;
-  return createUrl(getAssetThumbnailPath(id), { size, key: authManager.key, c: cacheKey });
+export function getAssetUrls(asset: AssetResponseDto, sharedLink?: SharedLinkResponseDto) {
+  return {
+    thumbnail: getAssetMediaUrl({ id: asset.id, cacheKey: asset.thumbhash, size: AssetMediaSize.Thumbnail }),
+    preview: getAssetUrl({ asset, sharedLink })!,
+    original: getAssetUrl({ asset, sharedLink, forceOriginal: true })!,
+  };
+}
+
+const forceUseOriginal = (asset: AssetResponseDto) => {
+  return asset.type === AssetTypeEnum.Image && asset.duration;
 };
 
-export const getAssetPlaybackUrl = (options: string | AssetUrlOptions) => {
-  if (typeof options === 'string') {
-    options = { id: options };
+export const targetImageSize = (asset: AssetResponseDto, forceOriginal: boolean) => {
+  if (forceOriginal || get(alwaysLoadOriginalFile) || forceUseOriginal(asset)) {
+    return asset.type === AssetTypeEnum.Video || isWebCompatibleImage(asset)
+      ? AssetMediaSize.Original
+      : AssetMediaSize.Fullsize;
   }
-  const { id, cacheKey } = options;
-  return createUrl(getAssetPlaybackPath(id), { key: authManager.key, c: cacheKey });
+  return AssetMediaSize.Preview;
+};
+
+export const getAssetMediaUrl = (options: AssetUrlOptions) => {
+  const { id, size, cacheKey: c, edited = true } = options;
+  const isOriginal = size === AssetMediaSize.Original;
+  const path = isOriginal ? getAssetOriginalPath(id) : getAssetThumbnailPath(id);
+  return createUrl(path, { ...authManager.params, size: isOriginal ? undefined : size, c, edited });
+};
+
+export const getAssetPlaybackUrl = (options: AssetUrlOptions) => {
+  const { id, cacheKey: c } = options;
+  return createUrl(getAssetPlaybackPath(id), { ...authManager.params, c });
+};
+
+export const getAssetHlsUrl = (id: string) => {
+  return createUrl(`/assets/${id}/video/stream/main.m3u8`, authManager.params);
+};
+
+export const getAssetHlsSessionUrl = (id: string, sessionId: string) => {
+  return createUrl(`/assets/${id}/video/stream/${sessionId}`, authManager.params);
 };
 
 export const getProfileImageUrl = (user: UserResponseDto) =>
@@ -209,56 +258,51 @@ export const getProfileImageUrl = (user: UserResponseDto) =>
 export const getPeopleThumbnailUrl = (person: PersonResponseDto, updatedAt?: string) =>
   createUrl(getPeopleThumbnailPath(person.id), { updatedAt: updatedAt ?? person.updatedAt });
 
-export const getAssetJobName = derived(t, ($t) => {
-  return (job: AssetJobName) => {
-    const names: Record<AssetJobName, string> = {
-      [AssetJobName.RefreshFaces]: $t('refresh_faces'),
-      [AssetJobName.RefreshMetadata]: $t('refresh_metadata'),
-      [AssetJobName.RegenerateThumbnail]: $t('refresh_thumbnails'),
-      [AssetJobName.TranscodeVideo]: $t('refresh_encoded_videos'),
-    };
-
-    return names[job];
-  };
-});
-
-export const getAssetJobMessage = derived(t, ($t) => {
-  return (job: AssetJobName) => {
-    const messages: Record<AssetJobName, string> = {
-      [AssetJobName.RefreshFaces]: $t('refreshing_faces'),
-      [AssetJobName.RefreshMetadata]: $t('refreshing_metadata'),
-      [AssetJobName.RegenerateThumbnail]: $t('regenerating_thumbnails'),
-      [AssetJobName.TranscodeVideo]: $t('refreshing_encoded_video'),
-    };
-
-    return messages[job];
-  };
-});
-
-export const getAssetJobIcon = (job: AssetJobName) => {
-  const names: Record<AssetJobName, string> = {
-    [AssetJobName.RefreshFaces]: mdiHeadSyncOutline,
-    [AssetJobName.RefreshMetadata]: mdiDatabaseRefreshOutline,
-    [AssetJobName.RegenerateThumbnail]: mdiImageRefreshOutline,
-    [AssetJobName.TranscodeVideo]: mdiCogRefreshOutline,
-  };
-
-  return names[job];
-};
-
-export const copyToClipboard = async (secret: string) => {
+export const copyToClipboard = async (secret: string | unknown) => {
   const $t = get(t);
 
   try {
-    await navigator.clipboard.writeText(secret);
-    notificationController.show({ message: $t('copied_to_clipboard'), type: NotificationType.Info });
+    const value = typeof secret === 'string' ? secret : JSON.stringify(secret, jsonReplacer, 2);
+    await navigator.clipboard.writeText(value);
+    toastManager.info($t('copied_to_clipboard'));
   } catch (error) {
     handleError(error, $t('errors.unable_to_copy_to_clipboard'));
   }
 };
 
-export const makeSharedLinkUrl = (key: string) => {
-  return new URL(`share/${key}`, get(serverConfig).externalDomain || globalThis.location.origin).href;
+// https://stackoverflow.com/questions/16167581/sort-object-properties-and-json-stringify/43636793#43636793
+const jsonReplacer = (_key: string, value: unknown) =>
+  value instanceof Object && !Array.isArray(value)
+    ? Object.keys(value)
+        .sort()
+        // eslint-disable-next-line unicorn/no-array-reduce
+        .reduce((sorted: { [key: string]: unknown }, key) => {
+          sorted[key] = (value as { [key: string]: unknown })[key];
+          return sorted;
+        }, {})
+    : value;
+
+export const downloadUrl = (url: string, filename: string) => {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+
+  URL.revokeObjectURL(url);
+};
+
+export const downloadBlob = (data: Blob, filename: string) => downloadUrl(URL.createObjectURL(data), filename);
+
+export const downloadJson = (data: unknown, filename: string) => {
+  const blob = new Blob([JSON.stringify(data, jsonReplacer, 2)], { type: 'application/json' });
+  const downloadKey = filename;
+  downloadManager.add(downloadKey, blob.size);
+  downloadManager.update(downloadKey, blob.size);
+  downloadBlob(blob, downloadKey);
+  setTimeout(() => downloadManager.clear(downloadKey), 5000);
 };
 
 export const oauth = {
@@ -342,3 +386,57 @@ export const withError = async <T>(fn: () => Promise<T>): Promise<[undefined, T]
 
 // eslint-disable-next-line unicorn/prefer-code-point
 export const decodeBase64 = (data: string) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+
+export function createDateFormatter(localeCode: string | undefined): DateFormatter {
+  return {
+    formatDate: (date: Date): string =>
+      date.toLocaleString(localeCode, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }),
+
+    formatTime: (date: Date): string =>
+      date.toLocaleString(localeCode, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+
+    formatDateTime: (date: Date): string => {
+      const formattedDate = date.toLocaleString(localeCode, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      const formattedTime = date.toLocaleString(localeCode, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      return `${formattedDate} ${formattedTime}`;
+    },
+  };
+}
+
+export const semverToName = ({ major, minor, patch, prerelease }: ServerVersionResponseDto) =>
+  `v${major}.${minor}.${patch}${prerelease === null ? '' : `-rc.${prerelease}`}`;
+
+export const withoutIcons = (actions: ActionItem[]): ActionItem[] =>
+  actions.map((action) => ({ ...action, icon: undefined }));
+
+export const isEnabled = ({ $if }: IfLike) => $if?.() ?? true;
+
+export const transformToTitleCase = (text: string) => {
+  if (text.length === 0) {
+    return text;
+  } else if (text.length === 1) {
+    return text.charAt(0).toUpperCase();
+  }
+
+  let result = '';
+  for (const word of text.toLowerCase().split(' ')) {
+    result += word.charAt(0).toUpperCase() + word.slice(1) + ' ';
+  }
+  return result.trim();
+};

@@ -13,19 +13,33 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
         with:
-          message-id: 'preview-status'
-          message: 'Deploying preview environment to https://pr-${{ github.event.pull_request.number }}.preview.internal.immich.cloud/'
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - uses: immich-app/devtools/actions/sticky-comment@0135acd12ad9f3369b94a2aa3c0ae8c835a4e926 # sticky-comment-action-v1.0.0
+        with:
+          id: preview-status
+          token: ${{ steps.token.outputs.token }}
+          body: 'Deploying preview environment to https://pr-${{ github.event.pull_request.number }}.preview.internal.immich.build/'
 
   remove-label:
     runs-on: ubuntu-latest
-    if: ${{ github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'preview') }}
+    if: ${{ (github.event.action == 'closed' || github.event.pull_request.head.repo.fork) && contains(github.event.pull_request.labels.*.name, 'preview') }}
     permissions:
       pull-requests: write
     steps:
-      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
         with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.token.outputs.token }}
           script: |
             github.rest.issues.removeLabel({
               issue_number: context.payload.pull_request.number,
@@ -33,3 +47,17 @@ jobs:
               repo: context.repo.repo,
               name: 'preview'
             })
+
+      - uses: immich-app/devtools/actions/sticky-comment@0135acd12ad9f3369b94a2aa3c0ae8c835a4e926 # sticky-comment-action-v1.0.0
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        with:
+          id: preview-status
+          token: ${{ steps.token.outputs.token }}
+          body: 'PRs from forks cannot have preview environments.'
+
+      - uses: immich-app/devtools/actions/sticky-comment@0135acd12ad9f3369b94a2aa3c0ae8c835a4e926 # sticky-comment-action-v1.0.0
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        with:
+          id: preview-status
+          token: ${{ steps.token.outputs.token }}
+          body: 'Preview environment has been removed.'

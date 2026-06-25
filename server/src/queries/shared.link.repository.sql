@@ -2,43 +2,74 @@
 
 -- SharedLinkRepository.get
 select
-  "shared_links".*,
-  coalesce(
-    json_agg("a") filter (
-      where
-        "a"."id" is not null
-    ),
-    '[]'
+  "shared_link".*,
+  (
+    select
+      coalesce(json_agg(agg), '[]')
+    from
+      (
+        select
+          "asset".*,
+          to_json("exifInfo") as "exifInfo"
+        from
+          "shared_link_asset"
+          inner join "asset" on "asset"."id" = "shared_link_asset"."assetId"
+          inner join lateral (
+            select
+              "asset_exif"."assetId",
+              "asset_exif"."autoStackId",
+              "asset_exif"."bitsPerSample",
+              "asset_exif"."city",
+              "asset_exif"."colorspace",
+              "asset_exif"."country",
+              "asset_exif"."dateTimeOriginal",
+              "asset_exif"."description",
+              "asset_exif"."exifImageHeight",
+              "asset_exif"."exifImageWidth",
+              "asset_exif"."exposureTime",
+              "asset_exif"."fileSizeInByte",
+              "asset_exif"."fNumber",
+              "asset_exif"."focalLength",
+              "asset_exif"."fps",
+              "asset_exif"."iso",
+              "asset_exif"."latitude",
+              "asset_exif"."lensModel",
+              "asset_exif"."livePhotoCID",
+              "asset_exif"."longitude",
+              "asset_exif"."make",
+              "asset_exif"."model",
+              "asset_exif"."modifyDate",
+              "asset_exif"."orientation",
+              "asset_exif"."profileDescription",
+              "asset_exif"."projectionType",
+              "asset_exif"."rating",
+              "asset_exif"."state",
+              "asset_exif"."tags",
+              "asset_exif"."timeZone"
+            from
+              "asset_exif"
+            where
+              "asset_exif"."assetId" = "asset"."id"
+          ) as "exifInfo" on true
+        where
+          "shared_link"."id" = "shared_link_asset"."sharedLinkId"
+          and "asset"."deletedAt" is null
+        order by
+          "asset"."fileCreatedAt" asc
+      ) as agg
   ) as "assets",
   to_json("album") as "album"
 from
-  "shared_links"
+  "shared_link"
   left join lateral (
     select
-      "assets".*,
-      to_json("exifInfo") as "exifInfo"
-    from
-      "shared_link__asset"
-      inner join "assets" on "assets"."id" = "shared_link__asset"."assetsId"
-      inner join lateral (
-        select
-          "exif".*
-        from
-          "exif"
-        where
-          "exif"."assetId" = "assets"."id"
-      ) as "exifInfo" on true
-    where
-      "shared_links"."id" = "shared_link__asset"."sharedLinksId"
-      and "assets"."deletedAt" is null
-    order by
-      "assets"."fileCreatedAt" asc
-  ) as "a" on true
-  left join lateral (
-    select
-      "albums".*,
+      "album".*,
       coalesce(
-        json_agg("assets") filter (
+        json_agg(
+          "assets"
+          order by
+            "assets"."fileCreatedAt" asc
+        ) filter (
           where
             "assets"."id" is not null
         ),
@@ -46,151 +77,300 @@ from
       ) as "assets",
       to_json("owner") as "owner"
     from
-      "albums"
-      left join "albums_assets_assets" on "albums_assets_assets"."albumsId" = "albums"."id"
+      "album"
+      left join "album_asset" on "album_asset"."albumId" = "album"."id"
       left join lateral (
         select
-          "assets".*,
-          to_json("assets_exifInfo") as "exifInfo"
+          "asset".*,
+          to_json("exifInfo") as "exifInfo"
         from
-          "assets"
+          "asset"
           inner join lateral (
             select
-              "exif".*
+              "asset_exif"."assetId",
+              "asset_exif"."autoStackId",
+              "asset_exif"."bitsPerSample",
+              "asset_exif"."city",
+              "asset_exif"."colorspace",
+              "asset_exif"."country",
+              "asset_exif"."dateTimeOriginal",
+              "asset_exif"."description",
+              "asset_exif"."exifImageHeight",
+              "asset_exif"."exifImageWidth",
+              "asset_exif"."exposureTime",
+              "asset_exif"."fileSizeInByte",
+              "asset_exif"."fNumber",
+              "asset_exif"."focalLength",
+              "asset_exif"."fps",
+              "asset_exif"."iso",
+              "asset_exif"."latitude",
+              "asset_exif"."lensModel",
+              "asset_exif"."livePhotoCID",
+              "asset_exif"."longitude",
+              "asset_exif"."make",
+              "asset_exif"."model",
+              "asset_exif"."modifyDate",
+              "asset_exif"."orientation",
+              "asset_exif"."profileDescription",
+              "asset_exif"."projectionType",
+              "asset_exif"."rating",
+              "asset_exif"."state",
+              "asset_exif"."tags",
+              "asset_exif"."timeZone"
             from
-              "exif"
+              "asset_exif"
             where
-              "exif"."assetId" = "assets"."id"
-          ) as "assets_exifInfo" on true
+              "asset_exif"."assetId" = "asset"."id"
+          ) as "exifInfo" on true
         where
-          "albums_assets_assets"."assetsId" = "assets"."id"
-          and "assets"."deletedAt" is null
+          "album_asset"."assetId" = "asset"."id"
+          and "asset"."deletedAt" is null
         order by
-          "assets"."fileCreatedAt" asc
+          "asset"."fileCreatedAt" asc
       ) as "assets" on true
       inner join lateral (
         select
-          "users".*
+          "id",
+          "name",
+          "email",
+          "avatarColor",
+          "profileImagePath",
+          "profileChangedAt"
         from
-          "users"
+          "user"
         where
-          "users"."id" = "albums"."ownerId"
-          and "users"."deletedAt" is null
+          exists (
+            select
+            from
+              "album_user"
+            where
+              "album_user"."role" = 'owner'
+              and "album_user"."albumId" = "album"."id"
+              and "album_user"."userId" = "user"."id"
+          )
+          and "user"."deletedAt" is null
       ) as "owner" on true
     where
-      "albums"."id" = "shared_links"."albumId"
-      and "albums"."deletedAt" is null
+      "album"."id" = "shared_link"."albumId"
+      and "album"."deletedAt" is null
     group by
-      "albums"."id",
+      "album"."id",
       "owner".*
   ) as "album" on true
 where
-  "shared_links"."id" = $1
-  and "shared_links"."userId" = $2
+  "shared_link"."id" = $1
+  and "shared_link"."userId" = $2
   and (
-    "shared_links"."type" = $3
+    "shared_link"."type" = $3
     or "album"."id" is not null
   )
-group by
-  "shared_links"."id",
-  "album".*
 order by
-  "shared_links"."createdAt" desc
+  "shared_link"."createdAt" desc
 
 -- SharedLinkRepository.getAll
-select distinct
-  on ("shared_links"."createdAt") "shared_links".*,
-  "assets"."assets",
+select
+  "shared_link".*,
+  (
+    select
+      coalesce(json_agg(agg), '[]')
+    from
+      (
+        select
+          "asset".*
+        from
+          "shared_link_asset"
+          inner join "asset" on "asset"."id" = "shared_link_asset"."assetId"
+        where
+          "shared_link"."id" = "shared_link_asset"."sharedLinkId"
+          and "asset"."deletedAt" is null
+        order by
+          "asset"."fileCreatedAt" asc
+        limit
+          $1
+      ) as agg
+  ) as "assets",
   to_json("album") as "album"
 from
-  "shared_links"
-  left join "shared_link__asset" on "shared_link__asset"."sharedLinksId" = "shared_links"."id"
+  "shared_link"
   left join lateral (
     select
-      json_agg("assets") as "assets"
-    from
-      "assets"
-    where
-      "assets"."id" = "shared_link__asset"."assetsId"
-      and "assets"."deletedAt" is null
-  ) as "assets" on true
-  left join lateral (
-    select
-      "albums".*,
+      "album".*,
       to_json("owner") as "owner"
     from
-      "albums"
+      "album"
       inner join lateral (
         select
-          "users"."id",
-          "users"."email",
-          "users"."createdAt",
-          "users"."profileImagePath",
-          "users"."isAdmin",
-          "users"."shouldChangePassword",
-          "users"."deletedAt",
-          "users"."oauthId",
-          "users"."updatedAt",
-          "users"."storageLabel",
-          "users"."name",
-          "users"."quotaSizeInBytes",
-          "users"."quotaUsageInBytes",
-          "users"."status",
-          "users"."profileChangedAt"
+          "id",
+          "name",
+          "email",
+          "avatarColor",
+          "profileImagePath",
+          "profileChangedAt"
         from
-          "users"
+          "user"
         where
-          "users"."id" = "albums"."ownerId"
-          and "users"."deletedAt" is null
+          exists (
+            select
+            from
+              "album_user"
+            where
+              "album_user"."role" = 'owner'
+              and "album_user"."albumId" = "album"."id"
+              and "album_user"."userId" = "user"."id"
+          )
+          and "user"."deletedAt" is null
       ) as "owner" on true
     where
-      "albums"."id" = "shared_links"."albumId"
-      and "albums"."deletedAt" is null
+      "album"."id" = "shared_link"."albumId"
+      and "album"."deletedAt" is null
   ) as "album" on true
 where
-  "shared_links"."userId" = $1
+  "shared_link"."userId" = $2
   and (
-    "shared_links"."type" = $2
+    "shared_link"."type" = $3
     or "album"."id" is not null
   )
-  and "shared_links"."albumId" = $3
+  and "shared_link"."albumId" = $4
 order by
-  "shared_links"."createdAt" desc
+  "shared_link"."createdAt" desc
 
 -- SharedLinkRepository.getByKey
 select
-  "shared_links"."id",
-  "shared_links"."userId",
-  "shared_links"."expiresAt",
-  "shared_links"."showExif",
-  "shared_links"."allowUpload",
-  "shared_links"."allowDownload",
-  "shared_links"."password",
+  "shared_link"."id",
+  "shared_link"."userId",
+  "shared_link"."albumId",
+  "shared_link"."expiresAt",
+  "shared_link"."showExif",
+  "shared_link"."allowUpload",
+  "shared_link"."allowDownload",
+  "shared_link"."password",
   (
     select
       to_json(obj)
     from
       (
         select
-          "users"."id",
-          "users"."name",
-          "users"."email",
-          "users"."isAdmin",
-          "users"."quotaUsageInBytes",
-          "users"."quotaSizeInBytes"
+          "user"."id",
+          "user"."name",
+          "user"."email",
+          "user"."isAdmin",
+          "user"."quotaUsageInBytes",
+          "user"."quotaSizeInBytes"
         from
-          "users"
+          "user"
         where
-          "users"."id" = "shared_links"."userId"
+          "user"."id" = "shared_link"."userId"
       ) as obj
   ) as "user"
 from
-  "shared_links"
-  left join "albums" on "albums"."id" = "shared_links"."albumId"
+  "shared_link"
+  left join "album" on "album"."id" = "shared_link"."albumId"
 where
-  "shared_links"."key" = $1
-  and "albums"."deletedAt" is null
+  "album"."deletedAt" is null
   and (
-    "shared_links"."type" = $2
-    or "albums"."id" is not null
+    "shared_link"."type" = $1
+    or "album"."id" is not null
   )
+  and "shared_link"."key" = $2
+
+-- SharedLinkRepository.getBySlug
+select
+  "shared_link"."id",
+  "shared_link"."userId",
+  "shared_link"."albumId",
+  "shared_link"."expiresAt",
+  "shared_link"."showExif",
+  "shared_link"."allowUpload",
+  "shared_link"."allowDownload",
+  "shared_link"."password",
+  (
+    select
+      to_json(obj)
+    from
+      (
+        select
+          "user"."id",
+          "user"."name",
+          "user"."email",
+          "user"."isAdmin",
+          "user"."quotaUsageInBytes",
+          "user"."quotaSizeInBytes"
+        from
+          "user"
+        where
+          "user"."id" = "shared_link"."userId"
+      ) as obj
+  ) as "user"
+from
+  "shared_link"
+  left join "album" on "album"."id" = "shared_link"."albumId"
+where
+  "album"."deletedAt" is null
+  and (
+    "shared_link"."type" = $1
+    or "album"."id" is not null
+  )
+  and "shared_link"."slug" = $2
+
+-- SharedLinkRepository.getSharedLinks
+select
+  "shared_link".*,
+  coalesce(
+    json_agg("assets") filter (
+      where
+        "assets"."id" is not null
+    ),
+    '[]'
+  ) as "assets"
+from
+  "shared_link"
+  left join "shared_link_asset" on "shared_link_asset"."sharedLinkId" = "shared_link"."id"
+  left join lateral (
+    select
+      "asset".*
+    from
+      "asset"
+      inner join lateral (
+        select
+          "asset_exif"."assetId",
+          "asset_exif"."autoStackId",
+          "asset_exif"."bitsPerSample",
+          "asset_exif"."city",
+          "asset_exif"."colorspace",
+          "asset_exif"."country",
+          "asset_exif"."dateTimeOriginal",
+          "asset_exif"."description",
+          "asset_exif"."exifImageHeight",
+          "asset_exif"."exifImageWidth",
+          "asset_exif"."exposureTime",
+          "asset_exif"."fileSizeInByte",
+          "asset_exif"."fNumber",
+          "asset_exif"."focalLength",
+          "asset_exif"."fps",
+          "asset_exif"."iso",
+          "asset_exif"."latitude",
+          "asset_exif"."lensModel",
+          "asset_exif"."livePhotoCID",
+          "asset_exif"."longitude",
+          "asset_exif"."make",
+          "asset_exif"."model",
+          "asset_exif"."modifyDate",
+          "asset_exif"."orientation",
+          "asset_exif"."profileDescription",
+          "asset_exif"."projectionType",
+          "asset_exif"."rating",
+          "asset_exif"."state",
+          "asset_exif"."tags",
+          "asset_exif"."timeZone"
+        from
+          "asset_exif"
+        where
+          "asset_exif"."assetId" = "asset"."id"
+      ) as "exifInfo" on true
+    where
+      "asset"."id" = "shared_link_asset"."assetId"
+  ) as "assets" on true
+where
+  "shared_link"."id" = $1
+group by
+  "shared_link"."id"

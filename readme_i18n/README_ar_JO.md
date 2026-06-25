@@ -28,7 +28,8 @@
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_nl_NL.md">Nederlands</a>
   <a href="README_tr_TR.md">Türkçe</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_uk_UA.md">Українська</a>
   <a href="README_ru_RU.md">Русский</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
@@ -36,28 +37,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## تنصل
+> [!WARNING]
+> ⚠️ اتبع دائمًا خطة النسخ الاحتياطي [١-٢-٣](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) لصورك ومقاطع الفيديو الثمينة الخاصة بك
+>
 
-- ⚠️ هذا التطبيق قيد التطوير النشط للغاية
-- ⚠️ توقع الأخطاء والتغييرات العاجلة
-- ⚠️ **لا تستخدم التطبيق باعتباره الطريقة الوحيدة لتخزين الصور ومقاطع الفيديو الخاصة بك**
-- ⚠️ اتبع دائمًا خطة النسخ الاحتياطي [١-٢-٣](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) لصورك ومقاطع الفيديو الثمينة الخاصة بك
+> [!NOTE]
+> يمكنك العثور على الوثائق الرئيسية، بما في ذلك أدلة التثبيت، على https://immich.app/
 
+## روابط
 
-## محتوى
-
-- [الوثائق الرسمية](https://immich.app/docs)
-- [خريطة الطريق](https://github.com/orgs/immich-app/projects/1)
-- [تجريبي](#demo)
-- [سمات](#features)
-- [مقدمة](https://immich.app/docs/overview/introduction)
-- [تعليمات التحميل](https://immich.app/docs/install/requirements)
-- [قواعد المساهمة](https://immich.app/docs/overview/support-the-project)
-
-## توثيق
-
-يمكنك العثور على الوثائق الرئيسية، بما في ذلك أدلة التثبيت، هنا 
-https://immich.app
+- [الوثائق الرسمية](https://docs.immich.app/)
+- [مقدمة](https://docs.immich.app/overview/introduction)
+- [تعليمات التحميل](https://docs.immich.app/install/requirements)
+- [خريطة الطريق](https://immich.app/roadmap)
+- [تجريبي](#تجريبي)
+- [سمات](#سمات)
+- [الترجمات](https://docs.immich.app/developer/translations)
+- [قواعد المساهمة](https://docs.immich.app/overview/support-the-project)
 
 ## تجريبي
 

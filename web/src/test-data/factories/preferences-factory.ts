@@ -1,7 +1,10 @@
-import type { UserPreferencesResponseDto } from '@immich/sdk';
+import { AssetOrder, type UserPreferencesResponseDto } from '@immich/sdk';
 import { Sync } from 'factory.ts';
 
 export const preferencesFactory = Sync.makeFactory<UserPreferencesResponseDto>({
+  albums: {
+    defaultAssetOrder: AssetOrder.Desc,
+  },
   cast: {
     gCastEnabled: false,
   },
@@ -20,6 +23,7 @@ export const preferencesFactory = Sync.makeFactory<UserPreferencesResponseDto>({
   },
   memories: {
     enabled: false,
+    duration: 5,
   },
   people: {
     enabled: false,

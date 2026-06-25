@@ -16,6 +16,7 @@ class SystemConfigDto {
     required this.backup,
     required this.ffmpeg,
     required this.image,
+    required this.integrityChecks,
     required this.job,
     required this.library_,
     required this.logging,
@@ -23,6 +24,7 @@ class SystemConfigDto {
     required this.map,
     required this.metadata,
     required this.newVersionCheck,
+    required this.nightlyTasks,
     required this.notifications,
     required this.oauth,
     required this.passwordLogin,
@@ -41,6 +43,8 @@ class SystemConfigDto {
 
   SystemConfigImageDto image;
 
+  SystemConfigIntegrityChecks integrityChecks;
+
   SystemConfigJobDto job;
 
   SystemConfigLibraryDto library_;
@@ -54,6 +58,8 @@ class SystemConfigDto {
   SystemConfigMetadataDto metadata;
 
   SystemConfigNewVersionCheckDto newVersionCheck;
+
+  SystemConfigNightlyTasksDto nightlyTasks;
 
   SystemConfigNotificationsDto notifications;
 
@@ -80,6 +86,7 @@ class SystemConfigDto {
     other.backup == backup &&
     other.ffmpeg == ffmpeg &&
     other.image == image &&
+    other.integrityChecks == integrityChecks &&
     other.job == job &&
     other.library_ == library_ &&
     other.logging == logging &&
@@ -87,6 +94,7 @@ class SystemConfigDto {
     other.map == map &&
     other.metadata == metadata &&
     other.newVersionCheck == newVersionCheck &&
+    other.nightlyTasks == nightlyTasks &&
     other.notifications == notifications &&
     other.oauth == oauth &&
     other.passwordLogin == passwordLogin &&
@@ -104,6 +112,7 @@ class SystemConfigDto {
     (backup.hashCode) +
     (ffmpeg.hashCode) +
     (image.hashCode) +
+    (integrityChecks.hashCode) +
     (job.hashCode) +
     (library_.hashCode) +
     (logging.hashCode) +
@@ -111,6 +120,7 @@ class SystemConfigDto {
     (map.hashCode) +
     (metadata.hashCode) +
     (newVersionCheck.hashCode) +
+    (nightlyTasks.hashCode) +
     (notifications.hashCode) +
     (oauth.hashCode) +
     (passwordLogin.hashCode) +
@@ -123,13 +133,14 @@ class SystemConfigDto {
     (user.hashCode);
 
   @override
-  String toString() => 'SystemConfigDto[backup=$backup, ffmpeg=$ffmpeg, image=$image, job=$job, library_=$library_, logging=$logging, machineLearning=$machineLearning, map=$map, metadata=$metadata, newVersionCheck=$newVersionCheck, notifications=$notifications, oauth=$oauth, passwordLogin=$passwordLogin, reverseGeocoding=$reverseGeocoding, server=$server, storageTemplate=$storageTemplate, templates=$templates, theme=$theme, trash=$trash, user=$user]';
+  String toString() => 'SystemConfigDto[backup=$backup, ffmpeg=$ffmpeg, image=$image, integrityChecks=$integrityChecks, job=$job, library_=$library_, logging=$logging, machineLearning=$machineLearning, map=$map, metadata=$metadata, newVersionCheck=$newVersionCheck, nightlyTasks=$nightlyTasks, notifications=$notifications, oauth=$oauth, passwordLogin=$passwordLogin, reverseGeocoding=$reverseGeocoding, server=$server, storageTemplate=$storageTemplate, templates=$templates, theme=$theme, trash=$trash, user=$user]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
       json[r'backup'] = this.backup;
       json[r'ffmpeg'] = this.ffmpeg;
       json[r'image'] = this.image;
+      json[r'integrityChecks'] = this.integrityChecks;
       json[r'job'] = this.job;
       json[r'library'] = this.library_;
       json[r'logging'] = this.logging;
@@ -137,6 +148,7 @@ class SystemConfigDto {
       json[r'map'] = this.map;
       json[r'metadata'] = this.metadata;
       json[r'newVersionCheck'] = this.newVersionCheck;
+      json[r'nightlyTasks'] = this.nightlyTasks;
       json[r'notifications'] = this.notifications;
       json[r'oauth'] = this.oauth;
       json[r'passwordLogin'] = this.passwordLogin;
@@ -162,6 +174,7 @@ class SystemConfigDto {
         backup: SystemConfigBackupsDto.fromJson(json[r'backup'])!,
         ffmpeg: SystemConfigFFmpegDto.fromJson(json[r'ffmpeg'])!,
         image: SystemConfigImageDto.fromJson(json[r'image'])!,
+        integrityChecks: SystemConfigIntegrityChecks.fromJson(json[r'integrityChecks'])!,
         job: SystemConfigJobDto.fromJson(json[r'job'])!,
         library_: SystemConfigLibraryDto.fromJson(json[r'library'])!,
         logging: SystemConfigLoggingDto.fromJson(json[r'logging'])!,
@@ -169,6 +182,7 @@ class SystemConfigDto {
         map: SystemConfigMapDto.fromJson(json[r'map'])!,
         metadata: SystemConfigMetadataDto.fromJson(json[r'metadata'])!,
         newVersionCheck: SystemConfigNewVersionCheckDto.fromJson(json[r'newVersionCheck'])!,
+        nightlyTasks: SystemConfigNightlyTasksDto.fromJson(json[r'nightlyTasks'])!,
         notifications: SystemConfigNotificationsDto.fromJson(json[r'notifications'])!,
         oauth: SystemConfigOAuthDto.fromJson(json[r'oauth'])!,
         passwordLogin: SystemConfigPasswordLoginDto.fromJson(json[r'passwordLogin'])!,
@@ -229,6 +243,7 @@ class SystemConfigDto {
     'backup',
     'ffmpeg',
     'image',
+    'integrityChecks',
     'job',
     'library',
     'logging',
@@ -236,6 +251,7 @@ class SystemConfigDto {
     'map',
     'metadata',
     'newVersionCheck',
+    'nightlyTasks',
     'notifications',
     'oauth',
     'passwordLogin',

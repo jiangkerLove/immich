@@ -6,7 +6,6 @@ export const sharedLinkFactory = Sync.makeFactory<SharedLinkResponseDto>({
   id: Sync.each(() => faker.string.uuid()),
   description: Sync.each(() => faker.word.sample()),
   password: Sync.each(() => faker.word.sample()),
-  token: Sync.each(() => faker.word.sample()),
   userId: Sync.each(() => faker.string.uuid()),
   key: Sync.each(() => faker.word.sample()),
   type: Sync.each(() => faker.helpers.enumValue(SharedLinkType)),
@@ -16,4 +15,5 @@ export const sharedLinkFactory = Sync.makeFactory<SharedLinkResponseDto>({
   allowUpload: Sync.each(() => faker.datatype.boolean()),
   allowDownload: Sync.each(() => faker.datatype.boolean()),
   showMetadata: Sync.each(() => faker.datatype.boolean()),
+  slug: null,
 });

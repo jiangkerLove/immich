@@ -1,76 +1,64 @@
-// ignore_for_file: avoid-dynamic
-
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:immich_mobile/domain/interfaces/store.interface.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/services/store.service.dart';
+import 'package:immich_mobile/infrastructure/repositories/store.repository.dart';
 import 'package:mocktail/mocktail.dart';
 
 import '../../infrastructure/repository.mock.dart';
 
 const _kAccessToken = '#ThisIsAToken';
-const _kBackgroundBackup = false;
-const _kGroupAssetsBy = 2;
-final _kBackupFailedSince = DateTime.utc(2023);
+const _kAdvancedTroubleshooting = false;
+const _kVersion = 2;
 
 void main() {
   late StoreService sut;
-  late IStoreRepository mockStoreRepo;
-  late StreamController<StoreUpdateEvent> controller;
+  late DriftStoreRepository mockDriftStoreRepo;
+  late StreamController<List<StoreDto<Object>>> controller;
 
   setUp(() async {
-    controller = StreamController<StoreUpdateEvent>.broadcast();
-    mockStoreRepo = MockStoreRepository();
+    controller = StreamController<List<StoreDto<Object>>>.broadcast();
+    mockDriftStoreRepo = MockDriftStoreRepository();
     // For generics, we need to provide fallback to each concrete type to avoid runtime errors
     registerFallbackValue(StoreKey.accessToken);
-    registerFallbackValue(StoreKey.backupTriggerDelay);
-    registerFallbackValue(StoreKey.backgroundBackup);
-    registerFallbackValue(StoreKey.backupFailedSince);
+    registerFallbackValue(StoreKey.version);
+    registerFallbackValue(StoreKey.advancedTroubleshooting);
 
-    when(() => mockStoreRepo.tryGet(any<StoreKey<dynamic>>()))
-        .thenAnswer((invocation) async {
-      final key = invocation.positionalArguments.firstOrNull as StoreKey;
-      return switch (key) {
-        StoreKey.accessToken => _kAccessToken,
-        StoreKey.backgroundBackup => _kBackgroundBackup,
-        StoreKey.groupAssetsBy => _kGroupAssetsBy,
-        StoreKey.backupFailedSince => _kBackupFailedSince,
-        // ignore: avoid-wildcard-cases-with-enums
-        _ => null,
-      };
-    });
-    when(() => mockStoreRepo.watchAll()).thenAnswer((_) => controller.stream);
+    when(() => mockDriftStoreRepo.getAll()).thenAnswer(
+      (_) async => [
+        const StoreDto(StoreKey.accessToken, _kAccessToken),
+        const StoreDto(StoreKey.advancedTroubleshooting, _kAdvancedTroubleshooting),
+        const StoreDto(StoreKey.version, _kVersion),
+      ],
+    );
+    when(() => mockDriftStoreRepo.watchAll()).thenAnswer((_) => controller.stream);
 
-    sut = await StoreService.create(storeRepository: mockStoreRepo);
+    sut = await StoreService.create(storeRepository: mockDriftStoreRepo);
   });
 
   tearDown(() async {
-    sut.dispose();
+    unawaited(sut.dispose());
     await controller.close();
   });
 
   group("Store Service Init:", () {
     test('Populates the internal cache on init', () {
-      verify(() => mockStoreRepo.tryGet(any<StoreKey<dynamic>>()))
-          .called(equals(StoreKey.values.length));
+      verify(() => mockDriftStoreRepo.getAll()).called(1);
       expect(sut.tryGet(StoreKey.accessToken), _kAccessToken);
-      expect(sut.tryGet(StoreKey.backgroundBackup), _kBackgroundBackup);
-      expect(sut.tryGet(StoreKey.groupAssetsBy), _kGroupAssetsBy);
-      expect(sut.tryGet(StoreKey.backupFailedSince), _kBackupFailedSince);
+      expect(sut.tryGet(StoreKey.advancedTroubleshooting), _kAdvancedTroubleshooting);
+      expect(sut.tryGet(StoreKey.version), _kVersion);
       // Other keys should be null
       expect(sut.tryGet(StoreKey.currentUser), isNull);
     });
 
     test('Listens to stream of store updates', () async {
-      final event =
-          StoreUpdateEvent(StoreKey.accessToken, _kAccessToken.toUpperCase());
-      controller.add(event);
+      final event = StoreDto(StoreKey.accessToken, _kAccessToken.toUpperCase());
+      controller.add([event]);
 
       await pumpEventQueue();
 
-      verify(() => mockStoreRepo.watchAll()).called(1);
+      verify(() => mockDriftStoreRepo.watchAll()).called(1);
       expect(sut.tryGet(StoreKey.accessToken), _kAccessToken.toUpperCase());
     });
   });
@@ -81,10 +69,7 @@ void main() {
     });
 
     test('Throws StoreKeyNotFoundException for nonexistent keys', () {
-      expect(
-        () => sut.get(StoreKey.currentUser),
-        throwsA(isA<StoreKeyNotFoundException>()),
-      );
+      expect(() => sut.get(StoreKey.currentUser), throwsA(isA<StoreKeyNotFoundException>()));
     });
 
     test('Returns the stored value for the given key or the defaultValue', () {
@@ -94,24 +79,18 @@ void main() {
 
   group('Store Service put:', () {
     setUp(() {
-      when(() => mockStoreRepo.insert<String>(any<StoreKey<String>>(), any()))
-          .thenAnswer((_) async => true);
+      when(() => mockDriftStoreRepo.upsert<String>(any<StoreKey<String>>(), any())).thenAnswer((_) async => true);
     });
 
     test('Skip insert when value is not modified', () async {
       await sut.put(StoreKey.accessToken, _kAccessToken);
-      verifyNever(
-        () => mockStoreRepo.insert<String>(StoreKey.accessToken, any()),
-      );
+      verifyNever(() => mockDriftStoreRepo.upsert<String>(StoreKey.accessToken, any()));
     });
 
     test('Insert value when modified', () async {
       final newAccessToken = _kAccessToken.toUpperCase();
       await sut.put(StoreKey.accessToken, newAccessToken);
-      verify(
-        () =>
-            mockStoreRepo.insert<String>(StoreKey.accessToken, newAccessToken),
-      ).called(1);
+      verify(() => mockDriftStoreRepo.upsert<String>(StoreKey.accessToken, newAccessToken)).called(1);
       expect(sut.tryGet(StoreKey.accessToken), newAccessToken);
     });
   });
@@ -121,8 +100,7 @@ void main() {
 
     setUp(() {
       valueController = StreamController<String?>.broadcast();
-      when(() => mockStoreRepo.watch<String>(any<StoreKey<String>>()))
-          .thenAnswer((_) => valueController.stream);
+      when(() => mockDriftStoreRepo.watch<String>(any<StoreKey<String>>())).thenAnswer((_) => valueController.stream);
     });
 
     tearDown(() async {
@@ -131,34 +109,27 @@ void main() {
 
     test('Watches a specific key for changes', () async {
       final stream = sut.watch(StoreKey.accessToken);
-      final events = <String?>[
-        _kAccessToken,
-        _kAccessToken.toUpperCase(),
-        null,
-        _kAccessToken.toLowerCase(),
-      ];
+      final events = <String?>[_kAccessToken, _kAccessToken.toUpperCase(), null, _kAccessToken.toLowerCase()];
 
-      expectLater(stream, emitsInOrder(events));
+      unawaited(expectLater(stream, emitsInOrder(events)));
 
       for (final event in events) {
         valueController.add(event);
       }
 
       await pumpEventQueue();
-      verify(() => mockStoreRepo.watch<String>(StoreKey.accessToken)).called(1);
+      verify(() => mockDriftStoreRepo.watch<String>(StoreKey.accessToken)).called(1);
     });
   });
 
   group('Store Service delete:', () {
     setUp(() {
-      when(() => mockStoreRepo.delete<String>(any<StoreKey<String>>()))
-          .thenAnswer((_) async => true);
+      when(() => mockDriftStoreRepo.delete<String>(any<StoreKey<String>>())).thenAnswer((_) async => true);
     });
 
     test('Removes the value from the DB', () async {
       await sut.delete(StoreKey.accessToken);
-      verify(() => mockStoreRepo.delete<String>(StoreKey.accessToken))
-          .called(1);
+      verify(() => mockDriftStoreRepo.delete<String>(StoreKey.accessToken)).called(1);
     });
 
     test('Removes the value from the cache', () async {
@@ -169,16 +140,15 @@ void main() {
 
   group('Store Service clear:', () {
     setUp(() {
-      when(() => mockStoreRepo.deleteAll()).thenAnswer((_) async => true);
+      when(() => mockDriftStoreRepo.deleteAll()).thenAnswer((_) async => true);
     });
 
     test('Clears all values from the store', () async {
       await sut.clear();
-      verify(() => mockStoreRepo.deleteAll()).called(1);
+      verify(() => mockDriftStoreRepo.deleteAll()).called(1);
       expect(sut.tryGet(StoreKey.accessToken), isNull);
-      expect(sut.tryGet(StoreKey.backgroundBackup), isNull);
-      expect(sut.tryGet(StoreKey.groupAssetsBy), isNull);
-      expect(sut.tryGet(StoreKey.backupFailedSince), isNull);
+      expect(sut.tryGet(StoreKey.advancedTroubleshooting), isNull);
+      expect(sut.tryGet(StoreKey.version), isNull);
     });
   });
 }

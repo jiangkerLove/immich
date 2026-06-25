@@ -17,57 +17,69 @@ class AlbumResponseDto {
     required this.albumThumbnailAssetId,
     this.albumUsers = const [],
     required this.assetCount,
-    this.assets = const [],
+    this.contributorCounts = const Optional.present(const []),
     required this.createdAt,
     required this.description,
-    this.endDate,
+    this.endDate = const Optional.absent(),
     required this.hasSharedLink,
     required this.id,
     required this.isActivityEnabled,
-    this.lastModifiedAssetTimestamp,
-    this.order,
-    required this.owner,
-    required this.ownerId,
+    this.lastModifiedAssetTimestamp = const Optional.absent(),
+    this.order = const Optional.absent(),
     required this.shared,
-    this.startDate,
+    this.startDate = const Optional.absent(),
     required this.updatedAt,
   });
 
+  /// Album name
   String albumName;
 
+  /// Thumbnail asset ID
   String? albumThumbnailAssetId;
 
+  /// First entry is always the album owner. Second entry is the auth user, if it differs from the owner. The rest are ordered alphabetically.
   List<AlbumUserResponseDto> albumUsers;
 
+  /// Number of assets
+  ///
+  /// Minimum value: 0
+  /// Maximum value: 9007199254740991
   int assetCount;
 
-  List<AssetResponseDto> assets;
+  Optional<List<ContributorCountResponseDto>?> contributorCounts;
 
+  /// Creation date
   DateTime createdAt;
 
+  /// Album description
   String description;
 
+  /// End date (latest asset)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? endDate;
+  Optional<DateTime?> endDate;
 
+  /// Has shared link
   bool hasSharedLink;
 
+  /// Album ID
   String id;
 
+  /// Activity feed enabled
   bool isActivityEnabled;
 
+  /// Last modified asset timestamp
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? lastModifiedAssetTimestamp;
+  Optional<DateTime?> lastModifiedAssetTimestamp;
 
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
@@ -75,22 +87,21 @@ class AlbumResponseDto {
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  AssetOrder? order;
+  Optional<AssetOrder?> order;
 
-  UserResponseDto owner;
-
-  String ownerId;
-
+  /// Is shared album
   bool shared;
 
+  /// Start date (earliest asset)
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  DateTime? startDate;
+  Optional<DateTime?> startDate;
 
+  /// Last update date
   DateTime updatedAt;
 
   @override
@@ -99,7 +110,7 @@ class AlbumResponseDto {
     other.albumThumbnailAssetId == albumThumbnailAssetId &&
     _deepEquality.equals(other.albumUsers, albumUsers) &&
     other.assetCount == assetCount &&
-    _deepEquality.equals(other.assets, assets) &&
+    _deepEquality.equals(other.contributorCounts, contributorCounts) &&
     other.createdAt == createdAt &&
     other.description == description &&
     other.endDate == endDate &&
@@ -108,8 +119,6 @@ class AlbumResponseDto {
     other.isActivityEnabled == isActivityEnabled &&
     other.lastModifiedAssetTimestamp == lastModifiedAssetTimestamp &&
     other.order == order &&
-    other.owner == owner &&
-    other.ownerId == ownerId &&
     other.shared == shared &&
     other.startDate == startDate &&
     other.updatedAt == updatedAt;
@@ -121,7 +130,7 @@ class AlbumResponseDto {
     (albumThumbnailAssetId == null ? 0 : albumThumbnailAssetId!.hashCode) +
     (albumUsers.hashCode) +
     (assetCount.hashCode) +
-    (assets.hashCode) +
+    (contributorCounts.hashCode) +
     (createdAt.hashCode) +
     (description.hashCode) +
     (endDate == null ? 0 : endDate!.hashCode) +
@@ -130,14 +139,12 @@ class AlbumResponseDto {
     (isActivityEnabled.hashCode) +
     (lastModifiedAssetTimestamp == null ? 0 : lastModifiedAssetTimestamp!.hashCode) +
     (order == null ? 0 : order!.hashCode) +
-    (owner.hashCode) +
-    (ownerId.hashCode) +
     (shared.hashCode) +
     (startDate == null ? 0 : startDate!.hashCode) +
     (updatedAt.hashCode);
 
   @override
-  String toString() => 'AlbumResponseDto[albumName=$albumName, albumThumbnailAssetId=$albumThumbnailAssetId, albumUsers=$albumUsers, assetCount=$assetCount, assets=$assets, createdAt=$createdAt, description=$description, endDate=$endDate, hasSharedLink=$hasSharedLink, id=$id, isActivityEnabled=$isActivityEnabled, lastModifiedAssetTimestamp=$lastModifiedAssetTimestamp, order=$order, owner=$owner, ownerId=$ownerId, shared=$shared, startDate=$startDate, updatedAt=$updatedAt]';
+  String toString() => 'AlbumResponseDto[albumName=$albumName, albumThumbnailAssetId=$albumThumbnailAssetId, albumUsers=$albumUsers, assetCount=$assetCount, contributorCounts=$contributorCounts, createdAt=$createdAt, description=$description, endDate=$endDate, hasSharedLink=$hasSharedLink, id=$id, isActivityEnabled=$isActivityEnabled, lastModifiedAssetTimestamp=$lastModifiedAssetTimestamp, order=$order, shared=$shared, startDate=$startDate, updatedAt=$updatedAt]';
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
@@ -145,38 +152,35 @@ class AlbumResponseDto {
     if (this.albumThumbnailAssetId != null) {
       json[r'albumThumbnailAssetId'] = this.albumThumbnailAssetId;
     } else {
-    //  json[r'albumThumbnailAssetId'] = null;
+      json[r'albumThumbnailAssetId'] = null;
     }
       json[r'albumUsers'] = this.albumUsers;
       json[r'assetCount'] = this.assetCount;
-      json[r'assets'] = this.assets;
+    if (this.contributorCounts.isPresent) {
+      final value = this.contributorCounts.value;
+      json[r'contributorCounts'] = value;
+    }
       json[r'createdAt'] = this.createdAt.toUtc().toIso8601String();
       json[r'description'] = this.description;
-    if (this.endDate != null) {
-      json[r'endDate'] = this.endDate!.toUtc().toIso8601String();
-    } else {
-    //  json[r'endDate'] = null;
+    if (this.endDate.isPresent) {
+      final value = this.endDate.value;
+      json[r'endDate'] = value == null ? null : value.toUtc().toIso8601String();
     }
       json[r'hasSharedLink'] = this.hasSharedLink;
       json[r'id'] = this.id;
       json[r'isActivityEnabled'] = this.isActivityEnabled;
-    if (this.lastModifiedAssetTimestamp != null) {
-      json[r'lastModifiedAssetTimestamp'] = this.lastModifiedAssetTimestamp!.toUtc().toIso8601String();
-    } else {
-    //  json[r'lastModifiedAssetTimestamp'] = null;
+    if (this.lastModifiedAssetTimestamp.isPresent) {
+      final value = this.lastModifiedAssetTimestamp.value;
+      json[r'lastModifiedAssetTimestamp'] = value == null ? null : value.toUtc().toIso8601String();
     }
-    if (this.order != null) {
-      json[r'order'] = this.order;
-    } else {
-    //  json[r'order'] = null;
+    if (this.order.isPresent) {
+      final value = this.order.value;
+      json[r'order'] = value;
     }
-      json[r'owner'] = this.owner;
-      json[r'ownerId'] = this.ownerId;
       json[r'shared'] = this.shared;
-    if (this.startDate != null) {
-      json[r'startDate'] = this.startDate!.toUtc().toIso8601String();
-    } else {
-    //  json[r'startDate'] = null;
+    if (this.startDate.isPresent) {
+      final value = this.startDate.value;
+      json[r'startDate'] = value == null ? null : value.toUtc().toIso8601String();
     }
       json[r'updatedAt'] = this.updatedAt.toUtc().toIso8601String();
     return json;
@@ -195,19 +199,17 @@ class AlbumResponseDto {
         albumThumbnailAssetId: mapValueOfType<String>(json, r'albumThumbnailAssetId'),
         albumUsers: AlbumUserResponseDto.listFromJson(json[r'albumUsers']),
         assetCount: mapValueOfType<int>(json, r'assetCount')!,
-        assets: AssetResponseDto.listFromJson(json[r'assets']),
+        contributorCounts: json.containsKey(r'contributorCounts') ? Optional.present(ContributorCountResponseDto.listFromJson(json[r'contributorCounts'])) : const Optional.absent(),
         createdAt: mapDateTime(json, r'createdAt', r'')!,
         description: mapValueOfType<String>(json, r'description')!,
-        endDate: mapDateTime(json, r'endDate', r''),
+        endDate: json.containsKey(r'endDate') ? Optional.present(mapDateTime(json, r'endDate', r'')) : const Optional.absent(),
         hasSharedLink: mapValueOfType<bool>(json, r'hasSharedLink')!,
         id: mapValueOfType<String>(json, r'id')!,
         isActivityEnabled: mapValueOfType<bool>(json, r'isActivityEnabled')!,
-        lastModifiedAssetTimestamp: mapDateTime(json, r'lastModifiedAssetTimestamp', r''),
-        order: AssetOrder.fromJson(json[r'order']),
-        owner: UserResponseDto.fromJson(json[r'owner'])!,
-        ownerId: mapValueOfType<String>(json, r'ownerId')!,
+        lastModifiedAssetTimestamp: json.containsKey(r'lastModifiedAssetTimestamp') ? Optional.present(mapDateTime(json, r'lastModifiedAssetTimestamp', r'')) : const Optional.absent(),
+        order: json.containsKey(r'order') ? Optional.present(AssetOrder.fromJson(json[r'order'])) : const Optional.absent(),
         shared: mapValueOfType<bool>(json, r'shared')!,
-        startDate: mapDateTime(json, r'startDate', r''),
+        startDate: json.containsKey(r'startDate') ? Optional.present(mapDateTime(json, r'startDate', r'')) : const Optional.absent(),
         updatedAt: mapDateTime(json, r'updatedAt', r'')!,
       );
     }
@@ -260,14 +262,11 @@ class AlbumResponseDto {
     'albumThumbnailAssetId',
     'albumUsers',
     'assetCount',
-    'assets',
     'createdAt',
     'description',
     'hasSharedLink',
     'id',
     'isActivityEnabled',
-    'owner',
-    'ownerId',
     'shared',
     'updatedAt',
   };

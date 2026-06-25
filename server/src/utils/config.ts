@@ -1,18 +1,14 @@
 import AsyncLock from 'async-lock';
-import { instanceToPlain, plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 import { load as loadYaml } from 'js-yaml';
 import * as _ from 'lodash';
 import { SystemConfig, defaults } from 'src/config';
-import { SystemConfigDto } from 'src/dtos/system-config.dto';
+import { SystemConfigSchema } from 'src/dtos/system-config.dto';
 import { DatabaseLock, SystemMetadataKey } from 'src/enum';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { LoggingRepository } from 'src/repositories/logging.repository';
 import { SystemMetadataRepository } from 'src/repositories/system-metadata.repository';
 import { DeepPartial } from 'src/types';
 import { getKeysDeep, unsetDeep } from 'src/utils/misc';
-
-export type SystemConfigValidator = (config: SystemConfig, newConfig: SystemConfig) => void | Promise<void>;
 
 type RepoDeps = {
   configRepo: ConfigRepository;
@@ -60,7 +56,7 @@ export const updateConfig = async (repos: RepoDeps, newConfig: SystemConfig): Pr
     _.set(partialConfig, property, newValue);
   }
 
-  await metadataRepo.set(SystemMetadataKey.SYSTEM_CONFIG, partialConfig);
+  await metadataRepo.set(SystemMetadataKey.SystemConfig, partialConfig);
 
   return getConfig(repos, { withCache: false });
 };
@@ -83,7 +79,7 @@ const buildConfig = async (repos: RepoDeps) => {
   // load partial
   const partial = configFile
     ? await loadFromFile(repos, configFile)
-    : await metadataRepo.get(SystemMetadataKey.SYSTEM_CONFIG);
+    : await metadataRepo.get(SystemMetadataKey.SystemConfig);
 
   // merge with defaults
   const rawConfig = _.cloneDeep(defaults);
@@ -101,22 +97,32 @@ const buildConfig = async (repos: RepoDeps) => {
     logger.warn(`Unknown keys found: ${JSON.stringify(unknownKeys, null, 2)}`);
   }
 
-  // validate full config
-  const instance = plainToInstance(SystemConfigDto, rawConfig);
-  const errors = await validate(instance);
-  if (errors.length > 0) {
+  // validate with Zod schema
+  const result = SystemConfigSchema.safeParse(rawConfig);
+  if (!result.success) {
+    const messages = ['Invalid system config: '];
+    for (const issue of result.error.issues) {
+      const path = issue.path.join('.');
+      messages.push(`  - [${path}] ${issue.message}`);
+    }
     if (configFile) {
-      throw new Error(`Invalid value(s) in file: ${errors}`);
+      throw new Error(messages.join('\n'));
     } else {
-      logger.error('Validation error', errors);
+      logger.error('Validation error', messages);
     }
   }
 
-  // return config with class-transform changes
-  const config = instanceToPlain(instance) as SystemConfig;
+  const config = (result.success ? result.data : rawConfig) as SystemConfig;
 
   if (config.server.externalDomain.length > 0) {
-    config.server.externalDomain = new URL(config.server.externalDomain).origin;
+    const domain = new URL(config.server.externalDomain);
+
+    let externalDomain = domain.origin;
+    if (domain.password && domain.username) {
+      externalDomain = `${domain.protocol}//${domain.username}:${domain.password}@${domain.host}`;
+    }
+
+    config.server.externalDomain = externalDomain;
   }
 
   if (!config.ffmpeg.acceptedVideoCodecs.includes(config.ffmpeg.targetVideoCodec)) {

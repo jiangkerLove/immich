@@ -2,20 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/person.model.dart';
 import 'package:immich_mobile/extensions/asyncvalue_extensions.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
-import 'package:immich_mobile/interfaces/person_api.interface.dart';
+import 'package:immich_mobile/extensions/string_extensions.dart';
 import 'package:immich_mobile/pages/common/large_leading_tile.dart';
+import 'package:immich_mobile/presentation/widgets/images/remote_image_provider.dart';
 import 'package:immich_mobile/providers/search/people.provider.dart';
-import 'package:immich_mobile/services/api.service.dart';
 import 'package:immich_mobile/utils/image_url_builder.dart';
 import 'package:immich_mobile/widgets/common/search_field.dart';
 
 class PeoplePicker extends HookConsumerWidget {
   const PeoplePicker({super.key, required this.onSelect, this.filter});
 
-  final Function(Set<Person>) onSelect;
-  final Set<Person>? filter;
+  final Function(Set<PersonDto>) onSelect;
+  final Set<PersonDto>? filter;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -23,8 +24,7 @@ class PeoplePicker extends HookConsumerWidget {
     final imageSize = 60.0;
     final searchQuery = useState('');
     final people = ref.watch(getAllPeopleProvider);
-    final headers = ApiService.getRequestHeaders();
-    final selectedPeople = useState<Set<Person>>(filter ?? {});
+    final selectedPeople = useState<Set<PersonDto>>(filter ?? {});
 
     return Column(
       children: [
@@ -40,35 +40,28 @@ class PeoplePicker extends HookConsumerWidget {
         ),
         Padding(
           padding: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 0),
-          child: Divider(
-            color: context.colorScheme.surfaceContainerHighest,
-            thickness: 1,
-          ),
+          child: Divider(color: context.colorScheme.surfaceContainerHighest, thickness: 1),
         ),
         Expanded(
           child: people.widgetWhen(
             onData: (people) {
+              final filtered = people
+                  .where(
+                    (person) => person.name.toLowerCase().removeDiacritics().contains(
+                      searchQuery.value.toLowerCase().removeDiacritics(),
+                    ),
+                  )
+                  .toList();
               return ListView.builder(
                 shrinkWrap: true,
-                itemCount: people
-                    .where(
-                      (person) => person.name
-                          .toLowerCase()
-                          .contains(searchQuery.value.toLowerCase()),
-                    )
-                    .length,
+                itemCount: filtered.length,
                 padding: const EdgeInsets.all(8),
                 itemBuilder: (context, index) {
-                  final person = people
-                      .where(
-                        (person) => person.name
-                            .toLowerCase()
-                            .contains(searchQuery.value.toLowerCase()),
-                      )
-                      .toList()[index];
+                  final person = filtered[index];
                   final isSelected = selectedPeople.value.contains(person);
 
                   return Padding(
+                    key: ValueKey(person.id),
                     padding: const EdgeInsets.only(bottom: 2.0),
                     child: LargeLeadingTile(
                       title: Text(
@@ -76,9 +69,7 @@ class PeoplePicker extends HookConsumerWidget {
                         style: context.textTheme.bodyLarge?.copyWith(
                           fontSize: 20,
                           fontWeight: FontWeight.w500,
-                          color: isSelected
-                              ? context.colorScheme.onPrimary
-                              : context.colorScheme.onSurface,
+                          color: isSelected ? context.colorScheme.onPrimary : context.colorScheme.onSurface,
                         ),
                       ),
                       leading: SizedBox(
@@ -87,11 +78,9 @@ class PeoplePicker extends HookConsumerWidget {
                           shape: const CircleBorder(side: BorderSide.none),
                           elevation: 3,
                           child: CircleAvatar(
+                            key: ValueKey(person.id),
                             maxRadius: imageSize / 2,
-                            backgroundImage: NetworkImage(
-                              getFaceThumbnailUrl(person.id),
-                              headers: headers,
-                            ),
+                            backgroundImage: RemoteImageProvider(url: getFaceThumbnailUrl(person.id)),
                           ),
                         ),
                       ),

@@ -3,8 +3,17 @@ name: Weblate checks
 on:
   pull_request:
     branches: [main]
+    types:
+      - opened
+      - synchronize
+      - ready_for_review
+      - auto_merge_enabled
+      - auto_merge_disabled
 
 permissions: {}
+
+env:
+  BOT_NAME: immich-push-o-matic
 
 jobs:
   pre-job:
@@ -12,39 +21,46 @@ jobs:
     permissions:
       contents: read
     outputs:
-      should_run: ${{ steps.found_paths.outputs.i18n == 'true' && github.head_ref != 'chore/translations'}}
+      should_run: ${{ steps.check.outputs.should_run }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
         with:
-          persist-credentials: false
-      - id: found_paths
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - name: Check what should run
+        id: check
+        uses: immich-app/devtools/actions/pre-job@91f342bb4477c4bc10c576ae739da875d85aa164 # pre-job-action-v2.0.4
         with:
+          github-token: ${{ steps.token.outputs.token }}
           filters: |
             i18n:
-              - 'i18n/!(en)**\.json'
+              - modified: 'i18n/!(en)**\.json'
+          skip-force-logic: 'true'
 
   enforce-lock:
     name: Check Weblate Lock
     needs: [pre-job]
     runs-on: ubuntu-latest
     permissions: {}
-    if: ${{ needs.pre-job.outputs.should_run == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).i18n == true }}
     steps:
-      - name: Check weblate lock
-        run: |
-          if [[ "false" = $(curl https://hosted.weblate.org/api/components/immich/immich/lock/ | jq .locked) ]]; then
-            exit 1
-          fi
-      - name: Find Pull Request
-        uses: juliangruber/find-pull-request-action@48b6133aa6c826f267ebd33aa2d29470f9d9e7d0 # v1.9.0
-        id: find-pr
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
         with:
-          branch: chore/translations
-      - name: Fail if existing weblate PR
-        if: ${{ steps.find-pr.outputs.number }}
-        run: exit 1
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - name: Bot review status
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.pull_request_review.pull_request.number }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          # Then check for APPROVED by the bot, if absent fail
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json reviews | jq -e '.reviews | map(select(.author.login == env.BOT_NAME and .state == "APPROVED")) | length > 0' \
+            || (echo "The push-o-matic bot has not approved this PR yet" && exit 1)
+
   success-check-lock:
     name: Weblate Lock Check Success
     needs: [enforce-lock]
@@ -52,10 +68,6 @@ jobs:
     permissions: {}
     if: always()
     steps:
-      - name: Any jobs failed?
-        if: ${{ contains(needs.*.result, 'failure') }}
-        run: exit 1
-      - name: All jobs passed or skipped
-        if: ${{ !(contains(needs.*.result, 'failure')) }}
-        # zizmor: ignore[template-injection]
-        run: echo "All jobs passed or skipped" && echo "${{ toJSON(needs.*.result) }}"
+      - uses: immich-app/devtools/actions/success-check@81113db03f6d743efee81e0058c0b43f6cd6f36d # success-check-action-v0.0.6
+        with:
+          needs: ${{ toJSON(needs) }}

@@ -1,16 +1,5 @@
 /// Log levels according to dart logging [Level]
-enum LogLevel {
-  all,
-  finest,
-  finer,
-  fine,
-  config,
-  info,
-  warning,
-  severe,
-  shout,
-  off,
-}
+enum LogLevel { all, finest, finer, fine, config, info, warning, severe, shout, off }
 
 class LogMessage {
   final String message;
@@ -31,7 +20,9 @@ class LogMessage {
 
   @override
   bool operator ==(covariant LogMessage other) {
-    if (identical(this, other)) return true;
+    if (identical(this, other)) {
+      return true;
+    }
 
     return other.message == message &&
         other.level == level &&
@@ -43,12 +34,7 @@ class LogMessage {
 
   @override
   int get hashCode {
-    return message.hashCode ^
-        level.hashCode ^
-        createdAt.hashCode ^
-        logger.hashCode ^
-        error.hashCode ^
-        stack.hashCode;
+    return message.hashCode ^ level.hashCode ^ createdAt.hashCode ^ logger.hashCode ^ error.hashCode ^ stack.hashCode;
   }
 
   @override

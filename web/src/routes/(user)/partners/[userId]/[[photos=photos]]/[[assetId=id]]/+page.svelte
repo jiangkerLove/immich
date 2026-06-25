@@ -1,18 +1,16 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import AddToAlbum from '$lib/components/photos-page/actions/add-to-album.svelte';
-  import CreateSharedLink from '$lib/components/photos-page/actions/create-shared-link.svelte';
-  import DownloadAction from '$lib/components/photos-page/actions/download-action.svelte';
-  import AssetGrid from '$lib/components/photos-page/asset-grid.svelte';
-  import AssetSelectControlBar from '$lib/components/photos-page/asset-select-control-bar.svelte';
-  import ButtonContextMenu from '$lib/components/shared-components/context-menu/button-context-menu.svelte';
-  import ControlAppBar from '$lib/components/shared-components/control-app-bar.svelte';
-  import { AppRoute } from '$lib/constants';
-  import { AssetInteraction } from '$lib/stores/asset-interaction.svelte';
-  import { AssetStore } from '$lib/stores/assets-store.svelte';
+  import ControlAppBar from '$lib/components/shared-components/ControlAppBar.svelte';
+  import CreateSharedLink from '$lib/components/timeline/actions/CreateSharedLinkAction.svelte';
+  import DownloadAction from '$lib/components/timeline/actions/DownloadAction.svelte';
+  import AssetSelectControlBar from '$lib/components/timeline/AssetSelectControlBar.svelte';
+  import Timeline from '$lib/components/timeline/Timeline.svelte';
+  import { assetMultiSelectManager } from '$lib/managers/asset-multi-select-manager.svelte';
+  import { Route } from '$lib/route';
+  import { getAssetBulkActions } from '$lib/services/asset.service';
   import { AssetVisibility } from '@immich/sdk';
-  import { mdiArrowLeft, mdiPlus } from '@mdi/js';
-  import { onDestroy } from 'svelte';
+  import { ActionButton, CommandPaletteDefaultProvider } from '@immich/ui';
+  import { mdiArrowLeft } from '@mdi/js';
   import { t } from 'svelte-i18n';
   import type { PageData } from './$types';
 
@@ -22,48 +20,38 @@
 
   let { data }: Props = $props();
 
-  const assetStore = new AssetStore();
-  $effect(
-    () =>
-      void assetStore.updateOptions({
-        userId: data.partner.id,
-        visibility: AssetVisibility.Timeline,
-        withStacked: true,
-      }),
-  );
-  onDestroy(() => assetStore.destroy());
-  const assetInteraction = new AssetInteraction();
+  const options = $derived({
+    userId: data.partner.id,
+    visibility: AssetVisibility.Timeline,
+    withStacked: true,
+  });
 
   const handleEscape = () => {
-    if (assetInteraction.selectionActive) {
-      assetInteraction.clearMultiselect();
+    if (assetMultiSelectManager.selectionActive) {
+      assetMultiSelectManager.clear();
       return;
     }
   };
 </script>
 
-<main class="grid h-dvh pt-18">
-  <AssetGrid enableRouting={true} {assetStore} {assetInteraction} onEscape={handleEscape} />
-
-  {#if assetInteraction.selectionActive}
-    <AssetSelectControlBar
-      assets={assetInteraction.selectedAssets}
-      clearSelect={() => assetInteraction.clearMultiselect()}
-    >
-      <CreateSharedLink />
-      <ButtonContextMenu icon={mdiPlus} title={$t('add_to')}>
-        <AddToAlbum />
-        <AddToAlbum shared />
-      </ButtonContextMenu>
-      <DownloadAction />
-    </AssetSelectControlBar>
-  {:else}
-    <ControlAppBar showBackButton backIcon={mdiArrowLeft} onClose={() => goto(AppRoute.SHARING)}>
-      {#snippet leading()}
-        <p class="whitespace-nowrap text-immich-fg dark:text-immich-dark-fg">
-          {data.partner.name}'s photos
-        </p>
-      {/snippet}
-    </ControlAppBar>
-  {/if}
+<main class="relative h-dvh overflow-hidden px-2 pt-(--navbar-height) max-md:pt-(--navbar-height-md) md:px-6">
+  <Timeline enableRouting={true} {options} assetInteraction={assetMultiSelectManager} onEscape={handleEscape} />
 </main>
+
+{#if assetMultiSelectManager.selectionActive}
+  <AssetSelectControlBar>
+    {@const Actions = getAssetBulkActions($t)}
+    <CommandPaletteDefaultProvider name={$t('assets')} actions={Object.values(Actions)} />
+    <CreateSharedLink />
+    <ActionButton action={Actions.AddToAlbum} />
+    <DownloadAction />
+  </AssetSelectControlBar>
+{:else}
+  <ControlAppBar backIcon={mdiArrowLeft} onClose={() => goto(Route.sharing())}>
+    {#snippet leading()}
+      <p class="whitespace-nowrap text-immich-fg dark:text-immich-dark-fg">
+        {$t('partner_list_user_photos', { values: { user: data.partner.name } })}
+      </p>
+    {/snippet}
+  </ControlAppBar>
+{/if}

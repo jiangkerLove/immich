@@ -23,6 +23,24 @@ describe(TimelineService.name, () => {
         userIds: [authStub.admin.user.id],
       });
     });
+
+    it('should pass bbox options to repository when all bbox fields are provided', async () => {
+      mocks.asset.getTimeBuckets.mockResolvedValue([{ timeBucket: 'bucket', count: 1 }]);
+
+      await sut.getTimeBuckets(authStub.admin, {
+        bbox: {
+          west: -70,
+          south: -30,
+          east: 120,
+          north: 55,
+        },
+      });
+
+      expect(mocks.asset.getTimeBuckets).toHaveBeenCalledWith({
+        userIds: [authStub.admin.user.id],
+        bbox: { west: -70, south: -30, east: 120, north: 55 },
+      });
+    });
   });
 
   describe('getTimeBucket', () => {
@@ -36,10 +54,14 @@ describe(TimelineService.name, () => {
       );
 
       expect(mocks.access.album.checkOwnerAccess).toHaveBeenCalledWith(authStub.admin.user.id, new Set(['album-id']));
-      expect(mocks.asset.getTimeBucket).toHaveBeenCalledWith('bucket', {
-        timeBucket: 'bucket',
-        albumId: 'album-id',
-      });
+      expect(mocks.asset.getTimeBucket).toHaveBeenCalledWith(
+        'bucket',
+        {
+          timeBucket: 'bucket',
+          albumId: 'album-id',
+        },
+        authStub.admin,
+      );
     });
 
     it('should return the assets for a archive time bucket if user has archive.read', async () => {
@@ -49,7 +71,7 @@ describe(TimelineService.name, () => {
       await expect(
         sut.getTimeBucket(authStub.admin, {
           timeBucket: 'bucket',
-          visibility: AssetVisibility.ARCHIVE,
+          visibility: AssetVisibility.Archive,
           userId: authStub.admin.user.id,
         }),
       ).resolves.toEqual(json);
@@ -57,9 +79,10 @@ describe(TimelineService.name, () => {
         'bucket',
         expect.objectContaining({
           timeBucket: 'bucket',
-          visibility: AssetVisibility.ARCHIVE,
+          visibility: AssetVisibility.Archive,
           userIds: [authStub.admin.user.id],
         }),
+        authStub.admin,
       );
     });
 
@@ -71,17 +94,21 @@ describe(TimelineService.name, () => {
       await expect(
         sut.getTimeBucket(authStub.admin, {
           timeBucket: 'bucket',
-          visibility: AssetVisibility.TIMELINE,
+          visibility: AssetVisibility.Timeline,
           userId: authStub.admin.user.id,
           withPartners: true,
         }),
       ).resolves.toEqual(json);
-      expect(mocks.asset.getTimeBucket).toHaveBeenCalledWith('bucket', {
-        timeBucket: 'bucket',
-        visibility: AssetVisibility.TIMELINE,
-        withPartners: true,
-        userIds: [authStub.admin.user.id],
-      });
+      expect(mocks.asset.getTimeBucket).toHaveBeenCalledWith(
+        'bucket',
+        {
+          timeBucket: 'bucket',
+          visibility: AssetVisibility.Timeline,
+          withPartners: true,
+          userIds: [authStub.admin.user.id],
+        },
+        authStub.admin,
+      );
     });
 
     it('should check permissions to read tag', async () => {
@@ -96,11 +123,15 @@ describe(TimelineService.name, () => {
           tagId: 'tag-123',
         }),
       ).resolves.toEqual(json);
-      expect(mocks.asset.getTimeBucket).toHaveBeenCalledWith('bucket', {
-        tagId: 'tag-123',
-        timeBucket: 'bucket',
-        userIds: [authStub.admin.user.id],
-      });
+      expect(mocks.asset.getTimeBucket).toHaveBeenCalledWith(
+        'bucket',
+        {
+          tagId: 'tag-123',
+          timeBucket: 'bucket',
+          userIds: [authStub.admin.user.id],
+        },
+        authStub.admin,
+      );
     });
 
     it('should return the assets for a library time bucket if user has library.read', async () => {
@@ -119,6 +150,7 @@ describe(TimelineService.name, () => {
           timeBucket: 'bucket',
           userIds: [authStub.admin.user.id],
         }),
+        authStub.admin,
       );
     });
 
@@ -126,7 +158,7 @@ describe(TimelineService.name, () => {
       await expect(
         sut.getTimeBucket(authStub.admin, {
           timeBucket: 'bucket',
-          visibility: AssetVisibility.ARCHIVE,
+          visibility: AssetVisibility.Archive,
           withPartners: true,
           userId: authStub.admin.user.id,
         }),
@@ -169,6 +201,17 @@ describe(TimelineService.name, () => {
           isTrashed: true,
           withPartners: true,
           userId: authStub.admin.user.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw an error if withPartners is true and visibility is locked', async () => {
+      await expect(
+        sut.getTimeBucket(authStub.adminWithElevatedPermission, {
+          timeBucket: 'bucket',
+          visibility: AssetVisibility.Locked,
+          withPartners: true,
+          userId: authStub.adminWithElevatedPermission.user.id,
         }),
       ).rejects.toThrow(BadRequestException);
     });

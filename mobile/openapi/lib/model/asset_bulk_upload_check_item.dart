@@ -17,9 +17,10 @@ class AssetBulkUploadCheckItem {
     required this.id,
   });
 
-  /// base64 or hex encoded sha1 hash
+  /// Base64 or hex encoded SHA1 hash
   String checksum;
 
+  /// Client-side identifier echoed in the response to match results to inputs (e.g. filename)
   String id;
 
   @override

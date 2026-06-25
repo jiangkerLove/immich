@@ -1,38 +1,47 @@
 import Photos
+import CryptoKit
 
 struct AssetWrapper: Hashable, Equatable {
   let asset: PlatformAsset
-  
+
   init(with asset: PlatformAsset) {
     self.asset = asset
   }
-  
+
   func hash(into hasher: inout Hasher) {
     hasher.combine(self.asset.id)
   }
-  
+
   static func == (lhs: AssetWrapper, rhs: AssetWrapper) -> Bool {
     return lhs.asset.id == rhs.asset.id
   }
 }
 
-extension PHAsset {
-  func toPlatformAsset() -> PlatformAsset {
-    return PlatformAsset(
-      id: localIdentifier,
-      name: title(),
-      type: Int64(mediaType.rawValue),
-      createdAt: creationDate.map { Int64($0.timeIntervalSince1970) },
-      updatedAt: modificationDate.map { Int64($0.timeIntervalSince1970) },
-      durationInSeconds: Int64(duration)
-    )
+class NativeSyncApiImpl: ImmichPlugin, NativeSyncApi, FlutterPlugin {
+  static let name = "NativeSyncApi"
+  
+  static func register(with registrar: any FlutterPluginRegistrar) {
+    let instance = NativeSyncApiImpl()
+    NativeSyncApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
+    registrar.publish(instance)
   }
-}
-
-class NativeSyncApiImpl: NativeSyncApi {
+  
+  func detachFromEngine(for registrar: any FlutterPluginRegistrar) {
+    super.detachFromEngine()
+  }
+  
   private let defaults: UserDefaults
   private let changeTokenKey = "immich:changeToken"
   private let albumTypes: [PHAssetCollectionType] = [.album, .smartAlbum]
+  private let recoveredAlbumSubType = 1000000219
+  
+  private var hashTask: Task<Void?, Error>?
+  private static let hashCancelledCode = "HASH_CANCELLED"
+  private static let hashCancelled = Result<[HashResult], Error>.failure(PigeonError(code: hashCancelledCode, message: "Hashing cancelled", details: nil))
+  
+  private var syncTask: Task<Void?, Error>?
+  private static let syncCancelledCode = "SYNC_CANCELLED"
+  private static let syncCancelled = PigeonError(code: syncCancelledCode, message: "Sync cancelled", details: nil)
   
   init(with defaults: UserDefaults = .standard) {
     self.defaults = defaults
@@ -65,7 +74,11 @@ class NativeSyncApiImpl: NativeSyncApi {
     saveChangeToken(token: PHPhotoLibrary.shared().currentChangeToken)
   }
   
-  func shouldFullSync() -> Bool {
+  func shouldFullSync(completion: @escaping (Result<Bool, Error>) -> Void) {
+    runSync(completion) { $0.shouldFullSync() }
+  }
+  
+  private func shouldFullSync() -> Bool {
     guard #available(iOS 16, *),
           PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized,
           let storedToken = getChangeToken() else {
@@ -81,20 +94,35 @@ class NativeSyncApiImpl: NativeSyncApi {
     return false
   }
   
-  func getAlbums() throws -> [PlatformAlbum] {
+  func getAlbums(completion: @escaping (Result<[PlatformAlbum], Error>) -> Void) {
+    runSync(completion) { try $0.getAlbums() }
+  }
+  
+  private func getAlbums() throws -> [PlatformAlbum] {
     var albums: [PlatformAlbum] = []
     
-    albumTypes.forEach { type in
+    for type in albumTypes {
       let collections = PHAssetCollection.fetchAssetCollections(with: type, subtype: .any, options: nil)
-      collections.enumerateObjects { (album, _, _) in
+      for i in 0..<collections.count {
+        try Task.checkCancellation()
+        let album = collections.object(at: i)
+        
+        // Ignore recovered album
+        if(album.assetCollectionSubtype.rawValue == self.recoveredAlbumSubType) {
+          continue;
+        }
+        
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "modificationDate", ascending: false)]
-        let assets = PHAsset.fetchAssets(in: album, options: options)
+        options.includeHiddenAssets = false
+        
+        let assets = getAssetsFromAlbum(in: album, options: options)
+        
         let isCloud = album.assetCollectionSubtype == .albumCloudShared || album.assetCollectionSubtype == .albumMyPhotoStream
         
         var domainAlbum = PlatformAlbum(
           id: album.localIdentifier,
-          name: album.localizedTitle!,
+          name: album.localizedTitle ?? album.localIdentifier,
           updatedAt: nil,
           isCloud: isCloud,
           assetCount: Int64(assets.count)
@@ -110,7 +138,11 @@ class NativeSyncApiImpl: NativeSyncApi {
     return albums.sorted { $0.id < $1.id }
   }
   
-  func getMediaChanges() throws -> SyncDelta {
+  func getMediaChanges(completion: @escaping (Result<SyncDelta, Error>) -> Void) {
+    runSync(completion) { try $0.getMediaChanges() }
+  }
+  
+  private func getMediaChanges() throws -> SyncDelta {
     guard #available(iOS 16, *) else {
       throw PigeonError(code: "UNSUPPORTED_OS", message: "This feature requires iOS 16 or later.", details: nil)
     }
@@ -130,47 +162,48 @@ class NativeSyncApiImpl: NativeSyncApi {
       return SyncDelta(hasChanges: false, updates: [], deletes: [], assetAlbums: [:])
     }
     
-    do {
-      let changes = try PHPhotoLibrary.shared().fetchPersistentChanges(since: storedToken)
+    let changes = try PHPhotoLibrary.shared().fetchPersistentChanges(since: storedToken)
+    
+    var updatedAssets: Set<AssetWrapper> = []
+    var deletedAssets: Set<String> = []
+    
+    for change in changes {
+      try Task.checkCancellation()
+      guard let details = try? change.changeDetails(for: PHObjectType.asset) else { continue }
       
-      var updatedAssets: Set<AssetWrapper> = []
-      var deletedAssets: Set<String> = []
+      let updated = details.updatedLocalIdentifiers.union(details.insertedLocalIdentifiers)
+      deletedAssets.formUnion(details.deletedLocalIdentifiers)
       
-      for change in changes {
-        guard let details = try? change.changeDetails(for: PHObjectType.asset) else { continue }
+      if (updated.isEmpty) { continue }
+      
+      let options = PHFetchOptions()
+      options.includeHiddenAssets = false
+      let result = PHAsset.fetchAssets(withLocalIdentifiers: Array(updated), options: options)
+      for i in 0..<result.count {
+        let asset = result.object(at: i)
         
-        let updated = details.updatedLocalIdentifiers.union(details.insertedLocalIdentifiers)
-        deletedAssets.formUnion(details.deletedLocalIdentifiers)
-        
-        if (updated.isEmpty) { continue }
-        
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: Array(updated), options: nil)
-        for i in 0..<result.count {
-          let asset = result.object(at: i)
-          
-          // Asset wrapper only uses the id for comparison. Multiple change can contain the same asset, skip duplicate changes
-          let predicate = PlatformAsset(
-            id: asset.localIdentifier,
-            name: "",
-            type: 0,
-            createdAt: nil,
-            updatedAt: nil,
-            durationInSeconds: 0
-          )
-          if (updatedAssets.contains(AssetWrapper(with: predicate))) {
-            continue
-          }
-          
-          let domainAsset = AssetWrapper(with: asset.toPlatformAsset())
-          updatedAssets.insert(domainAsset)
+        // Asset wrapper only uses the id for comparison. Multiple change can contain the same asset, skip duplicate changes
+        let predicate = PlatformAsset(
+          id: asset.localIdentifier,
+          name: "",
+          type: 0,
+          durationMs: 0,
+          orientation: 0,
+          isFavorite: false,
+          playbackStyle: .unknown
+        )
+        if (updatedAssets.contains(AssetWrapper(with: predicate))) {
+          continue
         }
+        
+        let domainAsset = AssetWrapper(with: asset.toPlatformAsset())
+        updatedAssets.insert(domainAsset)
       }
-      
-      let updates = Array(updatedAssets.map { $0.asset })
-      return SyncDelta(hasChanges: true, updates: updates, deletes: Array(deletedAssets), assetAlbums: buildAssetAlbumsMap(assets: updates))
     }
+    
+    let updates = Array(updatedAssets.map { $0.asset })
+    return SyncDelta(hasChanges: true, updates: updates, deletes: Array(deletedAssets), assetAlbums: buildAssetAlbumsMap(assets: updates))
   }
-  
   
   private func buildAssetAlbumsMap(assets: Array<PlatformAsset>) -> [String: [String]] {
     guard !assets.isEmpty else {
@@ -184,7 +217,8 @@ class NativeSyncApiImpl: NativeSyncApi {
       collections.enumerateObjects { (album, _, _) in
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "localIdentifier IN %@", assets.map(\.id))
-        let result = PHAsset.fetchAssets(in: album, options: options)
+        options.includeHiddenAssets = false
+        let result = self.getAssetsFromAlbum(in: album, options: options)
         result.enumerateObjects { (asset, _, _) in
           albumAssets[asset.localIdentifier, default: []].append(album.localIdentifier)
         }
@@ -193,17 +227,28 @@ class NativeSyncApiImpl: NativeSyncApi {
     return albumAssets
   }
   
-  func getAssetIdsForAlbum(albumId: String) throws -> [String] {
+  func getAssetIdsForAlbum(albumId: String, completion: @escaping (Result<[String], Error>) -> Void) {
+    runSync(completion) { try $0.getAssetIdsForAlbum(albumId: albumId) }
+  }
+  
+  private func getAssetIdsForAlbum(albumId: String) throws -> [String] {
     let collections = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil)
     guard let album = collections.firstObject else {
       return []
     }
     
     var ids: [String] = []
-    let assets = PHAsset.fetchAssets(in: album, options: nil)
-    assets.enumerateObjects { (asset, _, _) in
+    let options = PHFetchOptions()
+    options.includeHiddenAssets = false
+    let assets = getAssetsFromAlbum(in: album, options: options)
+    assets.enumerateObjects { (asset, _, stop) in
+      if Task.isCancelled {
+        stop.pointee = true
+        return 
+      }
       ids.append(asset.localIdentifier)
     }
+    try Task.checkCancellation()
     return ids
   }
   
@@ -216,31 +261,219 @@ class NativeSyncApiImpl: NativeSyncApi {
     let date = NSDate(timeIntervalSince1970: TimeInterval(timestamp))
     let options = PHFetchOptions()
     options.predicate = NSPredicate(format: "creationDate > %@ OR modificationDate > %@", date, date)
-    let assets = PHAsset.fetchAssets(in: album, options: options)
+    options.includeHiddenAssets = false
+    let assets = getAssetsFromAlbum(in: album, options: options)
     return Int64(assets.count)
   }
   
-  func getAssetsForAlbum(albumId: String, updatedTimeCond: Int64?) throws -> [PlatformAsset] {
+  func getAssetsForAlbum(albumId: String, updatedTimeCond: Int64?, completion: @escaping (Result<[PlatformAsset], Error>) -> Void) {
+    runSync(completion) { try $0.getAssetsForAlbum(albumId: albumId, updatedTimeCond: updatedTimeCond) }
+  }
+  
+  private func getAssetsForAlbum(albumId: String, updatedTimeCond: Int64?) throws -> [PlatformAsset] {
     let collections = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil)
     guard let album = collections.firstObject else {
       return []
     }
     
     let options = PHFetchOptions()
+    options.includeHiddenAssets = false
     if(updatedTimeCond != nil) {
       let date = NSDate(timeIntervalSince1970: TimeInterval(updatedTimeCond!))
       options.predicate = NSPredicate(format: "creationDate > %@ OR modificationDate > %@", date, date)
     }
-
-    let result = PHAsset.fetchAssets(in: album, options: options)
+    
+    let result = getAssetsFromAlbum(in: album, options: options)
     if(result.count == 0) {
       return []
     }
     
     var assets: [PlatformAsset] = []
-    result.enumerateObjects { (asset, _, _) in
+    result.enumerateObjects { (asset, _, stop) in
+      if Task.isCancelled {
+        stop.pointee = true
+        return 
+      }
       assets.append(asset.toPlatformAsset())
     }
+    try Task.checkCancellation()
     return assets
+  }
+  
+  func hashAssets(assetIds: [String], allowNetworkAccess: Bool, completion: @escaping (Result<[HashResult], Error>) -> Void) {
+    if let prevTask = hashTask {
+      prevTask.cancel()
+      hashTask = nil
+    }
+    hashTask = Task { [weak self] in
+      var missingAssetIds = Set(assetIds)
+      var assets = [PHAsset]()
+      assets.reserveCapacity(assetIds.count)
+      PHAsset.fetchAssets(withLocalIdentifiers: assetIds, options: nil).enumerateObjects { (asset, _, stop) in
+        if Task.isCancelled {
+          stop.pointee = true
+          return
+        }
+        missingAssetIds.remove(asset.localIdentifier)
+        assets.append(asset)
+      }
+      
+      if Task.isCancelled {
+        return self?.completeWhenActive(for: completion, with: Self.hashCancelled)
+      }
+      
+      await withTaskGroup(of: HashResult?.self) { taskGroup in
+        var results = [HashResult]()
+        results.reserveCapacity(assets.count)
+        for asset in assets {
+          if Task.isCancelled {
+            return self?.completeWhenActive(for: completion, with: Self.hashCancelled)
+          }
+          taskGroup.addTask {
+            guard let self = self else { return nil }
+            return await self.hashAsset(asset, allowNetworkAccess: allowNetworkAccess)
+          }
+        }
+        
+        for await result in taskGroup {
+          guard let result = result else {
+            return self?.completeWhenActive(for: completion, with: Self.hashCancelled)
+          }
+          results.append(result)
+        }
+        
+        for missing in missingAssetIds {
+          results.append(HashResult(assetId: missing, error: "Asset not found in library", hash: nil))
+        }
+        
+        return self?.completeWhenActive(for: completion, with: .success(results))
+      }
+    }
+  }
+  
+  func cancelHashing() {
+    hashTask?.cancel()
+    hashTask = nil
+  }
+  
+  func cancelSync() {
+    syncTask?.cancel()
+    syncTask = nil
+  }
+  
+  private func runSync<T>(
+    _ completion: @escaping (Result<T, Error>) -> Void,
+    _ work: @escaping (NativeSyncApiImpl) throws -> T
+  ) {
+    syncTask?.cancel()
+    syncTask = Task { [weak self] in
+      guard let self else { return nil }
+      let result: Result<T, Error>
+      do {
+        result = .success(try work(self))
+      } catch is CancellationError {
+        result = .failure(Self.syncCancelled)
+      } catch {
+        result = .failure(error)
+      }
+      self.completeWhenActive(for: completion, with: result)
+      return nil
+    }
+  }
+  
+  private func hashAsset(_ asset: PHAsset, allowNetworkAccess: Bool) async -> HashResult? {
+    class RequestRef {
+      var id: PHAssetResourceDataRequestID?
+    }
+    let requestRef = RequestRef()
+    return await withTaskCancellationHandler(operation: {
+      if Task.isCancelled {
+        return nil
+      }
+      
+      guard let resource = asset.getResource() else {
+        return HashResult(assetId: asset.localIdentifier, error: "Cannot get asset resource", hash: nil)
+      }
+      
+      if Task.isCancelled {
+        return nil
+      }
+      
+      let options = PHAssetResourceRequestOptions()
+      options.isNetworkAccessAllowed = allowNetworkAccess
+      
+      return await withCheckedContinuation { continuation in
+        var hasher = Insecure.SHA1()
+        
+        requestRef.id = PHAssetResourceManager.default().requestData(
+          for: resource,
+          options: options,
+          dataReceivedHandler: { data in
+            hasher.update(data: data)
+          },
+          completionHandler: { error in
+            let result: HashResult? = switch (error) {
+            case let e as PHPhotosError where e.code == .userCancelled: nil
+            case let .some(e): HashResult(
+              assetId: asset.localIdentifier,
+              error: "Failed to hash asset: \(e.localizedDescription)",
+              hash: nil
+            )
+            case .none:
+              HashResult(
+                assetId: asset.localIdentifier,
+                error: nil,
+                hash: Data(hasher.finalize()).base64EncodedString()
+              )
+            }
+            continuation.resume(returning: result)
+          }
+        )
+      }
+    }, onCancel: {
+      guard let requestId = requestRef.id else { return }
+      PHAssetResourceManager.default().cancelDataRequest(requestId)
+    })
+  }
+  
+  func getTrashedAssets() throws -> [String: [PlatformAsset]] {
+    throw PigeonError(code: "UNSUPPORTED_OS", message: "This feature not supported on iOS.", details: nil)
+  }
+
+  func restoreFromTrashById(mediaId: String, type: Int64, completion: @escaping (Result<Bool, Error>) -> Void) {
+    completion(.success(false))
+  }
+  
+  private func getAssetsFromAlbum(in album: PHAssetCollection, options: PHFetchOptions) -> PHFetchResult<PHAsset> {
+    // Ensure to actually getting all assets for the Recents album
+    if (album.assetCollectionSubtype == .smartAlbumUserLibrary) {
+      return PHAsset.fetchAssets(with: options)
+    } else {
+      return PHAsset.fetchAssets(in: album, options: options)
+    }
+  }
+  
+  func getCloudIdForAssetIds(assetIds: [String]) throws -> [CloudIdResult] {
+    guard #available(iOS 16, *) else {
+      return assetIds.map { CloudIdResult(assetId: $0) }
+    }
+    
+    var mappings: [CloudIdResult] = []
+    let result = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: assetIds)
+    for (key, value) in result {
+      switch value {
+      case .success(let cloudIdentifier):
+        let cloudId = cloudIdentifier.stringValue
+        // Ignores invalid cloud ids of the format "GUID:ID:". Valid Ids are of the form "GUID:ID:HASH"
+        if !cloudId.hasSuffix(":") {
+          mappings.append(CloudIdResult(assetId: key, cloudId: cloudId))
+        } else {
+          mappings.append(CloudIdResult(assetId: key, error: "Incomplete Cloud Id: \(cloudId)"))
+        }
+      case .failure(let error):
+        mappings.append(CloudIdResult(assetId: key, error: "Error getting Cloud Id: \(error.localizedDescription)"))
+      }
+    }
+    return mappings;
   }
 }

@@ -44,7 +44,9 @@ class Activity {
 
   @override
   bool operator ==(covariant Activity other) {
-    if (identical(this, other)) return true;
+    if (identical(this, other)) {
+      return true;
+    }
 
     return other.id == id &&
         other.assetId == assetId &&
@@ -56,12 +58,7 @@ class Activity {
 
   @override
   int get hashCode {
-    return id.hashCode ^
-        assetId.hashCode ^
-        comment.hashCode ^
-        createdAt.hashCode ^
-        type.hashCode ^
-        user.hashCode;
+    return id.hashCode ^ assetId.hashCode ^ comment.hashCode ^ createdAt.hashCode ^ type.hashCode ^ user.hashCode;
   }
 }
 

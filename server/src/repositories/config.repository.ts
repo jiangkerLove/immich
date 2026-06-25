@@ -1,26 +1,28 @@
+import { DatabaseConnectionParams } from '@immich/sql-tools';
 import { RegisterQueueOptions } from '@nestjs/bullmq';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { QueueOptions } from 'bullmq';
-import { plainToInstance } from 'class-transformer';
-import { validateSync } from 'class-validator';
 import { Request, Response } from 'express';
+import { HelmetOptions } from 'helmet';
 import { RedisOptions } from 'ioredis';
 import { CLS_ID, ClsModuleOptions } from 'nestjs-cls';
 import { OpenTelemetryModuleOptions } from 'nestjs-otel/lib/interfaces';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { citiesFile, excludePaths, IWorker } from 'src/constants';
+import { citiesFile, IWorker } from 'src/constants';
 import { Telemetry } from 'src/decorators';
-import { EnvDto } from 'src/dtos/env.dto';
+import { EnvSchema } from 'src/dtos/env.dto';
 import {
   DatabaseExtension,
   ImmichEnvironment,
   ImmichHeader,
   ImmichTelemetry,
   ImmichWorker,
+  LogFormat,
   LogLevel,
   QueueName,
 } from 'src/enum';
-import { DatabaseConnectionParams, VectorExtension } from 'src/types';
+import { VectorExtension } from 'src/types';
 import { setDifference } from 'src/utils/set';
 
 export interface EnvData {
@@ -29,6 +31,7 @@ export interface EnvData {
   environment: ImmichEnvironment;
   configFile?: string;
   logLevel?: LogLevel;
+  logFormat?: LogFormat;
 
   buildMetadata: {
     build?: string;
@@ -55,6 +58,10 @@ export interface EnvData {
     config: ClsModuleOptions;
   };
 
+  helmet: {
+    config?: HelmetOptions;
+  };
+
   database: {
     config: DatabaseConnectionParams;
     skipMigrations: boolean;
@@ -64,6 +71,10 @@ export interface EnvData {
   licensePublicKey: {
     client: string;
     server: string;
+  };
+
+  versionCheck: {
+    url: string;
   };
 
   network: {
@@ -85,9 +96,14 @@ export interface EnvData {
       root: string;
       indexHtml: string;
     };
+    corePlugin: string;
   };
 
   redis: RedisOptions;
+
+  setup: {
+    allow: boolean;
+  };
 
   telemetry: {
     apiPort: number;
@@ -97,9 +113,17 @@ export interface EnvData {
 
   storage: {
     ignoreMountCheckErrors: boolean;
+    mediaLocation?: string;
   };
 
   workers: ImmichWorker[];
+
+  plugins: {
+    external: {
+      allow: boolean;
+      installFolder?: string;
+    };
+  };
 
   noColor: boolean;
   nodeVersion?: string;
@@ -127,16 +151,38 @@ const asSet = <T>(value: string | undefined, defaults: T[]) => {
   return new Set(values.length === 0 ? defaults : (values as T[]));
 };
 
-const getEnv = (): EnvData => {
-  const dto = plainToInstance(EnvDto, process.env);
-  const errors = validateSync(dto);
-  if (errors.length > 0) {
-    throw new Error(
-      `Invalid environment variables: ${errors.map((error) => `${error.property}=${error.value}`).join(', ')}`,
-    );
+const resolveHelmetFile = (helmetFile: 'true' | 'false' | string | undefined) => {
+  // default is off
+  if (!helmetFile || helmetFile === 'false') {
+    return;
   }
 
-  const includedWorkers = asSet(dto.IMMICH_WORKERS_INCLUDE, [ImmichWorker.API, ImmichWorker.MICROSERVICES]);
+  helmetFile =
+    helmetFile === 'true'
+      ? // eslint-disable-next-line unicorn/prefer-module
+        join(__dirname, '..', '..', 'helmet.json')
+      : helmetFile;
+
+  try {
+    return JSON.parse(readFileSync(helmetFile).toString()) as HelmetOptions;
+  } catch (error) {
+    throw new Error(`Failed to read helmet file: ${helmetFile}`, { cause: error });
+  }
+};
+
+const getEnv = (): EnvData => {
+  const parseResult = EnvSchema.safeParse(process.env);
+  if (!parseResult.success) {
+    const messages = ['Invalid environment variables: '];
+    for (const issue of parseResult.error.issues) {
+      const path = issue.path.join('.');
+      messages.push(`  - [${path}] ${issue.message}`);
+    }
+    throw new Error(messages.join('\n'));
+  }
+  const dto = parseResult.data;
+
+  const includedWorkers = asSet(dto.IMMICH_WORKERS_INCLUDE, [ImmichWorker.Api, ImmichWorker.Microservices]);
   const excludedWorkers = asSet(dto.IMMICH_WORKERS_EXCLUDE, []);
   const workers = [...setDifference(includedWorkers, excludedWorkers)];
   for (const worker of workers) {
@@ -145,8 +191,8 @@ const getEnv = (): EnvData => {
     }
   }
 
-  const environment = dto.IMMICH_ENV || ImmichEnvironment.PRODUCTION;
-  const isProd = environment === ImmichEnvironment.PRODUCTION;
+  const environment = dto.IMMICH_ENV || ImmichEnvironment.Production;
+  const isProd = environment === ImmichEnvironment.Production;
   const buildFolder = dto.IMMICH_BUILD_DATA || '/build';
   const folders = {
     geodata: join(buildFolder, 'geodata'),
@@ -167,7 +213,7 @@ const getEnv = (): EnvData => {
     try {
       redisConfig = JSON.parse(Buffer.from(redisUrl.slice(10), 'base64').toString());
     } catch (error) {
-      throw new Error(`Failed to decode redis options: ${error}`);
+      throw new Error('Failed to decode redis options', { cause: error });
     }
   }
 
@@ -197,18 +243,16 @@ const getEnv = (): EnvData => {
       };
 
   let vectorExtension: VectorExtension | undefined;
-  switch (dto.DB_VECTOR_EXTENSION) {
-    case 'pgvector': {
-      vectorExtension = DatabaseExtension.VECTOR;
-      break;
-    }
-    case 'pgvecto.rs': {
-      vectorExtension = DatabaseExtension.VECTORS;
-      break;
-    }
-    case 'vectorchord': {
-      vectorExtension = DatabaseExtension.VECTORCHORD;
-      break;
+  if (dto.DB_VECTOR_EXTENSION) {
+    switch (dto.DB_VECTOR_EXTENSION) {
+      case 'pgvector': {
+        vectorExtension = DatabaseExtension.Vector;
+        break;
+      }
+      case 'vectorchord': {
+        vectorExtension = DatabaseExtension.VectorChord;
+        break;
+      }
     }
   }
 
@@ -218,6 +262,7 @@ const getEnv = (): EnvData => {
     environment,
     configFile: dto.IMMICH_CONFIG_FILE,
     logLevel: dto.IMMICH_LOG_LEVEL,
+    logFormat: dto.IMMICH_LOG_FORMAT || LogFormat.Console,
 
     buildMetadata: {
       build: dto.IMMICH_BUILD,
@@ -240,7 +285,7 @@ const getEnv = (): EnvData => {
         prefix: 'immich_bull',
         connection: { ...redisConfig },
         defaultJobOptions: {
-          attempts: 3,
+          attempts: 1,
           removeOnComplete: true,
           removeOnFail: false,
         },
@@ -254,11 +299,9 @@ const getEnv = (): EnvData => {
           mount: true,
           generateId: true,
           setup: (cls, req: Request, res: Response) => {
-            const headerValues = req.headers[ImmichHeader.CID];
-            const headerValue = Array.isArray(headerValues) ? headerValues[0] : headerValues;
-            const cid = headerValue || cls.get(CLS_ID);
+            const cid = req.header(ImmichHeader.CorrelationId) || cls.get(CLS_ID);
             cls.set(CLS_ID, cid);
-            res.header(ImmichHeader.CID, cid);
+            res.header(ImmichHeader.CorrelationId, cid);
           },
         },
       },
@@ -270,7 +313,15 @@ const getEnv = (): EnvData => {
       vectorExtension,
     },
 
+    helmet: {
+      config: resolveHelmetFile(dto.IMMICH_HELMET_FILE),
+    },
+
     licensePublicKey: isProd ? productionKeys : stagingKeys,
+
+    versionCheck: {
+      url: isProd ? 'https://version.immich.cloud/version' : 'https://version.dev.immich.cloud/version',
+    },
 
     network: {
       trustedProxies: dto.IMMICH_TRUSTED_PROXIES ?? ['linklocal', 'uniquelocal'],
@@ -278,11 +329,7 @@ const getEnv = (): EnvData => {
 
     otel: {
       metrics: {
-        hostMetrics: telemetries.has(ImmichTelemetry.HOST),
-        apiMetrics: {
-          enable: telemetries.has(ImmichTelemetry.API),
-          ignoreRoutes: excludePaths,
-        },
+        hostMetrics: telemetries.has(ImmichTelemetry.Host),
       },
     },
 
@@ -301,10 +348,16 @@ const getEnv = (): EnvData => {
         root: folders.web,
         indexHtml: join(folders.web, 'index.html'),
       },
+      corePlugin: join(buildFolder, 'plugins', 'immich-plugin-core'),
+    },
+
+    setup: {
+      allow: dto.IMMICH_ALLOW_SETUP ?? true,
     },
 
     storage: {
       ignoreMountCheckErrors: !!dto.IMMICH_IGNORE_MOUNT_CHECK_ERRORS,
+      mediaLocation: dto.IMMICH_MEDIA_LOCATION,
     },
 
     telemetry: {
@@ -314,6 +367,13 @@ const getEnv = (): EnvData => {
     },
 
     workers,
+
+    plugins: {
+      external: {
+        allow: dto.IMMICH_ALLOW_EXTERNAL_PLUGINS ?? false,
+        installFolder: dto.IMMICH_PLUGINS_INSTALL_FOLDER,
+      },
+    },
 
     noColor: !!dto.NO_COLOR,
   };
@@ -332,6 +392,10 @@ export class ConfigRepository {
     }
 
     return cached;
+  }
+
+  isDev() {
+    return this.getEnv().environment === ImmichEnvironment.Development;
   }
 
   getWorker() {

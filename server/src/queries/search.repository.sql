@@ -2,84 +2,93 @@
 
 -- SearchRepository.searchMetadata
 select
-  "assets".*
+  "asset".*
 from
-  "assets"
-  inner join "exif" on "assets"."id" = "exif"."assetId"
+  "asset"
+  inner join "asset_exif" on "asset"."id" = "asset_exif"."assetId"
 where
-  "assets"."visibility" = $1
-  and "assets"."fileCreatedAt" >= $2
-  and "exif"."lensModel" = $3
-  and "assets"."ownerId" = any ($4::uuid[])
-  and "assets"."isFavorite" = $5
-  and "assets"."deletedAt" is null
+  "asset"."visibility" = $1
+  and "asset"."fileCreatedAt" >= $2
+  and "asset_exif"."lensModel" = $3
+  and "asset"."ownerId" = any ($4::uuid[])
+  and "asset"."isFavorite" = $5
+  and "asset"."deletedAt" is null
 order by
-  "assets"."fileCreatedAt" desc
+  "asset"."fileCreatedAt" desc
 limit
   $6
 offset
   $7
 
+-- SearchRepository.searchStatistics
+select
+  count(*) as "total"
+from
+  "asset"
+  inner join "asset_exif" on "asset"."id" = "asset_exif"."assetId"
+where
+  "asset"."visibility" = $1
+  and "asset"."fileCreatedAt" >= $2
+  and "asset_exif"."lensModel" = $3
+  and "asset"."ownerId" = any ($4::uuid[])
+  and "asset"."isFavorite" = $5
+  and "asset"."deletedAt" is null
+
 -- SearchRepository.searchRandom
-(
-  select
-    "assets".*
-  from
-    "assets"
-    inner join "exif" on "assets"."id" = "exif"."assetId"
-  where
-    "assets"."visibility" = $1
-    and "assets"."fileCreatedAt" >= $2
-    and "exif"."lensModel" = $3
-    and "assets"."ownerId" = any ($4::uuid[])
-    and "assets"."isFavorite" = $5
-    and "assets"."deletedAt" is null
-    and "assets"."id" < $6
-  order by
-    random()
-  limit
-    $7
-)
-union all
-(
-  select
-    "assets".*
-  from
-    "assets"
-    inner join "exif" on "assets"."id" = "exif"."assetId"
-  where
-    "assets"."visibility" = $8
-    and "assets"."fileCreatedAt" >= $9
-    and "exif"."lensModel" = $10
-    and "assets"."ownerId" = any ($11::uuid[])
-    and "assets"."isFavorite" = $12
-    and "assets"."deletedAt" is null
-    and "assets"."id" > $13
-  order by
-    random()
-  limit
-    $14
-)
+select
+  "asset".*
+from
+  "asset"
+  inner join "asset_exif" on "asset"."id" = "asset_exif"."assetId"
+where
+  "asset"."visibility" = $1
+  and "asset"."fileCreatedAt" >= $2
+  and "asset_exif"."lensModel" = $3
+  and "asset"."ownerId" = any ($4::uuid[])
+  and "asset"."isFavorite" = $5
+  and "asset"."deletedAt" is null
+order by
+  random()
 limit
-  $15
+  $6
+
+-- SearchRepository.searchLargeAssets
+select
+  "asset".*,
+  to_json("asset_exif") as "exifInfo"
+from
+  "asset"
+  inner join "asset_exif" on "asset"."id" = "asset_exif"."assetId"
+where
+  "asset"."visibility" = $1
+  and "asset"."fileCreatedAt" >= $2
+  and "asset_exif"."lensModel" = $3
+  and "asset"."ownerId" = any ($4::uuid[])
+  and "asset"."isFavorite" = $5
+  and "asset"."deletedAt" is null
+  and "asset_exif"."fileSizeInByte" > $6
+order by
+  "asset_exif"."fileSizeInByte" desc
+limit
+  $7
 
 -- SearchRepository.searchSmart
 begin
 set
   local vchordrq.probes = 1
 select
-  "assets".*
+  "asset".*
 from
-  "assets"
-  inner join "exif" on "assets"."id" = "exif"."assetId"
-  inner join "smart_search" on "assets"."id" = "smart_search"."assetId"
+  "asset"
+  inner join "asset_exif" on "asset"."id" = "asset_exif"."assetId"
+  inner join "smart_search" on "asset"."id" = "smart_search"."assetId"
 where
-  "assets"."visibility" = $1
-  and "assets"."fileCreatedAt" >= $2
-  and "exif"."lensModel" = $3
-  and "assets"."ownerId" = any ($4::uuid[])
-  and "assets"."isFavorite" = $5
-  and "assets"."deletedAt" is null
+  "asset"."visibility" = $1
+  and "asset"."fileCreatedAt" >= $2
+  and "asset_exif"."lensModel" = $3
+  and "asset"."ownerId" = any ($4::uuid[])
+  and "asset"."isFavorite" = $5
+  and "asset"."deletedAt" is null
 order by
   smart_search.embedding <=> $6
 limit
@@ -88,38 +97,13 @@ offset
   $8
 commit
 
--- SearchRepository.searchDuplicates
-begin
-set
-  local vchordrq.probes = 1
-with
-  "cte" as (
-    select
-      "assets"."id" as "assetId",
-      "assets"."duplicateId",
-      smart_search.embedding <=> $1 as "distance"
-    from
-      "assets"
-      inner join "smart_search" on "assets"."id" = "smart_search"."assetId"
-    where
-      "assets"."visibility" in ('archive', 'timeline')
-      and "assets"."ownerId" = any ($2::uuid[])
-      and "assets"."deletedAt" is null
-      and "assets"."type" = $3
-      and "assets"."id" != $4::uuid
-      and "assets"."stackId" is null
-    order by
-      "distance"
-    limit
-      $5
-  )
+-- SearchRepository.getEmbedding
 select
   *
 from
-  "cte"
+  "smart_search"
 where
-  "cte"."distance" <= $6
-commit
+  "assetId" = $1
 
 -- SearchRepository.searchFaces
 begin
@@ -128,17 +112,17 @@ set
 with
   "cte" as (
     select
-      "asset_faces"."id",
-      "asset_faces"."personId",
+      "asset_face"."id",
+      "asset_face"."personId",
       face_search.embedding <=> $1 as "distance"
     from
-      "asset_faces"
-      inner join "assets" on "assets"."id" = "asset_faces"."assetId"
-      inner join "face_search" on "face_search"."faceId" = "asset_faces"."id"
-      left join "person" on "person"."id" = "asset_faces"."personId"
+      "asset_face"
+      inner join "asset" on "asset"."id" = "asset_face"."assetId"
+      inner join "face_search" on "face_search"."faceId" = "asset_face"."id"
+      left join "person" on "person"."id" = "asset_face"."personId"
     where
-      "assets"."ownerId" = any ($2::uuid[])
-      and "assets"."deletedAt" is null
+      "asset"."ownerId" = any ($2::uuid[])
+      and "asset"."deletedAt" is null
     order by
       "distance"
     limit
@@ -184,13 +168,13 @@ with recursive
         "city",
         "assetId"
       from
-        "exif"
-        inner join "assets" on "assets"."id" = "exif"."assetId"
+        "asset_exif"
+        inner join "asset" on "asset"."id" = "asset_exif"."assetId"
       where
-        "assets"."ownerId" = any ($1::uuid[])
-        and "assets"."visibility" = $2
-        and "assets"."type" = $3
-        and "assets"."deletedAt" is null
+        "asset"."ownerId" = any ($1::uuid[])
+        and "asset"."visibility" = $2
+        and "asset"."type" = $3
+        and "asset"."deletedAt" is null
       order by
         "city"
       limit
@@ -208,14 +192,14 @@ with recursive
             "city",
             "assetId"
           from
-            "exif"
-            inner join "assets" on "assets"."id" = "exif"."assetId"
+            "asset_exif"
+            inner join "asset" on "asset"."id" = "asset_exif"."assetId"
           where
-            "assets"."ownerId" = any ($5::uuid[])
-            and "assets"."visibility" = $6
-            and "assets"."type" = $7
-            and "assets"."deletedAt" is null
-            and "exif"."city" > "cte"."city"
+            "asset"."ownerId" = any ($5::uuid[])
+            and "asset"."visibility" = $6
+            and "asset"."type" = $7
+            and "asset"."deletedAt" is null
+            and "asset_exif"."city" > "cte"."city"
           order by
             "city"
           limit
@@ -224,59 +208,76 @@ with recursive
     )
   )
 select
-  "assets".*,
-  to_jsonb("exif") as "exifInfo"
+  "asset".*,
+  to_jsonb("asset_exif") as "exifInfo"
 from
-  "assets"
-  inner join "exif" on "assets"."id" = "exif"."assetId"
-  inner join "cte" on "assets"."id" = "cte"."assetId"
+  "asset"
+  inner join "asset_exif" on "asset"."id" = "asset_exif"."assetId"
+  inner join "cte" on "asset"."id" = "cte"."assetId"
 order by
-  "exif"."city"
+  "asset_exif"."city"
 
 -- SearchRepository.getStates
 select distinct
   on ("state") "state"
 from
-  "exif"
-  inner join "assets" on "assets"."id" = "exif"."assetId"
+  "asset_exif"
+  inner join "asset" on "asset"."id" = "asset_exif"."assetId"
 where
   "ownerId" = any ($1::uuid[])
   and "visibility" = $2
   and "deletedAt" is null
   and "state" is not null
+  and "state" != $3
 
 -- SearchRepository.getCities
 select distinct
   on ("city") "city"
 from
-  "exif"
-  inner join "assets" on "assets"."id" = "exif"."assetId"
+  "asset_exif"
+  inner join "asset" on "asset"."id" = "asset_exif"."assetId"
 where
   "ownerId" = any ($1::uuid[])
   and "visibility" = $2
   and "deletedAt" is null
   and "city" is not null
+  and "city" != $3
 
 -- SearchRepository.getCameraMakes
 select distinct
   on ("make") "make"
 from
-  "exif"
-  inner join "assets" on "assets"."id" = "exif"."assetId"
+  "asset_exif"
+  inner join "asset" on "asset"."id" = "asset_exif"."assetId"
 where
   "ownerId" = any ($1::uuid[])
   and "visibility" = $2
   and "deletedAt" is null
   and "make" is not null
+  and "make" != $3
 
 -- SearchRepository.getCameraModels
 select distinct
   on ("model") "model"
 from
-  "exif"
-  inner join "assets" on "assets"."id" = "exif"."assetId"
+  "asset_exif"
+  inner join "asset" on "asset"."id" = "asset_exif"."assetId"
 where
   "ownerId" = any ($1::uuid[])
   and "visibility" = $2
   and "deletedAt" is null
   and "model" is not null
+  and "model" != $3
+
+-- SearchRepository.getCameraLensModels
+select distinct
+  on ("lensModel") "lensModel"
+from
+  "asset_exif"
+  inner join "asset" on "asset"."id" = "asset_exif"."assetId"
+where
+  "ownerId" = any ($1::uuid[])
+  and "visibility" = $2
+  and "deletedAt" is null
+  and "lensModel" is not null
+  and "lensModel" != $3

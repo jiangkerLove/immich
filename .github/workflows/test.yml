@@ -4,290 +4,300 @@ on:
   pull_request:
   push:
     branches: [main]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 permissions: {}
-
 jobs:
   pre-job:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      should_run_i18n: ${{ steps.found_paths.outputs.i18n == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_web: ${{ steps.found_paths.outputs.web == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_server: ${{ steps.found_paths.outputs.server == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_cli: ${{ steps.found_paths.outputs.cli == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_e2e: ${{ steps.found_paths.outputs.e2e == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_mobile: ${{ steps.found_paths.outputs.mobile == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_ml: ${{ steps.found_paths.outputs.machine-learning == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_e2e_web: ${{ steps.found_paths.outputs.e2e == 'true' || steps.found_paths.outputs.web == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_e2e_server_cli: ${{ steps.found_paths.outputs.e2e == 'true' || steps.found_paths.outputs.server == 'true' || steps.found_paths.outputs.cli == 'true' || steps.should_force.outputs.should_force == 'true' }}
-      should_run_.github: ${{ steps.found_paths.outputs['.github'] == 'true' || steps.should_force.outputs.should_force == 'true' }} # redundant to have should_force but if someone changes the trigger then this won't have to be changed
+      should_run: ${{ steps.check.outputs.should_run }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
         with:
-          persist-credentials: false
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
 
-      - id: found_paths
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+      - name: Check what should run
+        id: check
+        uses: immich-app/devtools/actions/pre-job@91f342bb4477c4bc10c576ae739da875d85aa164 # pre-job-action-v2.0.4
         with:
+          github-token: ${{ steps.token.outputs.token }}
           filters: |
+            root:
+              - 'misc/**'
+              - 'pnpm-lock.yaml'
+              - 'mise.toml'
             i18n:
               - 'i18n/**'
+              - 'mise.toml'
             web:
               - 'web/**'
               - 'i18n/**'
-              - 'open-api/typescript-sdk/**'
+              - 'packages/sdk/**'
+              - 'pnpm-lock.yaml'
+              - 'mise.toml'
             server:
               - 'server/**'
+              - 'pnpm-lock.yaml'
+              - 'mise.toml'
+              - 'packages/plugin-core/**'
+              - 'packages/plugin-sdk/**'
             cli:
-              - 'cli/**'
-              - 'open-api/typescript-sdk/**'
+              - 'packages/cli/**'
+              - 'packages/sdk/**'
+              - 'pnpm-lock.yaml'
+              - 'mise.toml'
             e2e:
               - 'e2e/**'
+              - 'pnpm-lock.yaml'
+              - 'mise.toml'
             mobile:
               - 'mobile/**'
+              - 'mise.toml'
             machine-learning:
               - 'machine-learning/**'
-            workflow:
-              - '.github/workflows/test.yml'
+              - 'mise.toml'
             .github:
               - '.github/**'
+          force-filters: |
+            - '.github/workflows/test.yml'
+          force-events: 'workflow_dispatch'
 
-      - name: Check if we should force jobs to run
-        id: should_force
-        run: echo "should_force=${{ steps.found_paths.outputs.workflow == 'true' || github.event_name == 'workflow_dispatch' }}" >> "$GITHUB_OUTPUT"
+  root-unit-tests:
+    name: Test the root workspace
+    needs: pre-job
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).root == true }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
+        with:
+          github_token: ${{ steps.token.outputs.token }}
+
+      - name: Run unit tests
+        run: pnpm test
 
   server-unit-tests:
     name: Test & Lint Server
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_server == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).server == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: ./server
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './server/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run npm install
-        run: npm ci
-
-      - name: Run linter
-        run: npm run lint
-        if: ${{ !cancelled() }}
-
-      - name: Run formatter
-        run: npm run format
-        if: ${{ !cancelled() }}
-
-      - name: Run tsc
-        run: npm run check
-        if: ${{ !cancelled() }}
-
-      - name: Run small tests & coverage
-        run: npm run test:cov
-        if: ${{ !cancelled() }}
+      - name: Run ci-unit
+        run: mise run //server:ci-unit
 
   cli-unit-tests:
     name: Unit Test CLI
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_cli == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).cli == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     defaults:
       run:
-        working-directory: ./cli
-
+        working-directory: ./packages/cli
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './cli/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
-
-      - name: Install deps
-        run: npm ci
-
-      - name: Run linter
-        run: npm run lint
-        if: ${{ !cancelled() }}
-
-      - name: Run formatter
-        run: npm run format
-        if: ${{ !cancelled() }}
-
-      - name: Run tsc
-        run: npm run check
-        if: ${{ !cancelled() }}
-
-      - name: Run unit tests & coverage
-        run: npm run test:cov
-        if: ${{ !cancelled() }}
+      - name: Run ci-unit
+        run: mise run ci-unit
 
   cli-unit-tests-win:
     name: Unit Test CLI (Windows)
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_cli == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).cli == true }}
     runs-on: windows-latest
     permissions:
       contents: read
     defaults:
       run:
-        working-directory: ./cli
-
+        working-directory: ./packages/cli
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './cli/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
+      - name: Run setup @immich/sdk
+        run: mise run //:sdk:install && mise run //:sdk:build
 
-      - name: Install deps
-        run: npm ci
+      - name: Run pnpm install
+        run: pnpm install --frozen-lockfile
 
       # Skip linter & formatter in Windows test.
+
       - name: Run tsc
-        run: npm run check
+        run: pnpm check
         if: ${{ !cancelled() }}
 
       - name: Run unit tests & coverage
-        run: npm run test:cov
+        run: pnpm test
         if: ${{ !cancelled() }}
 
   web-lint:
     name: Lint Web
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_web == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).web == true }}
     runs-on: mich
     permissions:
       contents: read
     defaults:
       run:
         working-directory: ./web
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './web/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
+      - name: Run setup @immich/sdk
+        run: mise run //:sdk:install && mise run //:sdk:build
 
-      - name: Run npm install
-        run: npm ci
+      - name: Run pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Run linter
-        run: npm run lint:p
-        if: ${{ !cancelled() }}
-
-      - name: Run formatter
-        run: npm run format
-        if: ${{ !cancelled() }}
-
-      - name: Run svelte checks
-        run: npm run check:svelte
+        run: pnpm lint
         if: ${{ !cancelled() }}
 
   web-unit-tests:
     name: Test Web
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_web == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).web == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     defaults:
       run:
         working-directory: ./web
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './web/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
-
-      - name: Run npm install
-        run: npm ci
-
-      - name: Run tsc
-        run: npm run check:typescript
-        if: ${{ !cancelled() }}
-
-      - name: Run unit tests & coverage
-        run: npm run test:cov
-        if: ${{ !cancelled() }}
+      - name: Run ci-unit
+        run: mise run ci-unit
 
   i18n-tests:
     name: Test i18n
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_i18n == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).i18n == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './web/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
       - name: Install dependencies
-        run: npm --prefix=web ci
+        run: pnpm -w install --frozen-lockfile
 
       - name: Format
-        run: npm --prefix=web run format:i18n
+        run: pnpm format:fix
 
       - name: Find file changes
         uses: tj-actions/verify-changed-files@a1c6acee9df209257a246f2cc6ae8cb6581c1edf # v20.0.4
@@ -308,79 +318,72 @@ jobs:
   e2e-tests-lint:
     name: End-to-End Lint
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_e2e == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).e2e == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     defaults:
       run:
         working-directory: ./e2e
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './e2e/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
-        if: ${{ !cancelled() }}
-
-      - name: Install dependencies
-        run: npm ci
-        if: ${{ !cancelled() }}
-
-      - name: Run linter
-        run: npm run lint
-        if: ${{ !cancelled() }}
-
-      - name: Run formatter
-        run: npm run format
-        if: ${{ !cancelled() }}
-
-      - name: Run tsc
-        run: npm run check
+      - name: Run ci-unit
+        run: mise run ci-unit
         if: ${{ !cancelled() }}
 
   server-medium-tests:
     name: Medium Tests (Server)
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_server == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).server == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     defaults:
       run:
         working-directory: ./server
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          submodules: 'recursive'
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './server/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run npm install
-        run: npm ci
-
-      - name: Run medium tests
-        run: npm run test:medium
+      - name: Run ci-medium
+        run: mise run ci-medium
         if: ${{ !cancelled() }}
 
   e2e-tests-server-cli:
     name: End-to-End Tests (Server & CLI)
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_e2e_server_cli == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).e2e == true || fromJSON(needs.pre-job.outputs.should_run).server == true || fromJSON(needs.pre-job.outputs.should_run).cli == true }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -390,45 +393,74 @@ jobs:
     strategy:
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           submodules: 'recursive'
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version-file: './e2e/.nvmrc'
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
 
-      - name: Run setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
-        if: ${{ !cancelled() }}
+      - name: Setup packages
+        run: pnpm --filter @immich/sdk --filter @immich/cli install --frozen-lockfile && pnpm --filter @immich/sdk --filter @immich/cli build
 
-      - name: Run setup cli
-        run: npm ci && npm run build
-        working-directory: ./cli
+      - name: Run setup web
+        run: pnpm install --frozen-lockfile && pnpm exec svelte-kit sync
+        working-directory: ./web
         if: ${{ !cancelled() }}
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         if: ${{ !cancelled() }}
 
-      - name: Docker build
-        run: docker compose build
+      - name: Start Docker Compose
+        run: docker compose up -d --build --renew-anon-volumes --force-recreate --remove-orphans --wait --wait-timeout 300
         if: ${{ !cancelled() }}
 
       - name: Run e2e tests (api & cli)
-        run: npm run test
+        env:
+          VITEST_DISABLE_DOCKER_SETUP: true
+        run: pnpm test
         if: ${{ !cancelled() }}
+
+      - name: Run e2e tests (maintenance)
+        env:
+          VITEST_DISABLE_DOCKER_SETUP: true
+        run: pnpm test:maintenance
+        if: ${{ !cancelled() }}
+
+      - name: Capture Docker logs
+        if: always()
+        run: docker compose logs --no-color > docker-compose-logs.txt
+        working-directory: ./e2e
+
+      - name: Archive Docker logs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-server-docker-logs-${{ matrix.runner }}
+          path: e2e/docker-compose-logs.txt
 
   e2e-tests-web:
     name: End-to-End Tests (Web)
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_e2e_web == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).e2e == true || fromJSON(needs.pre-job.outputs.should_run).web == true }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -438,39 +470,96 @@ jobs:
     strategy:
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           submodules: 'recursive'
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version-file: './e2e/.nvmrc'
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
 
-      - name: Run setup typescript-sdk
-        run: npm ci && npm run build
-        working-directory: ./open-api/typescript-sdk
+      - name: Run setup @immich/sdk
+        run: pnpm --filter @immich/sdk install --frozen-lockfile && pnpm --filter @immich/sdk build
+
         if: ${{ !cancelled() }}
-
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         if: ${{ !cancelled() }}
 
       - name: Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium --only-shell
         if: ${{ !cancelled() }}
 
       - name: Docker build
-        run: docker compose build
+        run: docker compose up -d --build --renew-anon-volumes --force-recreate --remove-orphans --wait --wait-timeout 300
         if: ${{ !cancelled() }}
 
       - name: Run e2e tests (web)
-        run: npx playwright test
+        env:
+          PLAYWRIGHT_DISABLE_WEBSERVER: true
+        run: pnpm test:web
         if: ${{ !cancelled() }}
+
+      - name: Archive e2e test (web) results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success() || failure()
+        with:
+          name: e2e-web-test-results-${{ matrix.runner }}
+          path: e2e/playwright-report/
+
+      - name: Run ui tests (web)
+        env:
+          PLAYWRIGHT_DISABLE_WEBSERVER: true
+        run: pnpm test:web:ui
+        if: ${{ !cancelled() }}
+
+      - name: Archive ui test (web) results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success() || failure()
+        with:
+          name: e2e-ui-test-results-${{ matrix.runner }}
+          path: e2e/playwright-report/
+
+      - name: Run maintenance tests
+        env:
+          PLAYWRIGHT_DISABLE_WEBSERVER: true
+        run: pnpm test:web:maintenance
+        if: ${{ !cancelled() }}
+
+      - name: Archive maintenance tests (web) results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success() || failure()
+        with:
+          name: e2e-maintenance-isolated-test-results-${{ matrix.runner }}
+          path: e2e/playwright-report/
+
+      - name: Capture Docker logs
+        if: always()
+        run: docker compose logs --no-color > docker-compose-logs.txt
+        working-directory: ./e2e
+
+      - name: Archive Docker logs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-web-docker-logs-${{ matrix.runner }}
+          path: e2e/docker-compose-logs.txt
 
   success-check-e2e:
     name: End-to-End Tests Success
@@ -479,44 +568,48 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Any jobs failed?
-        if: ${{ contains(needs.*.result, 'failure') }}
-        run: exit 1
-      - name: All jobs passed or skipped
-        if: ${{ !(contains(needs.*.result, 'failure')) }}
-        # zizmor: ignore[template-injection]
-        run: echo "All jobs passed or skipped" && echo "${{ toJSON(needs.*.result) }}"
-
+      - uses: immich-app/devtools/actions/success-check@81113db03f6d743efee81e0058c0b43f6cd6f36d # success-check-action-v0.0.6
+        with:
+          needs: ${{ toJSON(needs) }}
   mobile-unit-tests:
     name: Unit Test Mobile
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_mobile == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).mobile == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Flutter SDK
-        uses: subosito/flutter-action@e938fdf56512cc96ef2f93601a5a40bde3801046 # v2.19.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          channel: 'stable'
-          flutter-version-file: ./mobile/pubspec.yaml
+          github_token: ${{ steps.token.outputs.token }}
+          working_directory: ./mobile
 
-      - name: Generate translation file
-        run: make translation
+      - name: Install dependencies
+        run: flutter pub get
         working-directory: ./mobile
+
+      - name: Generate translation files
+        run: mise //mobile:codegen:translation
 
       - name: Run tests
-        working-directory: ./mobile
-        run: flutter test -j 1
+        run: mise //mobile:test
 
   ml-unit-tests:
     name: Unit Test ML
     needs: pre-job
-    if: ${{ needs.pre-job.outputs.should_run_ml == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run).machine-learning == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -524,60 +617,58 @@ jobs:
       run:
         working-directory: ./machine-learning
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        # TODO: add caching when supported (https://github.com/actions/setup-python/pull/818)
-        # with:
-        #   python-version: 3.11
-        #   cache: 'uv'
-      - name: Install dependencies
-        run: |
-          uv sync --extra cpu
-      - name: Lint with ruff
-        run: |
-          uv run ruff check --output-format=github immich_ml
-      - name: Check black formatting
-        run: |
-          uv run black --check immich_ml
-      - name: Run mypy type checking
-        run: |
-          uv run mypy --strict immich_ml/
-      - name: Run tests and coverage
-        run: |
-          uv run pytest --cov=immich_ml --cov-report term-missing
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
+        with:
+          github_token: ${{ steps.token.outputs.token }}
+
+      - name: Run ci-unit
+        run: mise run ci-unit
 
   github-files-formatting:
     name: .github Files Formatting
     needs: pre-job
-    if: ${{ needs.pre-job.outputs['should_run_.github'] == 'true' }}
+    if: ${{ fromJSON(needs.pre-job.outputs.should_run)['.github'] == true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     defaults:
       run:
         working-directory: ./.github
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './.github/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
-      - name: Run npm install
-        run: npm ci
+      - name: Run pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Run formatter
-        run: npm run format
+        run: pnpm format
         if: ${{ !cancelled() }}
 
   shellcheck:
@@ -586,42 +677,49 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-
+          token: ${{ steps.token.outputs.token }}
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         with:
           ignore_paths: >-
-            **/open-api/**
-            **/openapi**
-            **/node_modules/**
-
+            **/open-api/** **/openapi** **/node_modules/**
   generated-api-up-to-date:
     name: OpenAPI Clients
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './server/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
       - name: Install server dependencies
-        run: npm --prefix=server ci
-
-      - name: Build the app
-        run: npm --prefix=server run build
-
+        run: SHARP_IGNORE_GLOBAL_LIBVIPS=true pnpm --filter immich install --frozen-lockfile
       - name: Run API generation
-        run: make open-api
+        run: mise //:open-api
+        working-directory: open-api
 
       - name: Find file changes
         uses: tj-actions/verify-changed-files@a1c6acee9df209257a246f2cc6ae8cb6581c1edf # v20.0.4
@@ -629,7 +727,7 @@ jobs:
         with:
           files: |
             mobile/openapi
-            open-api/typescript-sdk
+            packages/sdk
             open-api/immich-openapi-specs.json
 
       - name: Verify files have not changed
@@ -648,48 +746,51 @@ jobs:
       contents: read
     services:
       postgres:
-        image: ghcr.io/immich-app/postgres:14-vectorchord0.4.1
+        image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3@sha256:dbf18b3ffea4a81434c65b71e20d27203baf903a0275f4341e4c16dfd901fd67
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DB: immich
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
         ports:
           - 5432:5432
-    defaults:
-      run:
-        working-directory: ./server
-
     steps:
+      - id: token
+        uses: immich-app/devtools/actions/create-workflow-token@9db058b2e6eec20e07760b0e17a0505c78ec3191 # create-workflow-token-action-v2.0.1
+        with:
+          client-id: ${{ secrets.PUSH_O_MATIC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_O_MATIC_APP_KEY }}
+
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          token: ${{ steps.token.outputs.token }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@3bca63ca3c15020293b36b51737a3ee2c773340b # use-mise-action-v3.1.0
         with:
-          node-version-file: './server/.nvmrc'
+          github_token: ${{ steps.token.outputs.token }}
 
       - name: Install server dependencies
-        run: npm ci
+        run: SHARP_IGNORE_GLOBAL_LIBVIPS=true pnpm install --frozen-lockfile
+
+      - name: Build plugins
+        run: mise //:plugins
 
       - name: Build the app
-        run: npm run build
+        run: mise //server:build
 
       - name: Run existing migrations
-        run: npm run migrations:run
+        run: pnpm --filter immich migrations:run
 
       - name: Test npm run schema:reset command works
-        run: npm run schema:reset
+        run: pnpm --filter immich schema:reset
 
       - name: Generate new migrations
         continue-on-error: true
-        run: npm run migrations:generate src/TestMigration
+        run: pnpm --filter migrations:generate src/TestMigration
 
       - name: Find file changes
         uses: tj-actions/verify-changed-files@a1c6acee9df209257a246f2cc6ae8cb6581c1edf # v20.0.4
@@ -697,6 +798,7 @@ jobs:
         with:
           files: |
             server/src
+
       - name: Verify migration files have not changed
         if: steps.verify-changed-files.outputs.files_changed == 'true'
         env:
@@ -704,11 +806,11 @@ jobs:
         run: |
           echo "ERROR: Generated migration files not up to date!"
           echo "Changed files: ${CHANGED_FILES}"
-          cat ./src/*-TestMigration.ts
+          cat ./server/src/*-TestMigration.ts
           exit 1
 
       - name: Run SQL generation
-        run: npm run sync:sql
+        run: mise //:sql
         env:
           DB_URL: postgres://postgres:postgres@localhost:5432/immich
 
@@ -726,79 +828,80 @@ jobs:
         run: |
           echo "ERROR: Generated SQL files not up to date!"
           echo "Changed files: ${CHANGED_FILES}"
+          git diff
           exit 1
 
-  # mobile-integration-tests:
-  #   name: Run mobile end-to-end integration tests
-  #   runs-on: macos-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-java@v3
-  #       with:
-  #         distribution: 'zulu'
-  #         java-version: '12.x'
-  #         cache: 'gradle'
-  #     - name: Cache android SDK
-  #       uses: actions/cache@v3
-  #       id: android-sdk
-  #       with:
-  #         key: android-sdk
-  #         path: |
-  #           /usr/local/lib/android/
-  #           ~/.android
-  #     - name: Cache Gradle
-  #       uses: actions/cache@v3
-  #       with:
-  #         path: |
-  #           ./mobile/build/
-  #           ./mobile/android/.gradle/
-  #         key: ${{ runner.os }}-flutter-${{ hashFiles('**/*.gradle*', 'pubspec.lock') }}
-  #     - name: Setup Android SDK
-  #       if: steps.android-sdk.outputs.cache-hit != 'true'
-  #       uses: android-actions/setup-android@v2
-  #     - name: AVD cache
-  #       uses: actions/cache@v3
-  #       id: avd-cache
-  #       with:
-  #         path: |
-  #           ~/.android/avd/*
-  #           ~/.android/adb*
-  #         key: avd-29
-  #     - name: create AVD and generate snapshot for caching
-  #       if: steps.avd-cache.outputs.cache-hit != 'true'
-  #       uses: reactivecircus/android-emulator-runner@v2.27.0
-  #       with:
-  #         working-directory: ./mobile
-  #         cores: 2
-  #         api-level: 29
-  #         arch: x86_64
-  #         profile: pixel
-  #         target: default
-  #         force-avd-creation: false
-  #         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-  #         disable-animations: false
-  #         script: echo "Generated AVD snapshot for caching."
-  #     - name: Setup Flutter SDK
-  #       uses: subosito/flutter-action@v2
-  #       with:
-  #         channel: 'stable'
-  #         flutter-version: '3.7.3'
-  #         cache: true
-  #     - name: Run integration tests
-  #       uses: Wandalen/wretry.action@master
-  #       with:
-  #         action: reactivecircus/android-emulator-runner@v2.27.0
-  #         with: |
-  #           working-directory: ./mobile
-  #           cores: 2
-  #           api-level: 29
-  #           arch: x86_64
-  #           profile: pixel
-  #           target: default
-  #           force-avd-creation: false
-  #           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-  #           disable-animations: true
-  #           script: |
-  #             flutter pub get
-  #             flutter test integration_test
-  #         attempt_limit: 3
+# mobile-integration-tests:
+#   name: Run mobile end-to-end integration tests
+#   runs-on: macos-latest
+#   steps:
+#     - uses: actions/checkout@v4
+#     - uses: actions/setup-java@v3
+#       with:
+#         distribution: 'zulu'
+#         java-version: '12.x'
+#         cache: 'gradle'
+#     - name: Cache android SDK
+#       uses: actions/cache@v3
+#       id: android-sdk
+#       with:
+#         key: android-sdk
+#         path: |
+#           /usr/local/lib/android/
+#           ~/.android
+#     - name: Cache Gradle
+#       uses: actions/cache@v3
+#       with:
+#         path: |
+#           ./mobile/build/
+#           ./mobile/android/.gradle/
+#         key: ${{ runner.os }}-flutter-${{ hashFiles('**/*.gradle*', 'pubspec.lock') }}
+#     - name: Setup Android SDK
+#       if: steps.android-sdk.outputs.cache-hit != 'true'
+#       uses: android-actions/setup-android@v2
+#     - name: AVD cache
+#       uses: actions/cache@v3
+#       id: avd-cache
+#       with:
+#         path: |
+#           ~/.android/avd/*
+#           ~/.android/adb*
+#         key: avd-29
+#     - name: create AVD and generate snapshot for caching
+#       if: steps.avd-cache.outputs.cache-hit != 'true'
+#       uses: reactivecircus/android-emulator-runner@v2.27.0
+#       with:
+#         working-directory: ./mobile
+#         cores: 2
+#         api-level: 29
+#         arch: x86_64
+#         profile: pixel
+#         target: default
+#         force-avd-creation: false
+#         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+#         disable-animations: false
+#         script: echo "Generated AVD snapshot for caching."
+#     - name: Setup Flutter SDK
+#       uses: subosito/flutter-action@v2
+#       with:
+#         channel: 'stable'
+#         flutter-version: '3.7.3'
+#         cache: true
+#     - name: Run integration tests
+#       uses: Wandalen/wretry.action@master
+#       with:
+#         action: reactivecircus/android-emulator-runner@v2.27.0
+#         with: |
+#           working-directory: ./mobile
+#           cores: 2
+#           api-level: 29
+#           arch: x86_64
+#           profile: pixel
+#           target: default
+#           force-avd-creation: false
+#           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+#           disable-animations: true
+#           script: |
+#             flutter pub get
+#             flutter test integration_test
+#         attempt_limit: 3

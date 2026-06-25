@@ -17,8 +17,13 @@ class TimeBucketsResponseDto {
     required this.timeBucket,
   });
 
+  /// Number of assets in this time bucket
+  ///
+  /// Minimum value: -9007199254740991
+  /// Maximum value: 9007199254740991
   int count;
 
+  /// Time bucket identifier in YYYY-MM-DD format representing the start of the time period
   String timeBucket;
 
   @override

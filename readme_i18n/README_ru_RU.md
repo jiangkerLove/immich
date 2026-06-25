@@ -28,7 +28,8 @@
   <a href="README_de_DE.md">Deutsch</a>
   <a href="README_nl_NL.md">Nederlands</a>
   <a href="README_tr_TR.md">Türkçe</a>
-  <a href="README_zh_CN.md">中文</a>
+  <a href="README_zh_CN.md">简体中文</a>
+  <a href="README_zh_TW.md">正體中文</a>
   <a href="README_uk_UA.md">Українська</a>
   <a href="README_pt_BR.md">Português Brasileiro</a>
   <a href="README_sv_SE.md">Svenska</a>
@@ -38,27 +39,23 @@
   <a href="README_th_TH.md">ภาษาไทย</a>
 </p>
 
-## Предупреждение
-
-- ⚠️ Этот проект находится **в очень активной** разработке.
-- ⚠️ Ожидайте недоработки и глобальные изменения.
-- ⚠️ **Не используйте это приложение как единственное хранилище своих фото и видео.**
-- ⚠️ Всегда следуйте [плану резервного копирования «3-2-1»](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/ "Стратегии резервного копирования: Почему стратегия резервного копирования «3-2-1» — лучшая") для ваших драгоценных фотографий и видео!
-
+> [!WARNING]
+> ⚠️ Всегда следуйте [плану резервного копирования «3-2-1»](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) для ваших драгоценных фотографий и видео!
+>
 
 > [!NOTE]
 > Инструкции по установке и документация по ссылке https://immich.app/
 
 ## Содержание
 
-- [Официальная документация](https://immich.app/docs)
-- [Введение](https://immich.app/docs/overview/introduction)
-- [Установка](https://immich.app/docs/install/requirements)
-- [План разработки](https://github.com/orgs/immich-app/projects/1)
+- [Официальная документация](https://docs.immich.app)
+- [Введение](https://docs.immich.app/overview/introduction)
+- [Установка](https://docs.immich.app/install/requirements)
+- [План разработки](https://immich.app/roadmap)
 - [Демо](#demo)
 - [Возможности](#features)
-- [Перевод](https://immich.app/docs/developer/translations)
-- [Гид по участию и поддержке проекта](https://immich.app/docs/overview/support-the-project)
+- [Перевод](https://docs.immich.app/developer/translations)
+- [Гид по участию и поддержке проекта](https://docs.immich.app/overview/support-the-project)
 
 ## Демо
 
@@ -93,7 +90,7 @@
 | LivePhoto/MotionPhoto воспроизведение и бекап          | Да         | Да  |
 | Отображение 360° изображений                           | Нет        | Да  |
 | Настраиваемая структура хранилища                      | Да         | Да  |
-| Общий доступ к контенту                                | Нет        | Да  |
+| Общий доступ к контенту                                | Да         | Да  |
 | Архив и избранное                                      | Да         | Да  |
 | Мировая карта                                          | Да         | Да  |
 | Совместное использование                               | Да         | Да  |
@@ -103,11 +100,11 @@
 | Галереи только для просмотра                           | Да         | Да  |
 | Коллажи                                                | Да         | Да  |
 | Метки (теги)                                           | Нет        | Да  |
-| Просмотр папкой                                        | Нет        | Да  |
+| Просмотр папкой                                        | Да         | Да  |
 
 ## Перевод
 
-Всё про перевод проекта [Здесь](https://immich.app/docs/developer/translations).
+Всё про перевод проекта [Здесь](https://docs.immich.app/developer/translations).
 
 <a href="https://hosted.weblate.org/engage/immich/">
 <img src="https://hosted.weblate.org/widget/immich/immich/multi-auto.svg" alt="Translation status" />

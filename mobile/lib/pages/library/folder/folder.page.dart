@@ -1,29 +1,27 @@
 import 'package:auto_route/auto_route.dart';
+import 'package:collection/collection.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/constants/enums.dart';
+import 'package:immich_mobile/domain/services/timeline.service.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/theme_extensions.dart';
 import 'package:immich_mobile/models/folder/recursive_folder.model.dart';
 import 'package:immich_mobile/models/folder/root_folder.model.dart';
 import 'package:immich_mobile/pages/common/large_leading_tile.dart';
-import 'package:immich_mobile/providers/asset_viewer/current_asset.provider.dart';
+import 'package:immich_mobile/presentation/widgets/asset_viewer/asset_viewer.page.dart';
+import 'package:immich_mobile/presentation/widgets/images/thumbnail_tile.widget.dart';
 import 'package:immich_mobile/providers/folder.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/timeline.provider.dart';
 import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
-import 'package:immich_mobile/widgets/asset_grid/thumbnail_image.dart';
 import 'package:immich_mobile/widgets/common/immich_toast.dart';
 
-RecursiveFolder? _findFolderInStructure(
-  RootFolder rootFolder,
-  RecursiveFolder targetFolder,
-) {
+RecursiveFolder? _findFolderInStructure(RootFolder rootFolder, RecursiveFolder targetFolder) {
   for (final folder in rootFolder.subfolders) {
-    if (targetFolder.path == '/' &&
-        folder.path.isEmpty &&
-        folder.name == targetFolder.name) {
+    if (targetFolder.path == '/' && folder.path.isEmpty && folder.name == targetFolder.name) {
       return folder;
     }
 
@@ -33,7 +31,9 @@ RecursiveFolder? _findFolderInStructure(
 
     if (folder.subfolders.isNotEmpty) {
       final found = _findFolderInStructure(folder, targetFolder);
-      if (found != null) return found;
+      if (found != null) {
+        return found;
+      }
     }
   }
   return null;
@@ -51,36 +51,26 @@ class FolderPage extends HookConsumerWidget {
     final currentFolder = useState<RecursiveFolder?>(folder);
     final sortOrder = useState<SortOrder>(SortOrder.asc);
 
-    useEffect(
-      () {
-        if (folder == null) {
-          ref
-              .read(folderStructureProvider.notifier)
-              .fetchFolders(sortOrder.value);
-        }
-        return null;
-      },
-      [],
-    );
+    useEffect(() {
+      if (folder == null) {
+        ref.read(folderStructureProvider.notifier).fetchFolders(sortOrder.value);
+      }
+      return null;
+    }, []);
 
     // Update current folder when root structure changes
-    useEffect(
-      () {
-        if (folder != null && folderState.hasValue) {
-          final updatedFolder =
-              _findFolderInStructure(folderState.value!, folder!);
-          if (updatedFolder != null) {
-            currentFolder.value = updatedFolder;
-          }
+    useEffect(() {
+      if (folder != null && folderState.hasValue) {
+        final updatedFolder = _findFolderInStructure(folderState.value!, folder!);
+        if (updatedFolder != null) {
+          currentFolder.value = updatedFolder;
         }
-        return null;
-      },
-      [folderState],
-    );
+      }
+      return null;
+    }, [folderState]);
 
     void onToggleSortOrder() {
-      final newOrder =
-          sortOrder.value == SortOrder.asc ? SortOrder.desc : SortOrder.asc;
+      final newOrder = sortOrder.value == SortOrder.asc ? SortOrder.desc : SortOrder.asc;
 
       ref.read(folderStructureProvider.notifier).fetchFolders(newOrder);
 
@@ -92,38 +82,19 @@ class FolderPage extends HookConsumerWidget {
         title: Text(currentFolder.value?.name ?? tr("folders")),
         elevation: 0,
         centerTitle: false,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.swap_vert),
-            onPressed: onToggleSortOrder,
-          ),
-        ],
+        actions: [IconButton(icon: const Icon(Icons.swap_vert), onPressed: onToggleSortOrder)],
       ),
       body: folderState.when(
         data: (rootFolder) {
           if (folder == null) {
-            return FolderContent(
-              folder: rootFolder,
-              root: rootFolder,
-              sortOrder: sortOrder.value,
-            );
+            return FolderContent(folder: rootFolder, root: rootFolder, sortOrder: sortOrder.value);
           } else {
-            return FolderContent(
-              folder: currentFolder.value!,
-              root: rootFolder,
-              sortOrder: sortOrder.value,
-            );
+            return FolderContent(folder: currentFolder.value!, root: rootFolder, sortOrder: sortOrder.value);
           }
         },
-        loading: () => const Center(
-          child: CircularProgressIndicator(),
-        ),
+        loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, stack) {
-          ImmichToast.show(
-            context: context,
-            msg: "failed_to_load_folder".tr(),
-            toastType: ToastType.error,
-          );
+          ImmichToast.show(context: context, msg: "failed_to_load_folder".tr(), toastType: ToastType.error);
           return Center(child: const Text("failed_to_load_folder").tr());
         },
       ),
@@ -136,28 +107,20 @@ class FolderContent extends HookConsumerWidget {
   final RootFolder root;
   final SortOrder sortOrder;
 
-  const FolderContent({
-    super.key,
-    this.folder,
-    required this.root,
-    this.sortOrder = SortOrder.asc,
-  });
+  const FolderContent({super.key, this.folder, required this.root, this.sortOrder = SortOrder.asc});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final folderRenderlist = ref.watch(folderRenderListProvider(folder!));
 
     // Initial asset fetch
-    useEffect(
-      () {
-        if (folder == null) return;
-        ref
-            .read(folderRenderListProvider(folder!).notifier)
-            .fetchAssets(sortOrder);
-        return null;
-      },
-      [folder],
-    );
+    useEffect(() {
+      if (folder == null) {
+        return;
+      }
+      ref.read(folderRenderListProvider(folder!).notifier).fetchAssets(sortOrder);
+      return null;
+    }, [folder]);
 
     if (folder == null) {
       return Center(child: const Text("folder_not_found").tr());
@@ -180,8 +143,8 @@ class FolderContent extends HookConsumerWidget {
         FolderPath(currentFolder: folder!, root: root),
         Expanded(
           child: folderRenderlist.when(
-            data: (list) {
-              if (folder!.subfolders.isEmpty && list.isEmpty) {
+            data: (folderAssets) {
+              if (folder!.subfolders.isEmpty && folderAssets.isEmpty) {
                 return Center(child: const Text("empty_folder").tr());
               }
 
@@ -190,18 +153,12 @@ class FolderContent extends HookConsumerWidget {
                   if (folder!.subfolders.isNotEmpty)
                     ...folder!.subfolders.map(
                       (subfolder) => LargeLeadingTile(
-                        leading: Icon(
-                          Icons.folder,
-                          color: context.primaryColor,
-                          size: 48,
-                        ),
+                        leading: Icon(Icons.folder, color: context.primaryColor, size: 48),
                         title: Text(
                           subfolder.name,
                           softWrap: false,
                           overflow: TextOverflow.ellipsis,
-                          style: context.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: context.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                         ),
                         subtitle: subfolder.subfolders.isNotEmpty
                             ? Text(
@@ -211,66 +168,46 @@ class FolderContent extends HookConsumerWidget {
                                 ),
                               )
                             : null,
-                        onTap: () =>
-                            context.pushRoute(FolderRoute(folder: subfolder)),
+                        onTap: () => context.pushRoute(FolderRoute(folder: subfolder)),
                       ),
                     ),
-                  if (!list.isEmpty &&
-                      list.allAssets != null &&
-                      list.allAssets!.isNotEmpty)
-                    ...list.allAssets!.map(
-                      (asset) => LargeLeadingTile(
+                  if (folderAssets.isNotEmpty)
+                    ...folderAssets.mapIndexed(
+                      (index, asset) => LargeLeadingTile(
                         onTap: () {
-                          ref.read(currentAssetProvider.notifier).set(asset);
+                          AssetViewer.setAsset(ref, asset);
                           context.pushRoute(
-                            GalleryViewerRoute(
-                              renderList: list,
-                              initialIndex: list.allAssets!.indexOf(asset),
+                            AssetViewerRoute(
+                              initialIndex: index,
+                              timelineService: ref
+                                  .read(timelineFactoryProvider)
+                                  .fromAssets(folderAssets, TimelineOrigin.folder),
                             ),
                           );
                         },
                         leading: ClipRRect(
-                          borderRadius: const BorderRadius.all(
-                            Radius.circular(15),
-                          ),
-                          child: SizedBox(
-                            width: 80,
-                            height: 80,
-                            child: ThumbnailImage(
-                              asset: asset,
-                              showStorageIndicator: false,
-                            ),
-                          ),
+                          borderRadius: const BorderRadius.all(Radius.circular(15)),
+                          child: SizedBox(width: 80, height: 80, child: ThumbnailTile(asset)),
                         ),
                         title: Text(
-                          asset.fileName,
+                          asset.name,
                           maxLines: 2,
                           softWrap: false,
                           overflow: TextOverflow.ellipsis,
-                          style: context.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: context.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                         ),
                         subtitle: Text(
-                          "${asset.exifInfo?.fileSize != null ? formatBytes(asset.exifInfo?.fileSize ?? 0) : ""} • ${DateFormat.yMMMd().format(asset.fileCreatedAt)}",
-                          style: context.textTheme.bodyMedium?.copyWith(
-                            color: context.colorScheme.onSurfaceSecondary,
-                          ),
+                          "${asset.exifInfo.fileSize != null ? "${formatBytes(asset.exifInfo.fileSize ?? 0)} • " : ""}${DateFormat.yMMMd().format(asset.createdAt.toLocal())}",
+                          style: context.textTheme.bodyMedium?.copyWith(color: context.colorScheme.onSurfaceSecondary),
                         ),
                       ),
                     ),
                 ],
               );
             },
-            loading: () => const Center(
-              child: CircularProgressIndicator(),
-            ),
+            loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, stack) {
-              ImmichToast.show(
-                context: context,
-                msg: "failed_to_load_assets".tr(),
-                toastType: ToastType.error,
-              );
+              ImmichToast.show(context: context, msg: "failed_to_load_assets".tr(), toastType: ToastType.error);
               return Center(child: const Text("failed_to_load_assets").tr());
             },
           ),
@@ -284,11 +221,7 @@ class FolderPath extends StatelessWidget {
   final RootFolder currentFolder;
   final RootFolder root;
 
-  const FolderPath({
-    super.key,
-    required this.currentFolder,
-    required this.root,
-  });
+  const FolderPath({super.key, required this.currentFolder, required this.root});
 
   @override
   Widget build(BuildContext context) {
@@ -309,7 +242,7 @@ class FolderPath extends StatelessWidget {
               Text(
                 currentFolder.path,
                 style: TextStyle(
-                  fontFamily: 'Inconsolata',
+                  fontFamily: 'GoogleSansCode',
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                   color: context.colorScheme.onSurface.withAlpha(175),

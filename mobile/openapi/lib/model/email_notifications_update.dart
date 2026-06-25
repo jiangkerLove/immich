@@ -13,34 +13,37 @@ part of openapi.api;
 class EmailNotificationsUpdate {
   /// Returns a new [EmailNotificationsUpdate] instance.
   EmailNotificationsUpdate({
-    this.albumInvite,
-    this.albumUpdate,
-    this.enabled,
+    this.albumInvite = const Optional.absent(),
+    this.albumUpdate = const Optional.absent(),
+    this.enabled = const Optional.absent(),
   });
 
+  /// Whether to receive email notifications for album invites
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? albumInvite;
+  Optional<bool?> albumInvite;
 
+  /// Whether to receive email notifications for album updates
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? albumUpdate;
+  Optional<bool?> albumUpdate;
 
+  /// Whether email notifications are enabled
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
   /// source code must fall back to having a nullable type.
   /// Consider adding a "default:" property in the specification file to hide this note.
   ///
-  bool? enabled;
+  Optional<bool?> enabled;
 
   @override
   bool operator ==(Object other) => identical(this, other) || other is EmailNotificationsUpdate &&
@@ -60,20 +63,17 @@ class EmailNotificationsUpdate {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{};
-    if (this.albumInvite != null) {
-      json[r'albumInvite'] = this.albumInvite;
-    } else {
-    //  json[r'albumInvite'] = null;
+    if (this.albumInvite.isPresent) {
+      final value = this.albumInvite.value;
+      json[r'albumInvite'] = value;
     }
-    if (this.albumUpdate != null) {
-      json[r'albumUpdate'] = this.albumUpdate;
-    } else {
-    //  json[r'albumUpdate'] = null;
+    if (this.albumUpdate.isPresent) {
+      final value = this.albumUpdate.value;
+      json[r'albumUpdate'] = value;
     }
-    if (this.enabled != null) {
-      json[r'enabled'] = this.enabled;
-    } else {
-    //  json[r'enabled'] = null;
+    if (this.enabled.isPresent) {
+      final value = this.enabled.value;
+      json[r'enabled'] = value;
     }
     return json;
   }
@@ -87,9 +87,9 @@ class EmailNotificationsUpdate {
       final json = value.cast<String, dynamic>();
 
       return EmailNotificationsUpdate(
-        albumInvite: mapValueOfType<bool>(json, r'albumInvite'),
-        albumUpdate: mapValueOfType<bool>(json, r'albumUpdate'),
-        enabled: mapValueOfType<bool>(json, r'enabled'),
+        albumInvite: json.containsKey(r'albumInvite') ? Optional.present(mapValueOfType<bool>(json, r'albumInvite')) : const Optional.absent(),
+        albumUpdate: json.containsKey(r'albumUpdate') ? Optional.present(mapValueOfType<bool>(json, r'albumUpdate')) : const Optional.absent(),
+        enabled: json.containsKey(r'enabled') ? Optional.present(mapValueOfType<bool>(json, r'enabled')) : const Optional.absent(),
       );
     }
     return null;
