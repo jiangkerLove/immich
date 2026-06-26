@@ -2,7 +2,7 @@ use serde_json::Value;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, serde::Deserialize, sqlx::FromRow)]
 pub struct AssetEditRow {
     pub id: Uuid,
     pub action: String,

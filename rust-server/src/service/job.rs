@@ -32,13 +32,13 @@ pub struct JobService {
     redis_url: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct EntityJob {
-    id: Uuid,
+#[derive(Serialize, Deserialize, Clone)]
+pub struct EntityJob {
+    pub id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
-    source: Option<String>,
+    pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    notify: Option<bool>,
+    pub notify: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -129,10 +129,10 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_asset_generate_thumbnails(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+    pub async fn queue_asset_edit_thumbnails(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
         self.add_job(
-            QUEUE_THUMBNAIL,
-            "AssetGenerateThumbnails",
+            QUEUE_EDITOR,
+            "AssetEditThumbnailGeneration",
             EntityJob {
                 id: *asset_id,
                 source: Some("upload".to_string()),
@@ -142,10 +142,23 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_asset_edit_thumbnails(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+    pub async fn queue_person_generate_thumbnail(&self, person_id: &Uuid) -> Result<(), ErrorResp> {
         self.add_job(
-            QUEUE_EDITOR,
-            "AssetEditThumbnailGeneration",
+            QUEUE_THUMBNAIL,
+            "PersonGenerateThumbnail",
+            EntityJob {
+                id: *person_id,
+                source: None,
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_asset_generate_thumbnails(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_THUMBNAIL,
+            "AssetGenerateThumbnails",
             EntityJob {
                 id: *asset_id,
                 source: Some("upload".to_string()),
@@ -172,13 +185,100 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_asset_encode_video(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
-        self.add_job(
-            QUEUE_VIDEO,
-            "AssetEncodeVideo",
+    pub async fn queue_storage_template_migration_single(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), ErrorResp> {
+        self.add_job_with_options(
+            QUEUE_STORAGE_TEMPLATE,
+            "StorageTemplateMigrationSingle",
             EntityJob {
                 id: *asset_id,
-                source: Some("upload".to_string()),
+                source: source.map(str::to_string),
+                notify: None,
+            },
+            Some(bullmq_rs::JobOptions {
+                job_id: Some(asset_id.to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+    }
+
+    pub async fn queue_asset_encode_video(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+        self.queue_entity_job(QUEUE_VIDEO, "AssetEncodeVideo", asset_id, "upload")
+            .await
+    }
+
+    pub async fn queue_smart_search(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_SMART_SEARCH,
+            "SmartSearch",
+            EntityJob {
+                id: *asset_id,
+                source: source.map(str::to_string),
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_asset_detect_duplicates(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_DUPLICATE,
+            "AssetDetectDuplicates",
+            EntityJob {
+                id: *asset_id,
+                source: source.map(str::to_string),
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_post_thumbnail_ml_jobs(
+        &self,
+        job: &EntityJob,
+        is_video: bool,
+    ) -> Result<(), ErrorResp> {
+        let data = EntityJob {
+            id: job.id,
+            source: job.source.clone().or(Some("upload".into())),
+            notify: job.notify,
+        };
+        self.add_job(QUEUE_SMART_SEARCH, "SmartSearch", data.clone())
+            .await?;
+        self.add_job(QUEUE_FACE, "AssetDetectFaces", data.clone())
+            .await?;
+        self.add_job(QUEUE_OCR, "Ocr", data.clone()).await?;
+        if is_video {
+            self.add_job(QUEUE_VIDEO, "AssetEncodeVideo", data).await?;
+        }
+        Ok(())
+    }
+
+    async fn queue_entity_job(
+        &self,
+        queue: &str,
+        name: &str,
+        asset_id: &Uuid,
+        source: &str,
+    ) -> Result<(), ErrorResp> {
+        self.add_job(
+            queue,
+            name,
+            EntityJob {
+                id: *asset_id,
+                source: Some(source.to_string()),
                 notify: None,
             },
         )
@@ -208,6 +308,19 @@ impl JobService {
         }
 
         Ok(())
+    }
+
+    pub async fn queue_sidecar_check(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_SIDECAR,
+            "SidecarCheck",
+            EntityJob {
+                id: *asset_id,
+                source: None,
+                notify: None,
+            },
+        )
+        .await
     }
 
     pub async fn queue_file_delete(&self, files: &[impl AsRef<str>]) -> Result<(), ErrorResp> {

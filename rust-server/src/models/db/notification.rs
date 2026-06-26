@@ -294,3 +294,23 @@ pub async fn filter_owned_ids(
     .fetch_all(pool)
     .await
 }
+
+pub async fn cleanup_old(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    if !notification_table_exists(pool).await {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        DELETE FROM notification
+        WHERE ("deletedAt" IS NOT NULL AND "deletedAt" < NOW() - INTERVAL '3 days')
+           OR ("readAt" IS NOT NULL
+               AND "readAt" > NOW() - INTERVAL '2 days'
+               AND "createdAt" < NOW() - INTERVAL '15 days')
+           OR ("readAt" IS NULL AND "createdAt" < NOW() - INTERVAL '30 days')
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}

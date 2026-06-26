@@ -19,3 +19,4 @@ pub mod sync;
 pub mod database_backups;
 pub mod workflow;
 pub mod license;
+pub mod workers;

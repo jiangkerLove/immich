@@ -47,4 +47,50 @@ impl StoragePaths {
     pub fn backups_folder(&self) -> PathBuf {
         self.media_location.join("backups")
     }
+
+    pub fn image_derivative_path(
+        &self,
+        owner_id: &Uuid,
+        asset_id: &Uuid,
+        file_type: &str,
+        format: &str,
+        is_edited: bool,
+    ) -> PathBuf {
+        let suffix = if is_edited { "_edited" } else { "" };
+        self.media_location
+            .join("thumbs")
+            .join(owner_id.to_string())
+            .join(format!("{asset_id}_{file_type}{suffix}.{format}"))
+    }
+
+    pub fn person_thumbnail_path(&self, owner_id: &Uuid, person_id: &Uuid) -> PathBuf {
+        self.media_location
+            .join("thumbs")
+            .join(owner_id.to_string())
+            .join(format!("{person_id}.jpeg"))
+    }
+
+    pub fn encoded_video_path(&self, owner_id: &Uuid, asset_id: &Uuid) -> PathBuf {
+        self.media_location
+            .join("encoded-video")
+            .join(owner_id.to_string())
+            .join(format!("{asset_id}.mp4"))
+    }
+
+    pub fn library_folder(&self, owner_id: &Uuid, storage_label: Option<&str>) -> PathBuf {
+        let owner_id_str = owner_id.to_string();
+        let folder = storage_label.unwrap_or(&owner_id_str);
+        self.media_location.join("library").join(folder)
+    }
+
+    pub fn encoded_video_base(&self) -> PathBuf {
+        self.media_location.join("encoded-video")
+    }
+
+    pub fn ensure_parent(path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(())
+    }
 }

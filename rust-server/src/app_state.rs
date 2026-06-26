@@ -40,7 +40,7 @@ use crate::service::sync::SyncService;
 use crate::service::server::{ServerBuildConfig, ServerService};
 use crate::service::websocket::{AppSocketIoLayer, WebSocketHub};
 use crate::service::websocket_jobs::WebSocketJobListener;
-use crate::service::notification_jobs::NotificationJobWorker;
+use crate::service::workers::{self, WorkerContext};
 use crate::utils::storage::StoragePaths;
 
 #[derive(Clone)]
@@ -211,12 +211,16 @@ impl AppState {
             .expect("failed to initialize websocket redis adapter");
 
         WebSocketJobListener::spawn(sql_pool.clone(), redis_url.clone(), websocket.clone());
-        NotificationJobWorker::spawn(
-            sql_pool.clone(),
-            redis_url.clone(),
-            websocket.clone(),
-            JobService::new(redis_url.clone()),
-        );
+
+        let jobs = JobService::new(redis_url.clone());
+        workers::spawn_all(WorkerContext {
+            pool: sql_pool.clone(),
+            redis_url: redis_url.clone(),
+            storage: storage.clone(),
+            env: settings.clone(),
+            websocket: websocket.clone(),
+            jobs,
+        });
 
         (
             AppState {

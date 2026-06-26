@@ -16,7 +16,9 @@ jsonwebtoken = "9.3.0"
 sqlx = { version = "0.8.3", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "chrono"] }
 
 chrono = { version = "0.4.39", features = ["serde"] }
-image = "0.25.5"
+chrono-tz = "0.10.4"
+image = { version = "0.25.5", features = ["jpeg", "webp", "png", "gif"] }
+thumbhash = "0.1"
 ffmpeg-cli = "0.1.0"
 ammonia = "4.0.0"
 ua-parser = "0.2.0"
@@ -54,11 +56,13 @@ tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
 zip = "2.2"
 tempfile = "3"
+flate2 = "1.0"
 rsa = { version = "0.9", features = ["sha2"] }
 
 #user_agent_parser
 user-agent-parser = "0.3.6"
 bullmq-rs = "2.2.0"
+handlebars = "6.2.0"
 socketioxide = { version = "0.18.4", features = ["extensions", "state"] }
 socketioxide-redis = "0.4.1"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }

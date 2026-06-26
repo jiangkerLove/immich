@@ -228,6 +228,19 @@ impl SessionPO {
         tx.commit().await?;
         Ok(())
     }
+
+    pub async fn cleanup_expired(pool: &Pool<Postgres>) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM session
+            WHERE "updatedAt" <= NOW() - INTERVAL '90 days'
+               OR ("expiresAt" IS NOT NULL AND "expiresAt" <= NOW())
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 pub async fn is_pending_sync_reset(

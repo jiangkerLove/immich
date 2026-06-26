@@ -256,3 +256,82 @@ pub async fn get_asset_scale_for_face(
         ))
     }))
 }
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct FaceVisibilityRow {
+    pub id: Uuid,
+    pub bounding_box_x1: f32,
+    pub bounding_box_y1: f32,
+    pub bounding_box_x2: f32,
+    pub bounding_box_y2: f32,
+    pub image_width: i32,
+    pub image_height: i32,
+    pub is_visible: bool,
+}
+
+pub async fn list_for_visibility_by_asset(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<Vec<FaceVisibilityRow>, sqlx::Error> {
+    sqlx::query_as::<_, FaceVisibilityRow>(
+        r#"
+        SELECT
+            id,
+            "boundingBoxX1" AS bounding_box_x1,
+            "boundingBoxY1" AS bounding_box_y1,
+            "boundingBoxX2" AS bounding_box_x2,
+            "boundingBoxY2" AS bounding_box_y2,
+            "imageWidth" AS image_width,
+            "imageHeight" AS image_height,
+            "isVisible" AS is_visible
+        FROM asset_face
+        WHERE "assetId" = $1
+          AND "deletedAt" IS NULL
+        ORDER BY "boundingBoxX1" ASC
+        "#,
+    )
+    .bind(asset_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn update_visibilities(
+    pool: &Pool<Postgres>,
+    visible_ids: &[Uuid],
+    hidden_ids: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    if visible_ids.is_empty() && hidden_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+
+    if !visible_ids.is_empty() {
+        sqlx::query(
+            r#"
+            UPDATE asset_face
+            SET "isVisible" = true
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(visible_ids)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if !hidden_ids.is_empty() {
+        sqlx::query(
+            r#"
+            UPDATE asset_face
+            SET "isVisible" = false
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(hidden_ids)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}

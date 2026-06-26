@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "SCREAMING_SNAKE_CASE")]
 pub struct EnvDto {
     pub immich_api_metrics_port: Option<u16>,
@@ -106,7 +106,7 @@ impl Default for EnvDto {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImmichEnvironment {
     Development,
@@ -114,7 +114,7 @@ pub enum ImmichEnvironment {
     Test,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,
@@ -125,7 +125,7 @@ pub enum LogLevel {
     Fatal,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DatabaseSslMode {
     Disable,
@@ -134,7 +134,7 @@ pub enum DatabaseSslMode {
     VerifyFull,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DbVectorExtension {
     #[serde(rename = "pgvector")]
