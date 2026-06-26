@@ -9,7 +9,7 @@ use crate::models::db::search::{self, PlaceRow, SearchFilter, SearchPage};
 use crate::models::db::system_metadata::{get_machine_learning_config, is_smart_search_enabled};
 use crate::models::db::timeline::get_timeline_partner_ids;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_asset, AssetResponse};
+use crate::models::response::asset::{map_assets, AssetResponse};
 use crate::models::response::response::ErrorResp;
 use crate::models::response::search::{
     empty_search_response, map_person, PersonResponse, PlacesResponse, SearchExploreResponse,
@@ -457,16 +457,9 @@ impl SearchService {
             .shared_link
             .as_ref()
             .is_some_and(|sl| !sl.show_exif);
-        let mut responses = Vec::with_capacity(rows.len());
-        for row in rows {
-            let stack = if let Some(stack_id) = row.stack_id {
-                assets::get_stack(&self.pool, &stack_id).await?
-            } else {
-                None
-            };
-            responses.push(map_asset(&row, stack.as_ref(), auth, hide_exif));
-        }
-        Ok(responses)
+        map_assets(&self.pool, &rows, auth, hide_exif)
+            .await
+            .map_err(ErrorResp::from)
     }
 
     async fn load_assets_map(

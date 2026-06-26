@@ -10,6 +10,7 @@ pub struct FileResponse {
     pub path: String,
     pub content_type: String,
     pub file_name: Option<String>,
+    pub cache_control: Option<String>,
 }
 
 pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorResp> {
@@ -24,12 +25,13 @@ pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorRe
     let stream = ReaderStream::new(handle);
     let body = Body::from_stream(stream);
 
+    let cache_control = file
+        .cache_control
+        .unwrap_or_else(|| "private, max-age=86400, no-transform, stale-while-revalidate=2592000".to_string());
+
     let mut builder = Response::builder()
         .header(header::CONTENT_TYPE, content_type)
-        .header(
-            header::CACHE_CONTROL,
-            "private, max-age=86400, no-transform, stale-while-revalidate=2592000",
-        );
+        .header(header::CACHE_CONTROL, cache_control);
 
     if let Some(name) = file.file_name {
         builder = builder.header(

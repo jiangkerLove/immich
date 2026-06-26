@@ -1,12 +1,16 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sqlx::Pool;
+use sqlx::Postgres;
 use uuid::Uuid;
 
-use crate::models::db::assets::{AssetDetailRow, AssetStackRow};
+use crate::models::db::assets::{self, AssetDetailRow, AssetStackRow};
+use crate::models::db::person;
 use crate::models::dto::auth::AuthDto;
+use crate::models::response::search::{map_person, PersonResponse};
 use crate::service::tag::TagResponse;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetUserResponse {
     pub id: Uuid,
@@ -17,7 +21,7 @@ pub struct AssetUserResponse {
     pub profile_changed_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetStackResponse {
     pub id: Uuid,
@@ -32,7 +36,7 @@ pub struct ExifResponse {
     pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetResponse {
     pub id: Uuid,
@@ -66,7 +70,7 @@ pub struct AssetResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<TagResponse>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub people: Option<Vec<serde_json::Value>>,
+    pub people: Option<Vec<PersonResponse>>,
     pub checksum: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<AssetStackResponse>,
@@ -88,6 +92,7 @@ pub fn map_asset(
     stack: Option<&AssetStackRow>,
     auth: &AuthDto,
     strip_metadata: bool,
+    people: Option<&[PersonResponse]>,
 ) -> AssetResponse {
     if strip_metadata {
         return AssetResponse {
@@ -130,7 +135,6 @@ pub fn map_asset(
 
     let is_favorite = auth.user.id == row.owner_id && row.is_favorite;
     let include_owner = auth.shared_link.is_none();
-    let include_people = auth.user.id == row.owner_id && auth.shared_link.is_none();
 
     AssetResponse {
         id: row.id,
@@ -171,7 +175,7 @@ pub fn map_asset(
         visibility: row.visibility.clone(),
         exif_info: row.exif_json.clone(),
         tags: row.tags_json.as_ref().map(parse_tags),
-        people: include_people.then_some(vec![]),
+        people: Some(people.unwrap_or(&[]).to_vec()),
         checksum: base64_encode(&row.checksum),
         stack: stack.map(map_stack),
         duplicate_id: row.duplicate_id,
@@ -234,4 +238,75 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 fn encode_optional_base64(bytes: Option<&[u8]>) -> Option<String> {
     bytes.map(base64_encode)
+}
+
+pub async fn map_assets(
+    pool: &Pool<Postgres>,
+    rows: &[AssetDetailRow],
+    auth: &AuthDto,
+    strip_metadata: bool,
+) -> Result<Vec<AssetResponse>, sqlx::Error> {
+    if rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let people_map = if strip_metadata {
+        std::collections::HashMap::new()
+    } else {
+        person::get_people_by_asset_ids(pool, &ids)
+            .await?
+            .into_iter()
+            .map(|(asset_id, person_rows)| {
+                (
+                    asset_id,
+                    person_rows.iter().map(map_person).collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    };
+
+    let mut responses = Vec::with_capacity(rows.len());
+    for row in rows {
+        let stack = if let Some(stack_id) = row.stack_id {
+            assets::get_stack(pool, &stack_id).await?
+        } else {
+            None
+        };
+        let people = people_map.get(&row.id).map(|items| items.as_slice());
+        responses.push(map_asset(
+            row,
+            stack.as_ref(),
+            auth,
+            strip_metadata,
+            people,
+        ));
+    }
+    Ok(responses)
+}
+
+pub async fn get_asset_response(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<Option<AssetResponse>, sqlx::Error> {
+    let Some(row) = assets::get_detail_by_id(pool, asset_id).await? else {
+        return Ok(None);
+    };
+    let auth = AuthDto {
+        user: crate::models::db::users::AuthUserDb {
+            id: row.owner_id,
+            is_admin: false,
+            name: row.owner_name.clone(),
+            email: row.owner_email.clone(),
+            quota_usage_in_bytes: 0,
+            quota_size_in_bytes: None,
+        },
+        api_key: None,
+        session: None,
+        shared_link: None,
+    };
+    Ok(map_assets(pool, std::slice::from_ref(&row), &auth, false)
+        .await?
+        .into_iter()
+        .next())
 }

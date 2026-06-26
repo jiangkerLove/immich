@@ -86,6 +86,20 @@ pub async fn get_for_original(
     asset_id: &Uuid,
     edited: bool,
 ) -> Result<Option<AssetOriginalRow>, sqlx::Error> {
+    get_for_originals(pool, &[*asset_id], edited)
+        .await
+        .map(|rows| rows.into_iter().next())
+}
+
+pub async fn get_for_originals(
+    pool: &Pool<Postgres>,
+    asset_ids: &[Uuid],
+    edited: bool,
+) -> Result<Vec<AssetOriginalRow>, sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
     sqlx::query_as::<_, AssetOriginalRow>(
         r#"
             SELECT
@@ -97,12 +111,12 @@ pub async fn get_for_original(
             LEFT JOIN asset_file af ON asset.id = af."assetId"
                 AND af."isEdited" = $1
                 AND af.type = 'fullsize'
-            WHERE asset.id = $2 AND asset."deletedAt" IS NULL
+            WHERE asset.id = ANY($2) AND asset."deletedAt" IS NULL
         "#,
     )
     .bind(edited)
-    .bind(asset_id)
-    .fetch_optional(pool)
+    .bind(asset_ids)
+    .fetch_all(pool)
     .await
 }
 
@@ -654,6 +668,48 @@ pub async fn get_statistics(
     query.build_query_as::<AssetStatsRow>().fetch_one(pool).await
 }
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct CalendarHeatmapRow {
+    pub date: DateTime<Utc>,
+    pub count: i64,
+}
+
+pub async fn get_calendar_heatmap(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    taken_at: bool,
+) -> Result<Vec<CalendarHeatmapRow>, sqlx::Error> {
+    let date_column = if taken_at {
+        r#""localDateTime""#
+    } else {
+        r#""createdAt""#
+    };
+
+    let sql = format!(
+        r#"
+        SELECT
+            date_trunc('day', asset.{date_column} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS date,
+            COUNT(*)::bigint AS count
+        FROM asset
+        WHERE asset."ownerId" = $1
+          AND asset.{date_column} >= $2
+          AND asset.{date_column} < $3
+          AND asset."deletedAt" IS NULL
+        GROUP BY 1
+        ORDER BY 1 ASC
+        "#
+    );
+
+    sqlx::query_as::<_, CalendarHeatmapRow>(&sql)
+        .bind(owner_id)
+        .bind(from)
+        .bind(to)
+        .fetch_all(pool)
+        .await
+}
+
 #[derive(Debug, Default)]
 pub struct AssetUpdateFields {
     pub is_favorite: Option<bool>,
@@ -933,6 +989,134 @@ pub async fn trash_assets(
     )
     .bind(status)
     .bind(asset_ids)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, FromRow)]
+pub struct AssetCopyRow {
+    pub id: Uuid,
+    pub stack_id: Option<Uuid>,
+    pub original_path: String,
+    pub is_favorite: bool,
+}
+
+pub async fn get_for_copy(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<AssetCopyRow>, sqlx::Error> {
+    sqlx::query_as::<_, AssetCopyRow>(
+        r#"
+            SELECT
+                id,
+                "stackId" as stack_id,
+                "originalPath" as original_path,
+                "isFavorite" as is_favorite
+            FROM asset
+            WHERE id = $1 AND "deletedAt" IS NULL
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_asset_file_path(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+    file_type: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+            SELECT path
+            FROM asset_file
+            WHERE "assetId" = $1 AND type = $2 AND "isEdited" = false
+            LIMIT 1
+        "#,
+    )
+    .bind(asset_id)
+    .bind(file_type)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn upsert_sidecar_file(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+    path: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            INSERT INTO asset_file ("assetId", type, path)
+            VALUES ($1, 'sidecar', $2)
+            ON CONFLICT ("assetId", type, "isEdited")
+            DO UPDATE SET path = EXCLUDED.path, "updatedAt" = NOW()
+        "#,
+    )
+    .bind(asset_id)
+    .bind(path)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn copy_album_associations(
+    pool: &Pool<Postgres>,
+    source_asset_id: &Uuid,
+    target_asset_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            INSERT INTO album_asset ("albumId", "assetId")
+            SELECT aa."albumId", $2
+            FROM album_asset aa
+            WHERE aa."assetId" = $1
+            ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(source_asset_id)
+    .bind(target_asset_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn copy_shared_link_associations(
+    pool: &Pool<Postgres>,
+    source_asset_id: &Uuid,
+    target_asset_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            INSERT INTO shared_link_asset ("assetId", "sharedLinkId")
+            SELECT $2, sla."sharedLinkId"
+            FROM shared_link_asset sla
+            WHERE sla."assetId" = $1
+            ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(source_asset_id)
+    .bind(target_asset_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_stack_id(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+    stack_id: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            UPDATE asset
+            SET "stackId" = $2, "updatedAt" = NOW()
+            WHERE id = $1
+        "#,
+    )
+    .bind(asset_id)
+    .bind(stack_id)
     .execute(pool)
     .await?;
     Ok(())

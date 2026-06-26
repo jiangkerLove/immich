@@ -7,9 +7,12 @@ use crate::models::db::api_key::ApiKeyRow;
 use crate::models::db::sessions::{AuthSession, NewSession, SessionPO};
 use crate::models::db::shared_links;
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{map_user_admin, NewUserDb, UserDb};
+use crate::models::db::users::{map_user_admin_with_license, NewUserDb, UserDb};
 use crate::models::dto::auth::AuthDto;
-use crate::models::request::auth::{LoginCredentialReq, LoginReq, SignUpReq};
+use crate::models::request::auth::{
+    ChangePasswordReq, LoginCredentialReq, LoginReq, PinCodeChangeReq, PinCodeResetReq,
+    PinCodeSetupReq, SessionUnlockReq, SignUpReq,
+};
 use crate::models::response::auth::{
     AuthStatusResp, LoginResp, LogoutResp, ValidateAccessTokenResp,
 };
@@ -18,15 +21,29 @@ use crate::models::response::user::UserAdminResponse;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
 use crate::utils::checksum::decode_share_key;
 use crate::utils::headers::AuthTokens;
+use crate::utils::permission::require_permission;
+use crate::models::db::auth_permission::Permission;
+use crate::service::websocket::WebSocketHub;
 
 #[derive(Clone)]
 pub struct AuthService {
     db_pool: PgPool,
+    websocket: Option<WebSocketHub>,
 }
 
 impl AuthService {
     pub fn new(db_pool: PgPool) -> Self {
-        Self { db_pool }
+        Self {
+            db_pool,
+            websocket: None,
+        }
+    }
+
+    pub fn with_websocket(db_pool: PgPool, websocket: WebSocketHub) -> Self {
+        Self {
+            db_pool,
+            websocket: Some(websocket),
+        }
     }
 
     pub async fn login(
@@ -92,13 +109,16 @@ impl AuthService {
             ErrorResp::from(err)
         })?;
 
-        Ok(map_user_admin(user))
+        Ok(map_user_admin_with_license(&self.db_pool, user).await?)
     }
 
     pub async fn logout(&self, auth: &AuthDto) -> Result<LogoutResp, ErrorResp> {
         if let Some(session) = &auth.session {
             if let Ok(session_id) = uuid::Uuid::parse_str(&session.id) {
                 SessionPO::delete(&self.db_pool, &session_id).await?;
+                if let Some(ws) = &self.websocket {
+                    ws.emit_session_delete(session_id);
+                }
             }
         }
 
@@ -144,6 +164,172 @@ impl AuthService {
                 .and_then(|session| session.pin_expires_at)
                 .map(|value| value.to_rfc3339()),
         })
+    }
+
+    pub async fn change_password(
+        &self,
+        auth: &AuthDto,
+        dto: &ChangePasswordReq,
+    ) -> Result<UserAdminResponse, ErrorResp> {
+        require_permission(auth, Permission::AuthChangePassword)?;
+
+        if dto.new_password.len() < 8 {
+            return Err(ErrorResp::BadRequest(
+                "New password must be at least 8 characters".to_string(),
+            ));
+        }
+
+        let user = UserDb::get_for_change_password(&self.db_pool, &auth.user.id)
+            .await?
+            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+
+        if !validate_secret(&dto.password, Some(&user.password)) {
+            return Err(ErrorResp::BadRequest("Wrong password".to_string()));
+        }
+
+        let hashed_password = hash_bcrypt(&dto.new_password)
+            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+
+        let updated = UserDb::update_password(&self.db_pool, &auth.user.id, &hashed_password).await?;
+
+        let current_session_id = auth.session.as_ref().and_then(|session| {
+            uuid::Uuid::parse_str(&session.id).ok()
+        });
+        SessionPO::invalidate_all_except(
+            &self.db_pool,
+            &auth.user.id,
+            current_session_id.as_ref(),
+        )
+        .await?;
+
+        Ok(map_user_admin_with_license(&self.db_pool, updated).await?)
+    }
+
+    pub async fn setup_pin_code(
+        &self,
+        auth: &AuthDto,
+        dto: &PinCodeSetupReq,
+    ) -> Result<(), ErrorResp> {
+        require_permission(auth, Permission::PinCodeCreate)?;
+
+        if !is_valid_pin_code(&dto.pin_code) {
+            return Err(ErrorResp::BadRequest("Invalid PIN code".to_string()));
+        }
+
+        let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
+            .await?
+            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+
+        if user.pin_code.is_some() {
+            return Err(ErrorResp::BadRequest("User already has a PIN code".to_string()));
+        }
+
+        let hashed = hash_bcrypt(&dto.pin_code)
+            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        UserDb::update_pin_code(&self.db_pool, &auth.user.id, Some(&hashed)).await?;
+        Ok(())
+    }
+
+    pub async fn change_pin_code(
+        &self,
+        auth: &AuthDto,
+        dto: &PinCodeChangeReq,
+    ) -> Result<(), ErrorResp> {
+        require_permission(auth, Permission::PinCodeUpdate)?;
+
+        if !is_valid_pin_code(&dto.new_pin_code) {
+            return Err(ErrorResp::BadRequest("Invalid PIN code".to_string()));
+        }
+
+        let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
+            .await?
+            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+
+        validate_pin_code_auth(&user, dto.pin_code.as_deref(), dto.password.as_deref())?;
+
+        let hashed = hash_bcrypt(&dto.new_pin_code)
+            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        UserDb::update_pin_code(&self.db_pool, &auth.user.id, Some(&hashed)).await?;
+        Ok(())
+    }
+
+    pub async fn reset_pin_code(
+        &self,
+        auth: &AuthDto,
+        dto: &PinCodeResetReq,
+    ) -> Result<(), ErrorResp> {
+        require_permission(auth, Permission::PinCodeDelete)?;
+
+        let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
+            .await?
+            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+
+        validate_pin_code_auth(&user, dto.pin_code.as_deref(), dto.password.as_deref())?;
+
+        UserDb::update_pin_code(&self.db_pool, &auth.user.id, None).await?;
+        SessionPO::lock_all_for_user(&self.db_pool, &auth.user.id).await?;
+        Ok(())
+    }
+
+    pub async fn unlock_session(
+        &self,
+        auth: &AuthDto,
+        dto: &SessionUnlockReq,
+    ) -> Result<(), ErrorResp> {
+        let session = auth
+            .session
+            .as_ref()
+            .ok_or_else(|| {
+                ErrorResp::BadRequest(
+                    "This endpoint can only be used with a session token".to_string(),
+                )
+            })?;
+
+        let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
+            .await?
+            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+
+        let pin_code = dto
+            .pin_code
+            .as_deref()
+            .ok_or_else(|| ErrorResp::BadRequest("Either password or pinCode is required".to_string()))?;
+
+        if user.pin_code.is_none() {
+            return Err(ErrorResp::BadRequest("User does not have a PIN code".to_string()));
+        }
+
+        if !validate_secret(pin_code, user.pin_code.as_deref()) {
+            return Err(ErrorResp::BadRequest("Wrong PIN code".to_string()));
+        }
+
+        let session_id = uuid::Uuid::parse_str(&session.id)
+            .map_err(|_| ErrorResp::BadRequest("Invalid session".to_string()))?;
+
+        SessionPO::update_pin_expires_at(
+            &self.db_pool,
+            &session_id,
+            Some(Utc::now() + chrono::Duration::minutes(15)),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn lock_session(&self, auth: &AuthDto) -> Result<(), ErrorResp> {
+        let session = auth
+            .session
+            .as_ref()
+            .ok_or_else(|| {
+                ErrorResp::BadRequest(
+                    "This endpoint can only be used with a session token".to_string(),
+                )
+            })?;
+
+        let session_id = uuid::Uuid::parse_str(&session.id)
+            .map_err(|_| ErrorResp::BadRequest("Invalid session".to_string()))?;
+
+        SessionPO::update_pin_expires_at(&self.db_pool, &session_id, None).await?;
+        Ok(())
     }
 
     pub async fn authenticate(
@@ -313,3 +499,40 @@ impl AuthService {
 }
 
 use crate::models::db::users::AuthUserDb;
+
+fn is_valid_pin_code(pin_code: &str) -> bool {
+    pin_code.len() == 6 && pin_code.chars().all(|c| c.is_ascii_digit())
+}
+
+fn validate_secret(input: &str, existing_hash: Option<&str>) -> bool {
+    match existing_hash {
+        Some(hash) if !hash.is_empty() => input.compare_bcrypt(hash).is_ok_and(|ok| ok),
+        _ => false,
+    }
+}
+
+fn validate_pin_code_auth(
+    user: &crate::models::db::users::UserPinAuthDb,
+    pin_code: Option<&str>,
+    password: Option<&str>,
+) -> Result<(), ErrorResp> {
+    if user.pin_code.is_none() {
+        return Err(ErrorResp::BadRequest("User does not have a PIN code".to_string()));
+    }
+
+    if let Some(password) = password {
+        if !validate_secret(password, Some(&user.password)) {
+            return Err(ErrorResp::BadRequest("Wrong password".to_string()));
+        }
+        Ok(())
+    } else if let Some(pin_code) = pin_code {
+        if !validate_secret(pin_code, user.pin_code.as_deref()) {
+            return Err(ErrorResp::BadRequest("Wrong PIN code".to_string()));
+        }
+        Ok(())
+    } else {
+        Err(ErrorResp::BadRequest(
+            "Either password or pinCode is required".to_string(),
+        ))
+    }
+}

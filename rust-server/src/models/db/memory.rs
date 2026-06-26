@@ -140,35 +140,7 @@ pub async fn search_memories(
     ));
     query.push_bind(owner_id);
 
-    if let Some(for_date) = filter.for_date {
-        query.push(
-            r#"
-            AND ("showAt" IS NULL OR "showAt" <= "#,
-        );
-        query.push_bind(for_date);
-        query.push(
-            r#")
-            AND ("hideAt" IS NULL OR "hideAt" >= "#,
-        );
-        query.push_bind(for_date);
-        query.push(") ");
-    }
-
-    if let Some(is_saved) = filter.is_saved {
-        query.push(r#" AND "isSaved" = "#);
-        query.push_bind(is_saved);
-    }
-
-    if let Some(memory_type) = &filter.memory_type {
-        query.push(" AND type = ");
-        query.push_bind(memory_type.clone());
-    }
-
-    if filter.is_trashed == Some(true) {
-        query.push(r#" AND "deletedAt" IS NOT NULL "#);
-    } else {
-        query.push(r#" AND "deletedAt" IS NULL "#);
-    }
+    append_search_filters(&mut query, filter);
 
     if filter.order.as_deref() == Some("random") {
         query.push(" ORDER BY RANDOM() ");
@@ -226,4 +198,343 @@ pub async fn get_memory_assets(
         .bind(memory_ids)
         .fetch_all(pool)
         .await
+}
+
+#[derive(Debug)]
+pub struct MemoryCreateData {
+    pub owner_id: Uuid,
+    pub memory_type: String,
+    pub data: Value,
+    pub is_saved: bool,
+    pub memory_at: DateTime<Utc>,
+    pub seen_at: Option<DateTime<Utc>>,
+    pub show_at: Option<DateTime<Utc>>,
+    pub hide_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Default)]
+pub struct MemoryUpdateData {
+    pub is_saved: Option<bool>,
+    pub memory_at: Option<DateTime<Utc>>,
+    pub seen_at: Option<DateTime<Utc>>,
+}
+
+fn append_search_filters<'a>(
+    query: &mut QueryBuilder<'a, Postgres>,
+    filter: &MemorySearchFilter,
+) {
+    if let Some(for_date) = filter.for_date {
+        query.push(
+            r#"
+            AND ("showAt" IS NULL OR "showAt" <= "#,
+        );
+        query.push_bind(for_date);
+        query.push(
+            r#")
+            AND ("hideAt" IS NULL OR "hideAt" >= "#,
+        );
+        query.push_bind(for_date);
+        query.push(") ");
+    }
+
+    if let Some(is_saved) = filter.is_saved {
+        query.push(r#" AND "isSaved" = "#);
+        query.push_bind(is_saved);
+    }
+
+    if let Some(memory_type) = &filter.memory_type {
+        query.push(" AND type = ");
+        query.push_bind(memory_type.clone());
+    }
+
+    if filter.is_trashed == Some(true) {
+        query.push(r#" AND "deletedAt" IS NOT NULL "#);
+    } else {
+        query.push(r#" AND "deletedAt" IS NULL "#);
+    }
+}
+
+pub async fn owner_has_memory(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    memory_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Ok(false);
+    }
+
+    let sql = format!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM {memory_table}
+            WHERE id = $1 AND "ownerId" = $2 AND "deletedAt" IS NULL
+        )
+        "#,
+        memory_table = tables.memory_table,
+    );
+
+    sqlx::query_scalar(&sql)
+        .bind(memory_id)
+        .bind(owner_id)
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn get_by_id(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<MemoryRow>, sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Ok(None);
+    }
+
+    let sql = format!(
+        r#"
+        SELECT
+            id,
+            "createdAt" AS created_at,
+            "updatedAt" AS updated_at,
+            "deletedAt" AS deleted_at,
+            "ownerId" AS owner_id,
+            type AS memory_type,
+            data,
+            "isSaved" AS is_saved,
+            "memoryAt" AS memory_at,
+            "seenAt" AS seen_at,
+            "showAt" AS show_at,
+            "hideAt" AS hide_at
+        FROM {memory_table}
+        WHERE id = $1 AND "deletedAt" IS NULL
+        "#,
+        memory_table = tables.memory_table,
+    );
+
+    sqlx::query_as::<_, MemoryRow>(&sql)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn count_memories(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    filter: &MemorySearchFilter,
+) -> Result<i64, sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Ok(0);
+    }
+
+    let mut query = QueryBuilder::new(format!(
+        r#"SELECT COUNT(*)::bigint FROM {} WHERE "ownerId" = "#,
+        tables.memory_table
+    ));
+    query.push_bind(owner_id);
+    append_search_filters(&mut query, filter);
+
+    query.build_query_scalar().fetch_one(pool).await
+}
+
+pub async fn create(
+    pool: &Pool<Postgres>,
+    data: &MemoryCreateData,
+    asset_ids: &[Uuid],
+) -> Result<Uuid, sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let memory_id: Uuid = sqlx::query_scalar(&format!(
+        r#"
+        INSERT INTO {memory_table}
+            ("ownerId", type, data, "isSaved", "memoryAt", "seenAt", "showAt", "hideAt")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+        "#,
+        memory_table = tables.memory_table,
+    ))
+    .bind(data.owner_id)
+    .bind(&data.memory_type)
+    .bind(&data.data)
+    .bind(data.is_saved)
+    .bind(data.memory_at)
+    .bind(data.seen_at)
+    .bind(data.show_at)
+    .bind(data.hide_at)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !asset_ids.is_empty() {
+        let mut builder = QueryBuilder::new(format!(
+            r#"INSERT INTO {} ("memoriesId", "assetId") "#,
+            tables.asset_link_table
+        ));
+        builder.push_values(asset_ids, |mut row, asset_id| {
+            row.push_bind(memory_id).push_bind(asset_id);
+        });
+        builder.build().execute(&mut *tx).await?;
+    }
+
+    tx.commit().await?;
+    Ok(memory_id)
+}
+
+pub async fn update(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+    data: &MemoryUpdateData,
+) -> Result<(), sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    let mut query = QueryBuilder::new(format!(
+        r#"UPDATE {} SET "#,
+        tables.memory_table
+    ));
+    let mut separated = query.separated(", ");
+
+    if let Some(is_saved) = data.is_saved {
+        separated.push(r#""isSaved" = "#);
+        separated.push_bind_unseparated(is_saved);
+    }
+    if let Some(memory_at) = data.memory_at {
+        separated.push(r#""memoryAt" = "#);
+        separated.push_bind_unseparated(memory_at);
+    }
+    if let Some(seen_at) = data.seen_at {
+        separated.push(r#""seenAt" = "#);
+        separated.push_bind_unseparated(seen_at);
+    }
+
+    query.push(" WHERE id = ");
+    query.push_bind(id);
+
+    query.build().execute(pool).await?;
+    Ok(())
+}
+
+pub async fn touch_updated_at(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Ok(());
+    }
+
+    let sql = format!(
+        r#"UPDATE {} SET "updatedAt" = now() WHERE id = $1"#,
+        tables.memory_table
+    );
+    sqlx::query(&sql).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    let sql = format!(r#"DELETE FROM {} WHERE id = $1"#, tables.memory_table);
+    sqlx::query(&sql).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn filter_asset_ids_in_memory(
+    pool: &Pool<Postgres>,
+    memory_id: &Uuid,
+    asset_ids: &[Uuid],
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Ok(vec![]);
+    }
+
+    let sql = format!(
+        r#"
+        SELECT {asset_id_column} AS asset_id
+        FROM {asset_link_table}
+        WHERE "memoriesId" = $1 AND {asset_id_column} = ANY($2)
+        "#,
+        asset_id_column = tables.asset_id_column,
+        asset_link_table = tables.asset_link_table,
+    );
+
+    #[derive(FromRow)]
+    struct Row {
+        asset_id: Uuid,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(&sql)
+        .bind(memory_id)
+        .bind(asset_ids)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().map(|row| row.asset_id).collect())
+}
+
+pub async fn add_asset_ids(
+    pool: &Pool<Postgres>,
+    memory_id: &Uuid,
+    asset_ids: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    let mut builder = QueryBuilder::new(format!(
+        r#"INSERT INTO {} ("memoriesId", "assetId") "#,
+        tables.asset_link_table
+    ));
+    builder.push_values(asset_ids, |mut row, asset_id| {
+        row.push_bind(memory_id).push_bind(asset_id);
+    });
+    builder.build().execute(pool).await?;
+    Ok(())
+}
+
+pub async fn remove_asset_ids(
+    pool: &Pool<Postgres>,
+    memory_id: &Uuid,
+    asset_ids: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    let sql = format!(
+        r#"
+        DELETE FROM {asset_link_table}
+        WHERE "memoriesId" = $1 AND {asset_id_column} = ANY($2)
+        "#,
+        asset_link_table = tables.asset_link_table,
+        asset_id_column = tables.asset_id_column,
+    );
+
+    sqlx::query(&sql)
+        .bind(memory_id)
+        .bind(asset_ids)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use uuid::Uuid;
 
+use crate::models::db::album::{self, AlbumAccessLevel};
 use crate::models::db::assets;
 use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
@@ -92,6 +94,74 @@ pub async fn require_assets_access(
     }
 
     Ok(())
+}
+
+pub async fn require_album_access(
+    pool: &sqlx::PgPool,
+    auth: &AuthDto,
+    album_id: &Uuid,
+    permission: Permission,
+) -> Result<(), ErrorResp> {
+    require_permission(auth, permission.clone())?;
+
+    let level = match permission {
+        Permission::AlbumDelete => AlbumAccessLevel::Owner,
+        Permission::AlbumUpdate
+        | Permission::AlbumAddAsset
+        | Permission::AlbumRemoveAsset
+        | Permission::AlbumShare => AlbumAccessLevel::Editor,
+        Permission::AlbumRead | Permission::AlbumDownload | Permission::AlbumStatistics => {
+            AlbumAccessLevel::Member
+        }
+        _ => {
+            return Err(ErrorResp::BadRequest(format!(
+                "Unsupported album permission: {}",
+                permission.as_str()
+            )));
+        }
+    };
+
+    let allowed = album::has_album_access(pool, &auth.user.id, album_id, level).await?;
+    if !allowed {
+        return Err(ErrorResp::BadRequest(format!(
+            "Not found or no {} access",
+            permission.as_str()
+        )));
+    }
+
+    Ok(())
+}
+
+pub async fn check_album_ids_access(
+    pool: &sqlx::PgPool,
+    auth: &AuthDto,
+    album_ids: &[Uuid],
+    permission: Permission,
+) -> Result<HashSet<Uuid>, ErrorResp> {
+    require_permission(auth, permission.clone())?;
+
+    let level = match permission {
+        Permission::AlbumDelete => AlbumAccessLevel::Owner,
+        Permission::AlbumUpdate
+        | Permission::AlbumAddAsset
+        | Permission::AlbumRemoveAsset
+        | Permission::AlbumShare => AlbumAccessLevel::Editor,
+        Permission::AlbumRead | Permission::AlbumDownload => AlbumAccessLevel::Member,
+        _ => {
+            return Err(ErrorResp::BadRequest(format!(
+                "Unsupported album permission: {}",
+                permission.as_str()
+            )));
+        }
+    };
+
+    let mut allowed = HashSet::new();
+    for album_id in album_ids {
+        if album::has_album_access(pool, &auth.user.id, album_id, level).await? {
+            allowed.insert(*album_id);
+        }
+    }
+    Ok(allowed)
 }
 
 pub fn require_upload_access(auth: &AuthDto) -> Result<(), ErrorResp> {

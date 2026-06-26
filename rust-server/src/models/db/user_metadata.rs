@@ -226,7 +226,33 @@ pub struct OnboardingPO {
     pub is_onboarded: bool,
 }
 
+#[derive(Serialize, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserLicensePO {
+    pub license_key: String,
+    pub activation_key: String,
+    pub activated_at: String,
+}
+
 impl UserMetadataPO {
+    pub async fn get_license(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+    ) -> Result<Option<UserLicensePO>, sqlx::Error> {
+        let row: Option<(sqlx::types::Json<UserLicensePO>,)> = sqlx::query_as(
+            r#"
+                SELECT value
+                FROM user_metadata
+                WHERE "userId" = $1 AND key = 'license'
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|(value,)| value.0))
+    }
+
     pub async fn get_meta_data_by_uid(
         pool: &Pool<Postgres>,
         id: &Uuid,
@@ -280,6 +306,89 @@ impl UserMetadataPO {
             INSERT INTO user_metadata ("userId", key, value)
             VALUES ($1, 'onboarding', $2)
             ON CONFLICT ("userId", key) DO UPDATE SET value = EXCLUDED.value
+            "#,
+        )
+        .bind(user_id)
+        .bind(value)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_onboarding(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM user_metadata
+            WHERE "userId" = $1 AND key = 'onboarding'
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_license(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+        license: &UserLicensePO,
+    ) -> Result<(), sqlx::Error> {
+        let value = serde_json::to_value(license).unwrap_or_default();
+        sqlx::query(
+            r#"
+            INSERT INTO user_metadata ("userId", key, value)
+            VALUES ($1, 'license', $2)
+            ON CONFLICT ("userId", key) DO UPDATE SET value = EXCLUDED.value
+            "#,
+        )
+        .bind(user_id)
+        .bind(value)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_license(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM user_metadata
+            WHERE "userId" = $1 AND key = 'license'
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_preferences_json(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            r#"
+                SELECT value
+                FROM user_metadata
+                WHERE "userId" = $1 AND key = 'preferences'
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|(value,)| value).unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    pub async fn upsert_preferences_json(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+        value: &serde_json::Value,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+                INSERT INTO user_metadata ("userId", key, value)
+                VALUES ($1, 'preferences', $2)
+                ON CONFLICT ("userId", key) DO UPDATE SET value = EXCLUDED.value
             "#,
         )
         .bind(user_id)

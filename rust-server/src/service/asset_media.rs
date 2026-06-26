@@ -12,6 +12,7 @@ use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::{require_asset_access, require_upload_access};
+use crate::service::job::JobService;
 use crate::utils::checksum::{decode_checksum, sha1_bytes};
 use crate::utils::file_response::{file_extension, file_response, file_stem, guess_mime, FileResponse};
 use crate::utils::storage::StoragePaths;
@@ -20,6 +21,7 @@ use crate::utils::storage::StoragePaths;
 pub struct AssetMediaService {
     pool: PgPool,
     storage: StoragePaths,
+    jobs: JobService,
 }
 
 #[derive(Serialize)]
@@ -78,8 +80,8 @@ pub struct AssetMediaOptionsQuery {
 }
 
 impl AssetMediaService {
-    pub fn new(pool: PgPool, storage: StoragePaths) -> Self {
-        Self { pool, storage }
+    pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
+        Self { pool, storage, jobs }
     }
 
     pub async fn upload_asset(
@@ -145,6 +147,10 @@ impl AssetMediaService {
             Ok(id) => id,
             Err(err) => {
                 let _ = tokio::fs::remove_file(&upload_path).await;
+                let _ = self
+                    .jobs
+                    .queue_file_delete(&[upload_path.to_string_lossy()])
+                    .await;
                 if is_duplicate_error(&err) {
                     if let Some(existing) =
                         assets::get_upload_id_by_checksum(&self.pool, &auth.user.id, &checksum)
@@ -164,6 +170,8 @@ impl AssetMediaService {
         assets::upsert_exif_size(&self.pool, &asset_id, file_bytes.len() as i64).await?;
         assets::update_quota_usage(&self.pool, &auth.user.id, file_bytes.len() as i64).await?;
         self.attach_to_shared_link(auth, asset_id).await?;
+
+        self.jobs.queue_asset_extract_metadata(&asset_id).await?;
 
         if asset_type == "IMAGE" && visibility != "hidden" {
             let pool = self.pool.clone();
@@ -212,6 +220,7 @@ impl AssetMediaService {
             path,
             content_type: guess_mime(&file_name),
             file_name: Some(file_name),
+            cache_control: None,
         })
         .await
     }
@@ -253,6 +262,7 @@ impl AssetMediaService {
             path,
             content_type: guess_mime(&file_name),
             file_name: Some(file_name),
+            cache_control: None,
         })
         .await
     }
@@ -272,6 +282,7 @@ impl AssetMediaService {
             path: path.clone(),
             content_type: guess_mime(&path),
             file_name: None,
+            cache_control: None,
         })
         .await
     }

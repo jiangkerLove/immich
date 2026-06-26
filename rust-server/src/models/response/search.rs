@@ -62,7 +62,7 @@ pub struct SearchExploreResponse {
     pub items: Vec<SearchExploreItemResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonResponse {
     pub id: Uuid,

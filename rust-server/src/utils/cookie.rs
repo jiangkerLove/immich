@@ -8,6 +8,7 @@ pub enum ImmichCookie {
     SharedLinkToken,
     OAuthState,
     OAuthCodeVerifier,
+    MaintenanceToken,
 }
 
 impl ImmichCookie {
@@ -20,6 +21,7 @@ impl ImmichCookie {
             ImmichCookie::SharedLinkToken => "immich_shared_link_token",
             ImmichCookie::OAuthState => "immich_oauth_state",
             ImmichCookie::OAuthCodeVerifier => "immich_oauth_code_verifier",
+            ImmichCookie::MaintenanceToken => "immich_maintenance_token",
         }
     }
 
@@ -32,6 +34,7 @@ impl ImmichCookie {
             "immich_shared_link_token" => Some(ImmichCookie::SharedLinkToken),
             "immich_oauth_state" => Some(ImmichCookie::OAuthState),
             "immich_oauth_code_verifier" => Some(ImmichCookie::OAuthCodeVerifier),
+            "immich_maintenance_token" => Some(ImmichCookie::MaintenanceToken),
             _ => None,
         }
     }

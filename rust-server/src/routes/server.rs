@@ -3,10 +3,11 @@ use axum::routing::{delete, get, put};
 
 use crate::app_state::AppState;
 use crate::handlers::server::{
-    about_handler, config_handler, custom_css_handler, features_handler, media_types_handler,
-    ping_handler, storage_handler, version_handler, version_history_handler, well_known_handler,
+    about_handler, apk_links_handler, config_handler, custom_css_handler, delete_server_license_handler,
+    features_handler, get_server_license_handler, media_types_handler, ping_handler,
+    set_server_license_handler, statistics_handler, storage_handler, version_check_handler,
+    version_handler, version_history_handler, well_known_handler,
 };
-use crate::handlers::stub;
 
 pub fn public_router() -> Router<AppState> {
     Router::new()
@@ -23,11 +24,11 @@ pub fn public_router() -> Router<AppState> {
 pub fn protected_router() -> Router<AppState> {
     Router::new()
         .route("/api/server/about", get(about_handler))
-        .route("/api/server/apk-links", get(stub::not_implemented))
+        .route("/api/server/apk-links", get(apk_links_handler))
         .route("/api/server/storage", get(storage_handler))
-        .route("/api/server/statistics", get(stub::not_implemented))
-        .route("/api/server/license", get(stub::not_implemented))
-        .route("/api/server/license", put(stub::not_implemented))
-        .route("/api/server/license", delete(stub::not_implemented))
-        .route("/api/server/version-check", get(stub::not_implemented))
+        .route("/api/server/statistics", get(statistics_handler))
+        .route("/api/server/license", get(get_server_license_handler))
+        .route("/api/server/license", put(set_server_license_handler))
+        .route("/api/server/license", delete(delete_server_license_handler))
+        .route("/api/server/version-check", get(version_check_handler))
 }

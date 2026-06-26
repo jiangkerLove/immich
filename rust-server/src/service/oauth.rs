@@ -13,7 +13,7 @@ use crate::ext::bcrypt::hash_bcrypt;
 use crate::models::db::sessions::{NewSession, SessionPO};
 use crate::models::db::system_metadata::{get_oauth_config, OAuthConfig};
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{map_user_admin, NewUserDb, UserDb};
+use crate::models::db::users::{map_user_admin_with_license, NewUserDb, UserDb};
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::auth::LoginReq;
 use crate::models::response::auth::LoginResp;
@@ -212,7 +212,7 @@ impl OAuthService {
         let user = UserDb::select_full_by_id(&self.pool, &auth.user.id)
             .await?
             .ok_or_else(|| ErrorResp::ServerError("User not found".to_string()))?;
-        Ok(map_user_admin(user))
+        Ok(map_user_admin_with_license(&self.pool, user).await?)
     }
 
     pub async fn unlink(&self, auth: &AuthDto) -> Result<UserAdminResponse, ErrorResp> {
@@ -233,7 +233,7 @@ impl OAuthService {
         let user = UserDb::select_full_by_id(&self.pool, &auth.user.id)
             .await?
             .ok_or_else(|| ErrorResp::ServerError("User not found".to_string()))?;
-        Ok(map_user_admin(user))
+        Ok(map_user_admin_with_license(&self.pool, user).await?)
     }
 
     pub fn mobile_redirect(request_url: &str) -> String {

@@ -36,4 +36,15 @@ impl StoragePaths {
             .join(owner_id.to_string())
             .join(format!("{asset_id}_{suffix}"))
     }
+
+    pub fn profile_image_path(&self, user_id: &Uuid, file_id: &str, extension: &str) -> PathBuf {
+        self.media_location
+            .join("profile")
+            .join(user_id.to_string())
+            .join(format!("{file_id}.{extension}"))
+    }
+
+    pub fn backups_folder(&self) -> PathBuf {
+        self.media_location.join("backups")
+    }
 }

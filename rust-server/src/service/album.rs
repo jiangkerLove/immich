@@ -1,33 +1,72 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::FromRow;
+use std::collections::HashSet;
 use uuid::Uuid;
 
+use crate::models::db::album::{self, AlbumAccessLevel, AlbumUserRole};
+use crate::models::db::assets;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
+use crate::service::access::{check_album_ids_access, require_album_access};
 use crate::service::db::DbService;
+use crate::service::job::JobService;
 use crate::utils::permission::require_permission;
 use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct AlbumService {
     db: DbService,
+    jobs: JobService,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumUserResponse {
+    pub user: AlbumUserInfo,
+    pub role: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumUserInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub profile_image_path: String,
+    pub avatar_color: String,
+    pub profile_changed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributorCountResponse {
+    pub user_id: Uuid,
+    pub asset_count: i64,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumResponse {
     pub id: Uuid,
     pub album_name: String,
-    pub description: Option<String>,
+    pub description: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub owner_id: Uuid,
     pub album_thumbnail_asset_id: Option<Uuid>,
+    pub shared: bool,
+    pub album_users: Vec<AlbumUserResponse>,
+    pub has_shared_link: bool,
+    pub asset_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified_asset_timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
     pub is_activity_enabled: bool,
     pub order: String,
-    #[serde(default)]
-    pub asset_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contributor_counts: Option<Vec<ContributorCountResponse>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -38,10 +77,40 @@ pub struct AlbumStatisticsResponse {
     pub not_shared: i64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkIdResponse {
+    pub id: Uuid,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BulkIdErrorReason>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum BulkIdErrorReason {
+    Duplicate,
+    NoPermission,
+    NotFound,
+    Validation,
+    Unknown,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumsAddAssetsResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BulkIdErrorReason>,
+}
+
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAlbumsQuery {
-    pub shared: Option<bool>,
+    pub id: Option<Uuid>,
+    pub name: Option<String>,
+    pub is_owned: Option<bool>,
+    pub is_shared: Option<bool>,
     pub asset_id: Option<Uuid>,
 }
 
@@ -54,39 +123,72 @@ pub struct CreateAlbumReq {
     pub asset_ids: Vec<Uuid>,
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAlbumReq {
+    pub album_name: Option<String>,
+    pub description: Option<String>,
+    pub album_thumbnail_asset_id: Option<Uuid>,
+    pub is_activity_enabled: Option<bool>,
+    pub order: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkIdsReq {
+    pub ids: Vec<Uuid>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumsAddAssetsReq {
+    pub album_ids: Vec<Uuid>,
+    pub asset_ids: Vec<Uuid>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumUserAddReq {
+    pub user_id: Uuid,
+    #[serde(default = "default_editor_role")]
+    pub role: String,
+}
+
+fn default_editor_role() -> String {
+    "editor".to_string()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddUsersReq {
+    pub album_users: Vec<AlbumUserAddReq>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAlbumUserReq {
+    pub role: String,
+}
+
 impl AlbumService {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub fn new(pool: sqlx::PgPool, jobs: JobService) -> Self {
         Self {
             db: DbService::new(pool),
+            jobs,
         }
     }
 
     pub async fn get_statistics(&self, auth: &AuthDto) -> Result<AlbumStatisticsResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumStatistics)?;
 
-        let owned: i64 = sqlx::query_scalar(
-            r#"SELECT COUNT(*) FROM album WHERE "ownerId" = $1"#,
-        )
-        .bind(auth.user.id)
-        .fetch_one(&self.db.pool)
-        .await?;
-
-        let shared: i64 = sqlx::query_scalar(
-            r#"
-                SELECT COUNT(DISTINCT a.id)
-                FROM album a
-                INNER JOIN album_user au ON au."albumId" = a.id
-                WHERE au."userId" = $1 AND a."ownerId" != $1
-            "#,
-        )
-        .bind(auth.user.id)
-        .fetch_one(&self.db.pool)
-        .await?;
+        let owned = album::count_owned_albums(&self.db.pool, &auth.user.id).await?;
+        let shared = album::count_shared_albums(&self.db.pool, &auth.user.id).await?;
+        let not_shared = album::count_owned_not_shared_albums(&self.db.pool, &auth.user.id).await?;
 
         Ok(AlbumStatisticsResponse {
             owned,
             shared,
-            not_shared: owned - shared.max(0),
+            not_shared,
         })
     }
 
@@ -97,45 +199,46 @@ impl AlbumService {
     ) -> Result<Vec<AlbumResponse>, ErrorResp> {
         require_permission(auth, Permission::AlbumRead)?;
 
-        let albums = if query.shared == Some(true) {
-            sqlx::query_as::<_, AlbumResponse>(
-                r#"
-                    SELECT a.id, a."albumName" as album_name, a.description,
-                           a."createdAt" as created_at, a."updatedAt" as updated_at,
-                           a."ownerId" as owner_id,
-                           a."albumThumbnailAssetId" as album_thumbnail_asset_id,
-                           a."isActivityEnabled" as is_activity_enabled,
-                           a."order" as "order",
-                           COALESCE((SELECT COUNT(*) FROM album_asset aa WHERE aa."albumId" = a.id), 0) as asset_count
-                    FROM album a
-                    INNER JOIN album_user au ON au."albumId" = a.id
-                    WHERE au."userId" = $1 AND a."ownerId" != $1
-                    ORDER BY a."updatedAt" DESC
-                "#,
-            )
-            .bind(auth.user.id)
-            .fetch_all(&self.db.pool)
-            .await?
+        let album_ids = if let Some(asset_id) = query.asset_id {
+            album::list_album_ids_by_asset(&self.db.pool, &auth.user.id, &asset_id).await?
         } else {
-            sqlx::query_as::<_, AlbumResponse>(
-                r#"
-                    SELECT a.id, a."albumName" as album_name, a.description,
-                           a."createdAt" as created_at, a."updatedAt" as updated_at,
-                           a."ownerId" as owner_id,
-                           a."albumThumbnailAssetId" as album_thumbnail_asset_id,
-                           a."isActivityEnabled" as is_activity_enabled,
-                           a."order" as "order",
-                           COALESCE((SELECT COUNT(*) FROM album_asset aa WHERE aa."albumId" = a.id), 0) as asset_count
-                    FROM album a
-                    INNER JOIN album_user au ON au."albumId" = a.id
-                    WHERE au."userId" = $1
-                    ORDER BY a."updatedAt" DESC
-                "#,
+            album::list_accessible_album_ids(
+                &self.db.pool,
+                &auth.user.id,
+                query.is_owned,
+                query.is_shared,
             )
-            .bind(auth.user.id)
-            .fetch_all(&self.db.pool)
             .await?
         };
+
+        let mut albums = Vec::with_capacity(album_ids.len());
+        for album_id in album_ids {
+            if let Some(id) = query.id {
+                if album_id != id {
+                    continue;
+                }
+            }
+            albums.push(self.build_response(&auth.user.id, &album_id).await?);
+        }
+
+        if let Some(name) = &query.name {
+            albums.retain(|album| album.album_name == *name);
+        }
+
+        if !albums.is_empty() {
+            let ids: Vec<Uuid> = albums.iter().map(|album| album.id).collect();
+            let metadata_rows = album::get_metadata_for_ids(&self.db.pool, &ids).await?;
+            let metadata_map: std::collections::HashMap<Uuid, _> = metadata_rows
+                .into_iter()
+                .map(|row| (row.album_id, row))
+                .collect();
+
+            for album in &mut albums {
+                if let Some(metadata) = metadata_map.get(&album.id) {
+                    apply_album_metadata(album, metadata);
+                }
+            }
+        }
 
         Ok(albums)
     }
@@ -145,34 +248,35 @@ impl AlbumService {
         self.get_accessible(auth, id).await
     }
 
+    pub async fn map_for_viewer(
+        &self,
+        viewer_id: &Uuid,
+        album_id: &Uuid,
+    ) -> Result<AlbumResponse, ErrorResp> {
+        self.build_response(viewer_id, album_id).await
+    }
+
     pub async fn create(&self, auth: &AuthDto, dto: &CreateAlbumReq) -> Result<AlbumResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumCreate)?;
 
         let mut tx = self.db.pool.begin().await?;
 
-        let album = sqlx::query_as::<_, AlbumResponse>(
+        let album_id: Uuid = sqlx::query_scalar(
             r#"
-                INSERT INTO album ("albumName", description, "ownerId")
-                VALUES ($1, $2, $3)
-                RETURNING id, "albumName" as album_name, description,
-                          "createdAt" as created_at, "updatedAt" as updated_at,
-                          "ownerId" as owner_id,
-                          "albumThumbnailAssetId" as album_thumbnail_asset_id,
-                          "isActivityEnabled" as is_activity_enabled,
-                          "order" as "order",
-                          0::bigint as asset_count
+                INSERT INTO album ("albumName", description)
+                VALUES ($1, COALESCE($2, ''))
+                RETURNING id
             "#,
         )
         .bind(&dto.album_name)
         .bind(&dto.description)
-        .bind(auth.user.id)
         .fetch_one(&mut *tx)
         .await?;
 
         sqlx::query(
             r#"INSERT INTO album_user ("albumId", "userId", role) VALUES ($1, $2, 'owner')"#,
         )
-        .bind(album.id)
+        .bind(album_id)
         .bind(auth.user.id)
         .execute(&mut *tx)
         .await?;
@@ -181,35 +285,534 @@ impl AlbumService {
             sqlx::query(
                 r#"INSERT INTO album_asset ("albumId", "assetId") VALUES ($1, $2) ON CONFLICT DO NOTHING"#,
             )
-            .bind(album.id)
+            .bind(album_id)
             .bind(asset_id)
             .execute(&mut *tx)
             .await?;
         }
 
         tx.commit().await?;
-        self.get(auth, &album.id).await
+        self.get(auth, &album_id).await
+    }
+
+    pub async fn update(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        dto: &UpdateAlbumReq,
+    ) -> Result<AlbumResponse, ErrorResp> {
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumUpdate).await?;
+
+        if let Some(thumbnail_id) = dto.album_thumbnail_asset_id {
+            let in_album = album::filter_asset_ids_in_album(&self.db.pool, id, &[thumbnail_id]).await?;
+            if !in_album.contains(&thumbnail_id) {
+                return Err(ErrorResp::BadRequest("Invalid album thumbnail".to_string()));
+            }
+        }
+
+        let current = self.get_accessible(auth, id).await?;
+
+        sqlx::query(
+            r#"
+                UPDATE album
+                SET "albumName" = $1,
+                    description = $2,
+                    "albumThumbnailAssetId" = $3,
+                    "isActivityEnabled" = $4,
+                    "order" = $5
+                WHERE id = $6
+            "#,
+        )
+        .bind(dto.album_name.as_ref().unwrap_or(&current.album_name))
+        .bind(dto.description.as_ref().unwrap_or(&current.description))
+        .bind(
+            dto.album_thumbnail_asset_id
+                .or(current.album_thumbnail_asset_id),
+        )
+        .bind(
+            dto.is_activity_enabled
+                .unwrap_or(current.is_activity_enabled),
+        )
+        .bind(dto.order.as_ref().unwrap_or(&current.order))
+        .bind(id)
+        .execute(&self.db.pool)
+        .await?;
+
+        self.get(auth, id).await
+    }
+
+    pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumDelete).await?;
+        album::delete_album(&self.db.pool, id).await?;
+        Ok(())
+    }
+
+    pub async fn add_assets(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        dto: &BulkIdsReq,
+    ) -> Result<Vec<BulkIdResponse>, ErrorResp> {
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumAddAsset).await?;
+
+        let existing =
+            album::filter_asset_ids_in_album(&self.db.pool, id, &dto.ids).await?;
+        let not_present: Vec<Uuid> = dto
+            .ids
+            .iter()
+            .filter(|asset_id| !existing.contains(asset_id))
+            .copied()
+            .collect();
+
+        let allowed: HashSet<Uuid> = if not_present.is_empty() {
+            HashSet::new()
+        } else {
+            let elevated = auth
+                .session
+                .as_ref()
+                .is_some_and(|session| session.has_elevated_permission);
+            assets::filter_accessible_ids(
+                &self.db.pool,
+                &auth.user.id,
+                &not_present,
+                elevated,
+                false,
+            )
+            .await?
+            .into_iter()
+            .collect()
+        };
+
+        let mut results = Vec::with_capacity(dto.ids.len());
+        let mut new_asset_ids = Vec::new();
+
+        for asset_id in &dto.ids {
+            if existing.contains(asset_id) {
+                results.push(BulkIdResponse {
+                    id: *asset_id,
+                    success: false,
+                    error: Some(BulkIdErrorReason::Duplicate),
+                });
+                continue;
+            }
+
+            if !allowed.contains(asset_id) {
+                results.push(BulkIdResponse {
+                    id: *asset_id,
+                    success: false,
+                    error: Some(BulkIdErrorReason::NoPermission),
+                });
+                continue;
+            }
+
+            new_asset_ids.push(*asset_id);
+            results.push(BulkIdResponse {
+                id: *asset_id,
+                success: true,
+                error: None,
+            });
+        }
+
+        if !new_asset_ids.is_empty() {
+            album::add_asset_ids(&self.db.pool, id, &new_asset_ids).await?;
+
+            let thumbnail = album::get_album_thumbnail_asset_id(&self.db.pool, id).await?;
+            if thumbnail.is_none() {
+                if let Some(first_id) = new_asset_ids.first() {
+                    album::set_album_thumbnail(&self.db.pool, id, first_id).await?;
+                }
+            }
+
+            self.queue_album_update_notifications(id, &auth.user.id).await?;
+        }
+
+        Ok(results)
+    }
+
+    pub async fn add_assets_to_albums(
+        &self,
+        auth: &AuthDto,
+        dto: &AlbumsAddAssetsReq,
+    ) -> Result<AlbumsAddAssetsResponse, ErrorResp> {
+        require_permission(auth, Permission::AlbumAddAsset)?;
+
+        let allowed_albums =
+            check_album_ids_access(&self.db.pool, auth, &dto.album_ids, Permission::AlbumAddAsset)
+                .await?;
+        if allowed_albums.is_empty() {
+            return Ok(AlbumsAddAssetsResponse {
+                success: false,
+                error: Some(BulkIdErrorReason::NoPermission),
+            });
+        }
+
+        let elevated = auth
+            .session
+            .as_ref()
+            .is_some_and(|session| session.has_elevated_permission);
+        let allowed_assets: HashSet<Uuid> = assets::filter_accessible_ids(
+            &self.db.pool,
+            &auth.user.id,
+            &dto.asset_ids,
+            elevated,
+            false,
+        )
+        .await?
+        .into_iter()
+        .collect();
+
+        if allowed_assets.is_empty() {
+            return Ok(AlbumsAddAssetsResponse {
+                success: false,
+                error: Some(BulkIdErrorReason::NoPermission),
+            });
+        }
+
+        let mut success = false;
+        for album_id in allowed_albums {
+            let existing = album::filter_asset_ids_in_album(
+                &self.db.pool,
+                &album_id,
+                &dto.asset_ids,
+            )
+            .await?;
+            let not_present: Vec<Uuid> = allowed_assets
+                .iter()
+                .filter(|asset_id| !existing.contains(asset_id))
+                .copied()
+                .collect();
+
+            if not_present.is_empty() {
+                continue;
+            }
+
+            album::add_asset_ids(&self.db.pool, &album_id, &not_present).await?;
+            success = true;
+
+            let thumbnail =
+                album::get_album_thumbnail_asset_id(&self.db.pool, &album_id).await?;
+            if thumbnail.is_none() {
+                if let Some(first_id) = not_present.first() {
+                    album::set_album_thumbnail(&self.db.pool, &album_id, first_id).await?;
+                }
+            }
+
+            self.queue_album_update_notifications(&album_id, &auth.user.id)
+                .await?;
+        }
+
+        Ok(AlbumsAddAssetsResponse {
+            success,
+            error: if success {
+                None
+            } else {
+                Some(BulkIdErrorReason::Duplicate)
+            },
+        })
+    }
+
+    pub async fn remove_assets(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        dto: &BulkIdsReq,
+    ) -> Result<Vec<BulkIdResponse>, ErrorResp> {
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumRemoveAsset).await?;
+
+        let existing =
+            album::filter_asset_ids_in_album(&self.db.pool, id, &dto.ids).await?;
+        let can_always_remove = album::has_album_access(
+            &self.db.pool,
+            &auth.user.id,
+            id,
+            AlbumAccessLevel::Owner,
+        )
+        .await?;
+
+        let allowed: HashSet<Uuid> = if can_always_remove {
+            existing.clone()
+        } else {
+            let asset_list: Vec<Uuid> = existing.iter().copied().collect();
+            if asset_list.is_empty() {
+                HashSet::new()
+            } else {
+                assets::filter_accessible_ids(
+                    &self.db.pool,
+                    &auth.user.id,
+                    &asset_list,
+                    auth.session
+                        .as_ref()
+                        .is_some_and(|session| session.has_elevated_permission),
+                    false,
+                )
+                .await?
+                .into_iter()
+                .collect()
+            }
+        };
+
+        let mut results = Vec::with_capacity(dto.ids.len());
+        let mut removed_ids = Vec::new();
+
+        for asset_id in &dto.ids {
+            if !existing.contains(asset_id) {
+                results.push(BulkIdResponse {
+                    id: *asset_id,
+                    success: false,
+                    error: Some(BulkIdErrorReason::NotFound),
+                });
+                continue;
+            }
+
+            if !allowed.contains(asset_id) {
+                results.push(BulkIdResponse {
+                    id: *asset_id,
+                    success: false,
+                    error: Some(BulkIdErrorReason::NoPermission),
+                });
+                continue;
+            }
+
+            removed_ids.push(*asset_id);
+            results.push(BulkIdResponse {
+                id: *asset_id,
+                success: true,
+                error: None,
+            });
+        }
+
+        if !removed_ids.is_empty() {
+            let thumbnail = album::get_album_thumbnail_asset_id(&self.db.pool, id).await?;
+            album::remove_asset_ids(&self.db.pool, id, &removed_ids).await?;
+
+            if thumbnail.is_some_and(|thumb| removed_ids.contains(&thumb)) {
+                album::update_album_thumbnails(&self.db.pool, id).await?;
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub async fn add_users(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        dto: &AddUsersReq,
+    ) -> Result<AlbumResponse, ErrorResp> {
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumShare).await?;
+
+        for album_user in &dto.album_users {
+            if album_user.user_id == auth.user.id {
+                continue;
+            }
+
+            if album_user.role == "owner" {
+                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+            }
+
+            let role = album::parse_album_user_role(&album_user.role).ok_or_else(|| {
+                ErrorResp::BadRequest(format!("Invalid album user role: {}", album_user.role))
+            })?;
+            if role == AlbumUserRole::Owner {
+                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+            }
+
+            if album::album_user_exists(&self.db.pool, id, &album_user.user_id)
+                .await?
+                .is_some()
+            {
+                continue;
+            }
+
+            if !album::user_exists(&self.db.pool, &album_user.user_id).await? {
+                return Err(ErrorResp::BadRequest("Invalid user".to_string()));
+            }
+
+            album::add_album_user(&self.db.pool, id, &album_user.user_id, role).await?;
+            let _ = self
+                .jobs
+                .queue_notify_album_invite(id, &album_user.user_id, &auth.user.name)
+                .await;
+        }
+
+        self.get(auth, id).await
+    }
+
+    pub async fn update_user(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        user_id: &Uuid,
+        dto: &UpdateAlbumUserReq,
+    ) -> Result<(), ErrorResp> {
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumShare).await?;
+
+        let role = album::parse_album_user_role(&dto.role).ok_or_else(|| {
+            ErrorResp::BadRequest(format!("Invalid album user role: {}", dto.role))
+        })?;
+
+        if album::album_user_exists(&self.db.pool, id, user_id)
+            .await?
+            .is_none()
+        {
+            return Err(ErrorResp::BadRequest("Album not shared with user".to_string()));
+        }
+
+        album::update_album_user_role(&self.db.pool, id, user_id, role).await?;
+        Ok(())
+    }
+
+    pub async fn remove_user(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        user_id: &Uuid,
+    ) -> Result<(), ErrorResp> {
+        if auth.user.id != *user_id {
+            require_album_access(&self.db.pool, auth, id, Permission::AlbumShare).await?;
+        }
+
+        let role = album::album_user_exists(&self.db.pool, id, user_id)
+            .await?
+            .ok_or_else(|| ErrorResp::BadRequest("Album not shared with user".to_string()))?;
+
+        if role == "owner" {
+            let owner_count = album::count_album_owners(&self.db.pool, id).await?;
+            if owner_count <= 1 {
+                return Err(ErrorResp::BadRequest(
+                    "Cannot remove the last album owner".to_string(),
+                ));
+            }
+        }
+
+        album::remove_album_user(&self.db.pool, id, user_id).await?;
+        Ok(())
     }
 
     async fn get_accessible(&self, auth: &AuthDto, id: &Uuid) -> Result<AlbumResponse, ErrorResp> {
-        sqlx::query_as::<_, AlbumResponse>(
-            r#"
-                SELECT a.id, a."albumName" as album_name, a.description,
-                       a."createdAt" as created_at, a."updatedAt" as updated_at,
-                       a."ownerId" as owner_id,
-                       a."albumThumbnailAssetId" as album_thumbnail_asset_id,
-                       a."isActivityEnabled" as is_activity_enabled,
-                       a."order" as "order",
-                       COALESCE((SELECT COUNT(*) FROM album_asset aa WHERE aa."albumId" = a.id), 0) as asset_count
-                FROM album a
-                INNER JOIN album_user au ON au."albumId" = a.id
-                WHERE a.id = $1 AND au."userId" = $2
-            "#,
+        let has_access = album::has_album_access(
+            &self.db.pool,
+            &auth.user.id,
+            id,
+            AlbumAccessLevel::Member,
         )
-        .bind(id)
-        .bind(auth.user.id)
-        .fetch_optional(&self.db.pool)
-        .await?
-        .ok_or_else(|| ErrorResp::BadRequest("Not found or no album.read access".to_string()))
+        .await?;
+
+        if !has_access {
+            return Err(ErrorResp::BadRequest(
+                "Not found or no album.read access".to_string(),
+            ));
+        }
+
+        self.build_response(&auth.user.id, id).await
     }
+
+    async fn build_response(
+        &self,
+        auth_user_id: &Uuid,
+        album_id: &Uuid,
+    ) -> Result<AlbumResponse, ErrorResp> {
+        let row = album::get_album_row(&self.db.pool, album_id)
+            .await?
+            .ok_or_else(|| ErrorResp::BadRequest("Album not found".to_string()))?;
+
+        let users = album::get_album_users(&self.db.pool, album_id, auth_user_id).await?;
+        let has_shared_link = album::album_has_shared_link(&self.db.pool, album_id).await?;
+        let asset_count = album::count_album_assets(&self.db.pool, album_id).await?;
+        let has_shared_users = users.len() > 1;
+        let is_shared = has_shared_users || has_shared_link;
+
+        let metadata_rows = album::get_metadata_for_ids(&self.db.pool, &[*album_id]).await?;
+        let metadata = metadata_rows.into_iter().next();
+
+        let contributor_counts = if is_shared {
+            Some(
+                album::get_contributor_counts(&self.db.pool, album_id)
+                    .await?
+                    .into_iter()
+                    .map(|row| ContributorCountResponse {
+                        user_id: row.user_id,
+                        asset_count: row.asset_count,
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        let mut response = AlbumResponse {
+            id: row.id,
+            album_name: row.album_name,
+            description: row.description,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            album_thumbnail_asset_id: row.album_thumbnail_asset_id,
+            shared: is_shared,
+            album_users: users
+                .into_iter()
+                .map(|user| AlbumUserResponse {
+                    user: AlbumUserInfo {
+                        id: user.user_id,
+                        name: user.name,
+                        email: user.email,
+                        profile_image_path: user.profile_image_path,
+                        avatar_color: user.avatar_color.unwrap_or_default(),
+                        profile_changed_at: user.profile_changed_at,
+                    },
+                    role: user.role,
+                })
+                .collect(),
+            has_shared_link,
+            asset_count,
+            last_modified_asset_timestamp: None,
+            start_date: None,
+            end_date: None,
+            is_activity_enabled: row.is_activity_enabled,
+            order: row.order,
+            contributor_counts,
+        };
+
+        if let Some(metadata) = metadata {
+            apply_album_metadata(&mut response, &metadata);
+        }
+
+        Ok(response)
+    }
+
+    async fn queue_album_update_notifications(
+        &self,
+        album_id: &Uuid,
+        actor_id: &Uuid,
+    ) -> Result<(), ErrorResp> {
+        let members = album::list_album_member_ids(&self.db.pool, album_id).await?;
+        for recipient_id in members {
+            if recipient_id == *actor_id {
+                continue;
+            }
+            self.jobs
+                .queue_notify_album_update(album_id, &recipient_id)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+fn apply_album_metadata(album: &mut AlbumResponse, metadata: &album::AlbumMetadataRow) {
+    album.asset_count = metadata.asset_count;
+    album.start_date = metadata.start_date.as_ref().map(format_album_datetime);
+    album.end_date = metadata.end_date.as_ref().map(format_album_datetime);
+    album.last_modified_asset_timestamp = metadata
+        .last_modified_asset_timestamp
+        .as_ref()
+        .map(format_album_datetime);
+
+    if let (Some(start), Some(end)) = (&album.start_date, &album.end_date) {
+        if start > end {
+            std::mem::swap(&mut album.start_date, &mut album.end_date);
+        }
+    }
+}
+
+fn format_album_datetime(value: &DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }

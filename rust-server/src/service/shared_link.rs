@@ -8,17 +8,19 @@ use crate::models::db::shared_links::{
     self, NewSharedLink, SharedLinkRow, SharedLinkSearch, UpdateSharedLink,
 };
 use crate::models::dto::auth::AuthDto;
+use crate::models::response::asset::map_assets;
 use crate::models::response::response::ErrorResp;
 use crate::models::response::shared_link::{
     map_shared_link, SharedLinkAlbumResponse, SharedLinkResponse,
 };
-use crate::service::album::AlbumResponse;
+use crate::service::album::AlbumService;
 use crate::utils::crypto::{random_bytes, shared_link_login_token};
 use crate::utils::permission::require_permission;
 
 #[derive(Clone)]
 pub struct SharedLinkService {
     pool: PgPool,
+    albums: AlbumService,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -81,8 +83,8 @@ pub struct AssetIdsResponse {
 }
 
 impl SharedLinkService {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, albums: AlbumService) -> Self {
+        Self { pool, albums }
     }
 
     pub async fn get_all(
@@ -370,35 +372,27 @@ impl SharedLinkService {
         asset_limit: Option<i64>,
     ) -> Result<SharedLinkResponse, ErrorResp> {
         let asset_ids = shared_links::list_asset_ids(&self.pool, &row.id, asset_limit).await?;
-        let assets = assets::get_details_by_ids(&self.pool, &asset_ids).await?;
+        let asset_rows = assets::get_details_by_ids(&self.pool, &asset_ids).await?;
+        let mapped_assets = map_assets(&self.pool, &asset_rows, auth, strip_asset_metadata).await?;
 
         let album = if let Some(album_id) = row.album_id {
-            Some(self.load_album(&album_id).await?)
+            Some(self.load_album(auth, &album_id).await?)
         } else {
             None
         };
 
-        Ok(map_shared_link(row, &assets, album, auth, strip_asset_metadata))
+        Ok(map_shared_link(row, mapped_assets, album))
     }
 
-    async fn load_album(&self, album_id: &Uuid) -> Result<SharedLinkAlbumResponse, ErrorResp> {
-        let album = sqlx::query_as::<_, AlbumResponse>(
-            r#"
-                SELECT a.id, a."albumName" as album_name, a.description,
-                       a."createdAt" as created_at, a."updatedAt" as updated_at,
-                       a."ownerId" as owner_id,
-                       a."albumThumbnailAssetId" as album_thumbnail_asset_id,
-                       a."isActivityEnabled" as is_activity_enabled,
-                       a."order" as "order",
-                       COALESCE((SELECT COUNT(*) FROM album_asset aa WHERE aa."albumId" = a.id), 0) as asset_count
-                FROM album a
-                WHERE a.id = $1 AND a."deletedAt" IS NULL
-            "#,
-        )
-        .bind(album_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| ErrorResp::BadRequest("Album not found".to_string()))?;
+    async fn load_album(
+        &self,
+        auth: &AuthDto,
+        album_id: &Uuid,
+    ) -> Result<SharedLinkAlbumResponse, ErrorResp> {
+        let album = self
+            .albums
+            .map_for_viewer(&auth.user.id, album_id)
+            .await?;
 
         Ok(SharedLinkAlbumResponse {
             album,

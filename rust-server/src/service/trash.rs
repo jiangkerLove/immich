@@ -8,11 +8,13 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::service::job::JobService;
+use crate::service::websocket::WebSocketHub;
 
 #[derive(Clone)]
 pub struct TrashService {
     pool: PgPool,
     jobs: JobService,
+    websocket: WebSocketHub,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -28,8 +30,12 @@ pub struct TrashResponse {
 }
 
 impl TrashService {
-    pub fn new(pool: PgPool, jobs: JobService) -> Self {
-        Self { pool, jobs }
+    pub fn new(pool: PgPool, jobs: JobService, websocket: WebSocketHub) -> Self {
+        Self {
+            pool,
+            jobs,
+            websocket,
+        }
     }
 
     pub async fn empty(&self, auth: &AuthDto) -> Result<TrashResponse, ErrorResp> {
@@ -56,6 +62,9 @@ impl TrashService {
 
         require_assets_access(&self.pool, auth, &dto.ids, Permission::AssetDelete).await?;
         trash::restore_by_ids(&self.pool, &dto.ids).await?;
+
+        let ids: Vec<String> = dto.ids.iter().map(|id| id.to_string()).collect();
+        self.websocket.emit_asset_restore(auth.user.id, ids);
 
         Ok(TrashResponse {
             count: dto.ids.len() as u64,

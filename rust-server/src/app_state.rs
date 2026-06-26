@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bb8::Pool as RedisPool;
-use bb8_redis::RedisConnectionManager;
+use redis::Client as RedisClient;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool as SqlPool, Postgres};
 
@@ -17,19 +17,39 @@ use crate::service::timeline::TimelineService;
 use crate::service::job::JobService;
 use crate::service::{
     album::AlbumService, api_key::ApiKeyService, auth::AuthService, session::SessionService,
-    tag::TagService, user::UserService,
+    tag::TagService, user::UserService, partner::PartnerService, stack::StackService,
+    person::PersonService, activity::ActivityService, map::MapService,
+    download::DownloadService,
+    view::ViewService,
+    user_admin::UserAdminService,
+    duplicate::DuplicateService,
+    system_config::SystemConfigService,
+    maintenance::MaintenanceService,
+    hls::HlsService,
+    queue::QueueService,
+    library::LibraryService,
+    integrity::IntegrityService,
+    database_backup::DatabaseBackupService,
+    plugin::PluginService,
+    workflow::WorkflowService,
+    auth_admin::AuthAdminService,
 };
 use crate::service::memory::MemoryService;
 use crate::service::notification::NotificationService;
+use crate::service::sync::SyncService;
 use crate::service::server::{ServerBuildConfig, ServerService};
+use crate::service::websocket::{AppSocketIoLayer, WebSocketHub};
+use crate::service::websocket_jobs::WebSocketJobListener;
+use crate::service::notification_jobs::NotificationJobWorker;
 use crate::utils::storage::StoragePaths;
 
 #[derive(Clone)]
 pub struct AppState {
     pub sql_pool: SqlPool<Postgres>,
-    pub redis_pool: RedisPool<RedisConnectionManager>,
+    pub redis_pool: RedisPool<RedisClient>,
     pub services: Services,
     pub storage: StoragePaths,
+    pub websocket: WebSocketHub,
 }
 
 #[derive(Clone)]
@@ -52,6 +72,26 @@ pub struct Services {
     pub job: JobService,
     pub memory: MemoryService,
     pub notification: NotificationService,
+    pub sync: SyncService,
+    pub partner: PartnerService,
+    pub stack: StackService,
+    pub person: PersonService,
+    pub activity: ActivityService,
+    pub map: MapService,
+    pub download: DownloadService,
+    pub view: ViewService,
+    pub user_admin: UserAdminService,
+    pub duplicate: DuplicateService,
+    pub system_config: SystemConfigService,
+    pub maintenance: MaintenanceService,
+    pub hls: HlsService,
+    pub queue: QueueService,
+    pub library: LibraryService,
+    pub integrity: IntegrityService,
+    pub database_backup: DatabaseBackupService,
+    pub plugin: PluginService,
+    pub workflow: WorkflowService,
+    pub auth_admin: AuthAdminService,
 }
 
 impl Services {
@@ -60,32 +100,54 @@ impl Services {
         redis_url: String,
         storage: StoragePaths,
         env: &EnvDto,
+        websocket: WebSocketHub,
     ) -> Self {
-        let jobs = JobService::new(redis_url);
+        let jobs = JobService::new(redis_url.clone());
         let library_path = storage.media_location().to_path_buf();
+        let albums = AlbumService::new(pool.clone(), jobs.clone());
         Self {
-            auth: AuthService::new(pool.clone()),
-            user: UserService::new(pool.clone()),
+            auth: AuthService::with_websocket(pool.clone(), websocket.clone()),
+            user: UserService::new(pool.clone(), storage.clone()),
             server: ServerService::new(
                 pool.clone(),
                 ServerBuildConfig::from_env(env),
-                library_path,
+                library_path.clone(),
             ),
-            session: SessionService::new(pool.clone()),
+            session: SessionService::new(pool.clone(), websocket.clone()),
             api_key: ApiKeyService::new(pool.clone()),
-            album: AlbumService::new(pool.clone()),
+            album: albums.clone(),
             tag: TagService::new(pool.clone()),
-            asset: AssetService::new(pool.clone(), jobs.clone()),
-            shared_link: SharedLinkService::new(pool.clone()),
-            asset_media: AssetMediaService::new(pool.clone(), storage.clone()),
+            asset: AssetService::new(pool.clone(), jobs.clone(), websocket.clone()),
+            shared_link: SharedLinkService::new(pool.clone(), albums),
+            asset_media: AssetMediaService::new(pool.clone(), storage.clone(), jobs.clone()),
             oauth: OAuthService::new(pool.clone()),
             timeline: TimelineService::new(pool.clone()),
-            trash: TrashService::new(pool.clone(), jobs.clone()),
+            trash: TrashService::new(pool.clone(), jobs.clone(), websocket.clone()),
             search: SearchService::new(pool.clone()),
             system_metadata: SystemMetadataService::new(pool.clone()),
-            job: jobs,
+            job: jobs.clone(),
             memory: MemoryService::new(pool.clone()),
-            notification: NotificationService::new(pool.clone()),
+            notification: NotificationService::new(pool.clone(), websocket.clone()),
+            sync: SyncService::new(pool.clone()),
+            partner: PartnerService::new(pool.clone()),
+            stack: StackService::new(pool.clone(), websocket.clone()),
+            person: PersonService::new(pool.clone()),
+            activity: ActivityService::new(pool.clone()),
+            map: MapService::new(pool.clone()),
+            download: DownloadService::new(pool.clone()),
+            view: ViewService::new(pool.clone()),
+            user_admin: UserAdminService::new(pool.clone(), websocket.clone(), jobs.clone()),
+            duplicate: DuplicateService::new(pool.clone(), jobs.clone(), websocket.clone()),
+            system_config: SystemConfigService::new(pool.clone(), websocket.clone()),
+            maintenance: MaintenanceService::new(pool.clone(), storage.clone(), websocket.clone()),
+            hls: HlsService::new(pool.clone()),
+            queue: QueueService::new(jobs.clone()),
+            library: LibraryService::new(pool.clone(), jobs.clone(), library_path),
+            integrity: IntegrityService::new(pool.clone(), websocket.clone()),
+            database_backup: DatabaseBackupService::new(storage.clone()),
+            plugin: PluginService::new(pool.clone()),
+            workflow: WorkflowService::new(pool.clone()),
+            auth_admin: AuthAdminService::new(pool.clone()),
         }
     }
 }
@@ -105,7 +167,7 @@ fn resolve_media_location(settings: &EnvDto) -> PathBuf {
 }
 
 impl AppState {
-    pub async fn new(settings: EnvDto) -> Self {
+    pub async fn new(settings: EnvDto) -> (Self, AppSocketIoLayer) {
         let redis_url = if !is_none_or_empty(&settings.redis_username)
             && !is_none_or_empty(&settings.redis_password)
         {
@@ -119,8 +181,11 @@ impl AppState {
         } else {
             format!("redis://{}:{}", settings.redis_hostname, settings.redis_port)
         };
-        let manager = RedisConnectionManager::new(redis_url.clone()).unwrap();
-        let redis_pool = bb8::Pool::builder().build(manager).await.unwrap();
+        let redis_client = RedisClient::open(redis_url.clone()).expect("invalid redis url");
+        let redis_pool = bb8::Pool::builder()
+            .build(redis_client)
+            .await
+            .expect("failed to connect to redis");
 
         let db_connection_str = format!(
             "postgres://{}:{}@{}:{}/{}",
@@ -140,11 +205,34 @@ impl AppState {
 
         let storage = StoragePaths::new(resolve_media_location(&settings));
 
-        AppState {
-            sql_pool: sql_pool.clone(),
-            redis_pool: redis_pool.clone(),
-            storage: storage.clone(),
-            services: Services::new(sql_pool, redis_url, storage, &settings),
-        }
+        let auth = AuthService::new(sql_pool.clone());
+        let (websocket_layer, websocket) = WebSocketHub::build(auth, &redis_url)
+            .await
+            .expect("failed to initialize websocket redis adapter");
+
+        WebSocketJobListener::spawn(sql_pool.clone(), redis_url.clone(), websocket.clone());
+        NotificationJobWorker::spawn(
+            sql_pool.clone(),
+            redis_url.clone(),
+            websocket.clone(),
+            JobService::new(redis_url.clone()),
+        );
+
+        (
+            AppState {
+                sql_pool: sql_pool.clone(),
+                redis_pool: redis_pool.clone(),
+                storage: storage.clone(),
+                services: Services::new(
+                    sql_pool,
+                    redis_url,
+                    storage.clone(),
+                    &settings,
+                    websocket.clone(),
+                ),
+                websocket,
+            },
+            websocket_layer,
+        )
     }
 }

@@ -1,3 +1,8 @@
+pub mod activity;
+pub mod map;
+pub mod face;
+pub mod view;
+pub mod download;
 pub mod album;
 pub mod api_key;
 pub mod shared_link;
@@ -10,12 +15,28 @@ pub mod oauth;
 pub mod server;
 pub mod session;
 pub mod system_metadata;
+pub mod person;
+pub mod partner;
+pub mod stack;
 pub mod stubs;
+pub mod sync;
 pub mod tag;
 pub mod search;
 pub mod trash;
 pub mod timeline;
+pub mod duplicate;
+pub mod system_config;
 pub mod user;
+pub mod user_admin;
+pub mod maintenance;
+pub mod video_stream;
+pub mod job;
+pub mod queue;
+pub mod library;
+pub mod integrity;
+pub mod database_backup;
+pub mod plugin;
+pub mod workflow;
 
 use axum::Router;
 
@@ -26,6 +47,8 @@ pub fn public_router() -> Router<AppState> {
         .merge(auth::public_router())
         .merge(oauth::public_router())
         .merge(server::public_router())
+        .merge(maintenance::public_router())
+        .merge(database_backup::public_router())
 }
 
 pub fn protected_router() -> Router<AppState> {
@@ -47,5 +70,26 @@ pub fn protected_router() -> Router<AppState> {
         .merge(system_metadata::router())
         .merge(memory::router())
         .merge(notification::router())
+        .merge(sync::router())
+        .merge(partner::router())
+        .merge(stack::router())
+        .merge(person::router())
+        .merge(activity::router())
+        .merge(map::router())
+        .merge(download::router())
+        .merge(view::router())
+        .merge(face::router())
+        .merge(user_admin::router())
+        .merge(duplicate::router())
+        .merge(system_config::router())
+        .merge(maintenance::protected_router())
+        .merge(video_stream::router())
+        .merge(job::router())
+        .merge(queue::router())
+        .merge(library::router())
+        .merge(integrity::router())
+        .merge(database_backup::protected_router())
+        .merge(plugin::router())
+        .merge(workflow::router())
         .merge(stubs::router())
 }

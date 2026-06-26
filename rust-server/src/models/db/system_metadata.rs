@@ -53,7 +53,37 @@ pub async fn set_admin_onboarding(
     .await
 }
 
-#[derive(Debug, Deserialize, Clone)]
+const LICENSE_KEY: &str = "license";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerLicense {
+    pub license_key: String,
+    pub activation_key: String,
+    pub activated_at: String,
+}
+
+pub async fn get_server_license(pool: &Pool<Postgres>) -> Result<Option<ServerLicense>, sqlx::Error> {
+    let value = get_json(pool, LICENSE_KEY).await?;
+    Ok(value.and_then(|json| serde_json::from_value::<ServerLicense>(json).ok()))
+}
+
+pub async fn set_server_license(
+    pool: &Pool<Postgres>,
+    license: &ServerLicense,
+) -> Result<(), sqlx::Error> {
+    set_json(pool, LICENSE_KEY, &serde_json::to_value(license).unwrap_or_default()).await
+}
+
+pub async fn delete_server_license(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    sqlx::query(r#"DELETE FROM system_metadata WHERE key = $1"#)
+        .bind(LICENSE_KEY)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthConfig {
     pub enabled: bool,
@@ -153,6 +183,41 @@ pub async fn get_machine_learning_config(
 
 pub fn is_smart_search_enabled(config: &MachineLearningConfig) -> bool {
     config.enabled && config.clip.enabled
+}
+
+const REVERSE_GEOCODING_STATE_KEY: &str = "reverse-geocoding-state";
+const VERSION_CHECK_STATE_KEY: &str = "version-check-state";
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseGeocodingState {
+    pub last_update: Option<String>,
+    pub last_import_file_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionCheckState {
+    pub checked_at: Option<String>,
+    pub release_version: Option<String>,
+}
+
+pub async fn get_reverse_geocoding_state(
+    pool: &Pool<Postgres>,
+) -> Result<ReverseGeocodingState, sqlx::Error> {
+    let value = get_json(pool, REVERSE_GEOCODING_STATE_KEY).await?;
+    Ok(value
+        .and_then(|json| serde_json::from_value::<ReverseGeocodingState>(json).ok())
+        .unwrap_or_default())
+}
+
+pub async fn get_version_check_state(
+    pool: &Pool<Postgres>,
+) -> Result<VersionCheckState, sqlx::Error> {
+    let value = get_json(pool, VERSION_CHECK_STATE_KEY).await?;
+    Ok(value
+        .and_then(|json| serde_json::from_value::<VersionCheckState>(json).ok())
+        .unwrap_or_default())
 }
 
 pub async fn get_custom_css(pool: &Pool<Postgres>) -> Result<String, sqlx::Error> {

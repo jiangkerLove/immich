@@ -66,3 +66,9 @@ pub fn parse_memory_data(data: &serde_json::Value) -> MemoryDataResponse {
             .unwrap_or(0) as i32,
     }
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryStatisticsResponse {
+    pub total: i64,
+}

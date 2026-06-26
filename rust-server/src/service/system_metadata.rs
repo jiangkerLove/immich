@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 
-use crate::models::db::system_metadata::{self, AdminOnboarding};
+use crate::models::db::system_metadata::{
+    self, AdminOnboarding, ReverseGeocodingState, VersionCheckState,
+};
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::models::db::auth_permission::Permission;
@@ -35,6 +37,28 @@ impl SystemMetadataService {
         require_permission(auth, Permission::SystemMetadataUpdate)?;
         require_admin(auth)?;
         system_metadata::set_admin_onboarding(&self.pool, dto)
+            .await
+            .map_err(ErrorResp::from)
+    }
+
+    pub async fn get_reverse_geocoding_state(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<ReverseGeocodingState, ErrorResp> {
+        require_permission(auth, Permission::SystemMetadataRead)?;
+        require_admin(auth)?;
+        system_metadata::get_reverse_geocoding_state(&self.pool)
+            .await
+            .map_err(ErrorResp::from)
+    }
+
+    pub async fn get_version_check_state(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<VersionCheckState, ErrorResp> {
+        require_permission(auth, Permission::SystemMetadataRead)?;
+        require_admin(auth)?;
+        system_metadata::get_version_check_state(&self.pool)
             .await
             .map_err(ErrorResp::from)
     }

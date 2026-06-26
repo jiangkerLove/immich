@@ -108,6 +108,51 @@ impl SessionPO {
         Ok(())
     }
 
+    pub async fn update_pin_expires_at(
+        pool: &Pool<Postgres>,
+        id: &Uuid,
+        pin_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(r#"UPDATE session SET "pinExpiresAt" = $1 WHERE id = $2"#)
+            .bind(pin_expires_at)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn lock_all_for_user(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"UPDATE session SET "pinExpiresAt" = NULL WHERE "userId" = $1"#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn invalidate_all_except(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+        exclude_id: Option<&Uuid>,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(exclude_id) = exclude_id {
+            sqlx::query(
+                r#"DELETE FROM session WHERE "userId" = $1 AND id != $2"#,
+            )
+            .bind(user_id)
+            .bind(exclude_id)
+            .execute(pool)
+            .await?;
+        } else {
+            sqlx::query(r#"DELETE FROM session WHERE "userId" = $1"#)
+                .bind(user_id)
+                .execute(pool)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn invalidate_oauth(
         pool: &Pool<Postgres>,
         oauth_sid: Option<&str>,
@@ -149,4 +194,52 @@ impl SessionPO {
             (None, None) => Ok(vec![]),
         }
     }
+
+    pub async fn is_pending_sync_reset(
+        pool: &Pool<Postgres>,
+        id: &Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let value: Option<bool> = sqlx::query_scalar(
+            r#"SELECT "isPendingSyncReset" FROM session WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(value.unwrap_or(false))
+    }
+
+    pub async fn reset_sync_progress(
+        pool: &Pool<Postgres>,
+        session_id: &Uuid,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"UPDATE session SET "isPendingSyncReset" = false WHERE id = $1"#,
+        )
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"DELETE FROM session_sync_checkpoint WHERE "sessionId" = $1"#,
+        )
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
+pub async fn is_pending_sync_reset(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    SessionPO::is_pending_sync_reset(pool, id).await
+}
+
+pub async fn reset_sync_progress(
+    pool: &Pool<Postgres>,
+    session_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    SessionPO::reset_sync_progress(pool, session_id).await
 }

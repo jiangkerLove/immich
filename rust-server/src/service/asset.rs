@@ -1,13 +1,16 @@
 use sqlx::PgPool;
 use uuid::Uuid;
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::service::job::JobService;
+use crate::service::websocket::WebSocketHub;
 use crate::models::db::assets::{
     self, AssetBasicRow, AssetUpdateFields, ExifUpdateFields, AssetStatsRow,
 };
 use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_asset, AssetResponse, AssetStatsResponse};
+use crate::models::response::asset::{map_assets, AssetResponse, AssetStatsResponse};
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::utils::permission::require_permission;
@@ -17,6 +20,7 @@ use crate::utils::query::parse_query_bool;
 pub struct AssetService {
     pool: PgPool,
     jobs: JobService,
+    websocket: WebSocketHub,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -64,9 +68,117 @@ pub struct AssetBulkDeleteReq {
     pub force: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetCopyReq {
+    pub source_id: Uuid,
+    pub target_id: Uuid,
+    pub shared_links: Option<bool>,
+    pub albums: Option<bool>,
+    pub sidecar: Option<bool>,
+    pub stack: Option<bool>,
+    pub favorite: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetJobsReq {
+    pub asset_ids: Vec<Uuid>,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataResponse {
+    pub key: String,
+    pub value: Value,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataBulkResponse {
+    pub asset_id: Uuid,
+    pub key: String,
+    pub value: Value,
+    pub updated_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataItemReq {
+    pub key: String,
+    pub value: Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataUpsertReq {
+    pub items: Vec<AssetMetadataItemReq>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataBulkItemReq {
+    pub asset_id: Uuid,
+    pub key: String,
+    pub value: Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataBulkUpsertReq {
+    pub items: Vec<AssetMetadataBulkItemReq>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataBulkDeleteItemReq {
+    pub asset_id: Uuid,
+    pub key: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataBulkDeleteReq {
+    pub items: Vec<AssetMetadataBulkDeleteItemReq>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEditItemReq {
+    pub action: String,
+    pub parameters: Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEditsCreateReq {
+    pub edits: Vec<AssetEditItemReq>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEditResponse {
+    pub id: Uuid,
+    pub action: String,
+    pub parameters: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEditsResponse {
+    pub asset_id: Uuid,
+    pub edits: Vec<AssetEditResponse>,
+}
+
 impl AssetService {
-    pub fn new(pool: PgPool, jobs: JobService) -> Self {
-        Self { pool, jobs }
+    pub fn new(pool: PgPool, jobs: JobService, websocket: WebSocketHub) -> Self {
+        Self {
+            pool,
+            jobs,
+            websocket,
+        }
     }
 
     pub async fn get_statistics(
@@ -105,23 +217,16 @@ impl AssetService {
             .await?
             .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))?;
 
-        let stack = if let Some(stack_id) = row.stack_id {
-            assets::get_stack(&self.pool, &stack_id).await?
-        } else {
-            None
-        };
-
         let strip_metadata = auth
             .shared_link
             .as_ref()
             .is_some_and(|link| !link.show_exif);
 
-        Ok(map_asset(
-            &row,
-            stack.as_ref(),
-            auth,
-            strip_metadata,
-        ))
+        let mut responses = map_assets(&self.pool, std::slice::from_ref(&row), auth, strip_metadata)
+            .await?;
+        responses
+            .pop()
+            .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))
     }
 
     pub async fn update(
@@ -136,7 +241,12 @@ impl AssetService {
         let mut previous_motion: Option<AssetBasicRow> = None;
         if let Some(live_photo_video_id) = &dto.live_photo_video_id {
             if let Some(video_id) = live_photo_video_id {
-                on_before_link(&self.pool, &auth.user.id, video_id).await?;
+                if let Some(hidden_id) =
+                    on_before_link(&self.pool, &auth.user.id, video_id).await?
+                {
+                    self.websocket
+                        .emit_asset_hidden(auth.user.id, hidden_id);
+                }
             } else {
                 let asset = assets::get_basic_by_id(&self.pool, asset_id)
                     .await?
@@ -227,7 +337,291 @@ impl AssetService {
 
     pub async fn delete_all(&self, auth: &AuthDto, dto: &AssetBulkDeleteReq) -> Result<(), ErrorResp> {
         require_assets_access(&self.pool, auth, &dto.ids, Permission::AssetDelete).await?;
-        assets::trash_assets(&self.pool, &dto.ids, dto.force.unwrap_or(false)).await?;
+        let force = dto.force.unwrap_or(false);
+        assets::trash_assets(&self.pool, &dto.ids, force).await?;
+
+        if force {
+            for id in &dto.ids {
+                self.websocket.emit_asset_delete(auth.user.id, *id);
+            }
+        } else {
+            let ids: Vec<String> = dto.ids.iter().map(|id| id.to_string()).collect();
+            self.websocket.emit_asset_trash(auth.user.id, ids);
+        }
+
+        Ok(())
+    }
+
+    pub async fn copy(&self, auth: &AuthDto, dto: &AssetCopyReq) -> Result<(), ErrorResp> {
+        require_assets_access(
+            &self.pool,
+            auth,
+            &[dto.source_id, dto.target_id],
+            Permission::AssetCopy,
+        )
+        .await?;
+
+        if dto.source_id == dto.target_id {
+            return Err(ErrorResp::BadRequest(
+                "Source and target id must be distinct".to_string(),
+            ));
+        }
+
+        let source = assets::get_for_copy(&self.pool, &dto.source_id)
+            .await?
+            .ok_or_else(|| ErrorResp::BadRequest("Both assets must exist".to_string()))?;
+        let target = assets::get_for_copy(&self.pool, &dto.target_id)
+            .await?
+            .ok_or_else(|| ErrorResp::BadRequest("Both assets must exist".to_string()))?;
+
+        if dto.albums.unwrap_or(true) {
+            assets::copy_album_associations(&self.pool, &dto.source_id, &dto.target_id).await?;
+        }
+
+        if dto.shared_links.unwrap_or(true) {
+            assets::copy_shared_link_associations(&self.pool, &dto.source_id, &dto.target_id)
+                .await?;
+        }
+
+        if dto.stack.unwrap_or(true) {
+            self.copy_stack(&source, &target).await?;
+        }
+
+        if dto.favorite.unwrap_or(true) {
+            assets::update_asset_fields(
+                &self.pool,
+                &dto.target_id,
+                &AssetUpdateFields {
+                    is_favorite: Some(source.is_favorite),
+                    visibility: None,
+                    live_photo_video_id: None,
+                    duplicate_id: None,
+                },
+            )
+            .await?;
+        }
+
+        if dto.sidecar.unwrap_or(true) {
+            self.copy_sidecar(&source, &target).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn run_jobs(&self, auth: &AuthDto, dto: &AssetJobsReq) -> Result<(), ErrorResp> {
+        require_assets_access(&self.pool, auth, &dto.asset_ids, Permission::AssetUpdate).await?;
+        self.jobs.run_asset_jobs(&dto.name, &dto.asset_ids).await
+    }
+
+    async fn copy_stack(
+        &self,
+        source: &assets::AssetCopyRow,
+        target: &assets::AssetCopyRow,
+    ) -> Result<(), ErrorResp> {
+        let Some(source_stack_id) = source.stack_id else {
+            return Ok(());
+        };
+
+        if let Some(target_stack_id) = target.stack_id {
+            crate::models::db::stack::merge_stacks(
+                &self.pool,
+                &source_stack_id,
+                &target_stack_id,
+            )
+            .await?;
+            crate::models::db::stack::delete(&self.pool, &source_stack_id).await?;
+        } else {
+            assets::update_stack_id(&self.pool, &target.id, Some(source_stack_id)).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn copy_sidecar(
+        &self,
+        source: &assets::AssetCopyRow,
+        target: &assets::AssetCopyRow,
+    ) -> Result<(), ErrorResp> {
+        let Some(source_path) =
+            assets::get_asset_file_path(&self.pool, &source.id, "sidecar").await?
+        else {
+            return Ok(());
+        };
+
+        if let Some(target_path) =
+            assets::get_asset_file_path(&self.pool, &target.id, "sidecar").await?
+        {
+            let _ = tokio::fs::remove_file(&target_path).await;
+        }
+
+        let dest_path = format!("{}.xmp", target.original_path);
+        tokio::fs::copy(&source_path, &dest_path)
+            .await
+            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+
+        assets::upsert_sidecar_file(&self.pool, &target.id, &dest_path).await?;
+        self.jobs
+            .queue_asset_extract_metadata_with_source(&target.id, "sidecar-write")
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_metadata(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+    ) -> Result<Vec<AssetMetadataResponse>, ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetRead).await?;
+        let rows = crate::models::db::asset_metadata::list_by_asset(&self.pool, asset_id).await?;
+        Ok(rows.into_iter().map(map_metadata_row).collect())
+    }
+
+    pub async fn get_ocr(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+    ) -> Result<Vec<crate::models::db::asset_ocr::AssetOcrRow>, ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetRead).await?;
+        crate::models::db::asset_ocr::get_by_asset_id(&self.pool, asset_id)
+            .await
+            .map_err(ErrorResp::from)
+    }
+
+    pub async fn get_metadata_by_key(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+        key: &str,
+    ) -> Result<AssetMetadataResponse, ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetRead).await?;
+        let row = crate::models::db::asset_metadata::get_by_key(&self.pool, asset_id, key)
+            .await?
+            .ok_or_else(|| {
+                ErrorResp::BadRequest(format!(
+                    "Metadata with key \"{key}\" not found for asset with id \"{asset_id}\""
+                ))
+            })?;
+        Ok(map_metadata_row(row))
+    }
+
+    pub async fn upsert_metadata(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+        dto: &AssetMetadataUpsertReq,
+    ) -> Result<Vec<AssetMetadataResponse>, ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetUpdate).await?;
+        validate_unique_keys(&dto.items)?;
+        let items: Vec<(String, Value)> = dto
+            .items
+            .iter()
+            .map(|item| (item.key.clone(), item.value.clone()))
+            .collect();
+        let rows = crate::models::db::asset_metadata::upsert_items(&self.pool, asset_id, &items).await?;
+        Ok(rows.into_iter().map(map_metadata_row).collect())
+    }
+
+    pub async fn upsert_bulk_metadata(
+        &self,
+        auth: &AuthDto,
+        dto: &AssetMetadataBulkUpsertReq,
+    ) -> Result<Vec<AssetMetadataBulkResponse>, ErrorResp> {
+        let asset_ids: Vec<Uuid> = dto.items.iter().map(|item| item.asset_id).collect();
+        require_assets_access(&self.pool, auth, &asset_ids, Permission::AssetUpdate).await?;
+
+        let mut seen = std::collections::HashSet::new();
+        for item in &dto.items {
+            let key = format!("({}, {})", item.asset_id, item.key);
+            if !seen.insert(key) {
+                return Err(ErrorResp::BadRequest(format!(
+                    "Duplicate items are not allowed: \"({}, {})\"",
+                    item.asset_id, item.key
+                )));
+            }
+        }
+
+        let items: Vec<(Uuid, String, Value)> = dto
+            .items
+            .iter()
+            .map(|item| (item.asset_id, item.key.clone(), item.value.clone()))
+            .collect();
+        let rows = crate::models::db::asset_metadata::upsert_bulk(&self.pool, &items).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| AssetMetadataBulkResponse {
+                asset_id: row.asset_id,
+                key: row.key,
+                value: row.value,
+                updated_at: row.updated_at.to_rfc3339(),
+            })
+            .collect())
+    }
+
+    pub async fn delete_metadata_by_key(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+        key: &str,
+    ) -> Result<(), ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetUpdate).await?;
+        crate::models::db::asset_metadata::delete_by_key(&self.pool, asset_id, key).await?;
+        Ok(())
+    }
+
+    pub async fn delete_bulk_metadata(
+        &self,
+        auth: &AuthDto,
+        dto: &AssetMetadataBulkDeleteReq,
+    ) -> Result<(), ErrorResp> {
+        let asset_ids: Vec<Uuid> = dto.items.iter().map(|item| item.asset_id).collect();
+        require_assets_access(&self.pool, auth, &asset_ids, Permission::AssetUpdate).await?;
+        let items: Vec<(Uuid, String)> = dto
+            .items
+            .iter()
+            .map(|item| (item.asset_id, item.key.clone()))
+            .collect();
+        crate::models::db::asset_metadata::delete_bulk(&self.pool, &items).await?;
+        Ok(())
+    }
+
+    pub async fn get_edits(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+    ) -> Result<AssetEditsResponse, ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetEditGet).await?;
+        let rows = crate::models::db::asset_edit::list_by_asset(&self.pool, asset_id).await?;
+        Ok(AssetEditsResponse {
+            asset_id: *asset_id,
+            edits: rows.into_iter().map(map_edit_row).collect(),
+        })
+    }
+
+    pub async fn replace_edits(
+        &self,
+        auth: &AuthDto,
+        asset_id: &Uuid,
+        dto: &AssetEditsCreateReq,
+    ) -> Result<AssetEditsResponse, ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetEditCreate).await?;
+        let edits: Vec<(String, Value)> = dto
+            .edits
+            .iter()
+            .map(|edit| (edit.action.clone(), edit.parameters.clone()))
+            .collect();
+        let rows = crate::models::db::asset_edit::replace_all(&self.pool, asset_id, &edits).await?;
+        let _ = self.jobs.queue_asset_edit_thumbnails(asset_id).await;
+        Ok(AssetEditsResponse {
+            asset_id: *asset_id,
+            edits: rows.into_iter().map(map_edit_row).collect(),
+        })
+    }
+
+    pub async fn delete_edits(&self, auth: &AuthDto, asset_id: &Uuid) -> Result<(), ErrorResp> {
+        require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetEditDelete).await?;
+        crate::models::db::asset_edit::delete_all(&self.pool, asset_id).await?;
+        let _ = self.jobs.queue_asset_edit_thumbnails(asset_id).await;
         Ok(())
     }
 }
@@ -238,6 +632,35 @@ fn map_stats(stats: &AssetStatsRow) -> AssetStatsResponse {
         videos: stats.video,
         total: stats.image + stats.video + stats.audio + stats.other,
     }
+}
+
+fn map_metadata_row(row: crate::models::db::asset_metadata::AssetMetadataRow) -> AssetMetadataResponse {
+    AssetMetadataResponse {
+        key: row.key,
+        value: row.value,
+        updated_at: row.updated_at.to_rfc3339(),
+    }
+}
+
+fn map_edit_row(row: crate::models::db::asset_edit::AssetEditRow) -> AssetEditResponse {
+    AssetEditResponse {
+        id: row.id,
+        action: row.action,
+        parameters: row.parameters,
+    }
+}
+
+fn validate_unique_keys(items: &[AssetMetadataItemReq]) -> Result<(), ErrorResp> {
+    let mut seen = std::collections::HashSet::new();
+    for item in items {
+        if !seen.insert(&item.key) {
+            return Err(ErrorResp::BadRequest(format!(
+                "Duplicate items are not allowed: \"{}\"",
+                item.key
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn build_exif_fields(dto: &UpdateAssetReq) -> ExifUpdateFields {
@@ -266,7 +689,7 @@ async fn on_before_link(
     pool: &PgPool,
     user_id: &Uuid,
     live_photo_video_id: &Uuid,
-) -> Result<(), ErrorResp> {
+) -> Result<Option<Uuid>, ErrorResp> {
     let motion = assets::get_basic_by_id(pool, live_photo_video_id)
         .await?
         .ok_or_else(|| ErrorResp::BadRequest("Live photo video not found".to_string()))?;
@@ -294,9 +717,10 @@ async fn on_before_link(
             },
         )
         .await?;
+        Ok(Some(*live_photo_video_id))
+    } else {
+        Ok(None)
     }
-
-    Ok(())
 }
 
 async fn on_before_unlink(

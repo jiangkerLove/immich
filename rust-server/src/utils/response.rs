@@ -72,6 +72,24 @@ pub fn respond_with_oauth_state_cookies<T: Serialize>(
     response
 }
 
+pub fn respond_with_maintenance_cookie(is_secure: bool, token: &str) -> Response<Body> {
+    let mut response = Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .body(Body::empty())
+        .unwrap();
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&build_cookie(
+            ImmichCookie::MaintenanceToken.as_str(),
+            token,
+            is_secure,
+            true,
+        ))
+        .unwrap(),
+    );
+    response
+}
+
 pub fn respond_with_auth_cookies<T: Serialize>(
     body: &T,
     is_secure: bool,

@@ -21,7 +21,7 @@ async fn main() {
 
     let port = settings.immich_port.unwrap_or(2283);
 
-    let app_state = AppState::new(settings).await;
+    let (app_state, websocket_layer) = AppState::new(settings).await;
 
     let protected_routes = routes::protected_router().route_layer(middleware::from_fn_with_state(
         app_state.clone(),
@@ -33,6 +33,7 @@ async fn main() {
         .merge(protected_routes)
         .route_layer(middleware::from_fn(user_agent::user_agent))
         .route_layer(middleware::from_fn(cors::cors))
+        .layer(websocket_layer)
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))

@@ -3,12 +3,13 @@ use std::path::PathBuf;
 use axum::body::Body;
 use axum::http::Response;
 use axum::response::IntoResponse;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::OnceCell;
 
 use crate::constants::SERVER_VERSION;
 use crate::models::db::system_metadata;
+use crate::service::hls::{is_maintenance_mode, is_realtime_transcoding_enabled};
 use crate::models::db::version_history;
 use crate::models::dto::env::EnvDto;
 use crate::models::response::response::ErrorResp;
@@ -198,6 +199,46 @@ pub struct ServerStorageResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageByUserResponse {
+    pub user_id: uuid::Uuid,
+    pub user_name: String,
+    pub photos: i64,
+    pub videos: i64,
+    pub usage: i64,
+    pub usage_photos: i64,
+    pub usage_videos: i64,
+    pub quota_size_in_bytes: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStatsResponse {
+    pub photos: i64,
+    pub videos: i64,
+    pub usage: i64,
+    pub usage_photos: i64,
+    pub usage_videos: i64,
+    pub usage_by_user: Vec<UsageByUserResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerApkLinksResponse {
+    pub arm64v8a: String,
+    pub armeabiv7a: String,
+    pub universal: String,
+    pub x86_64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseKeyReq {
+    pub license_key: String,
+    pub activation_key: String,
+}
+
+#[derive(Serialize)]
 pub struct WellKnownResponse {
     pub api: WellKnownApi,
 }
@@ -258,6 +299,7 @@ impl ServerService {
     }
 
     pub async fn get_features(&self) -> Result<ServerFeaturesResponse, ErrorResp> {
+        let realtime_transcoding = is_realtime_transcoding_enabled(&self.pool).await?;
         Ok(ServerFeaturesResponse {
             smart_search: true,
             facial_recognition: true,
@@ -274,7 +316,7 @@ impl ServerService {
             password_login: true,
             config_file: false,
             email: false,
-            realtime_transcoding: false,
+            realtime_transcoding,
         })
     }
 
@@ -286,6 +328,7 @@ impl ServerService {
         .await?;
 
         let admin_onboarding = system_metadata::get_admin_onboarding(&self.pool).await?;
+        let maintenance_mode = is_maintenance_mode(&self.pool).await?;
 
         Ok(ServerConfigResponse {
             login_page_message: String::new(),
@@ -298,7 +341,7 @@ impl ServerService {
             public_users: false,
             map_dark_style_url: String::new(),
             map_light_style_url: String::new(),
-            maintenance_mode: false,
+            maintenance_mode,
             min_faces: 3,
         })
     }
@@ -376,6 +419,144 @@ impl ServerService {
             disk_available_raw: disk.available as i64,
             disk_usage_percentage: usage_percentage,
         })
+    }
+
+    pub async fn get_statistics(&self, auth: &crate::models::dto::auth::AuthDto) -> Result<ServerStatsResponse, ErrorResp> {
+        if !auth.user.is_admin {
+            return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+        }
+
+        let rows = crate::models::db::users::get_user_stats(&self.pool).await?;
+        let mut stats = ServerStatsResponse {
+            photos: 0,
+            videos: 0,
+            usage: 0,
+            usage_photos: 0,
+            usage_videos: 0,
+            usage_by_user: Vec::with_capacity(rows.len()),
+        };
+
+        for row in rows {
+            stats.photos += row.photos;
+            stats.videos += row.videos;
+            stats.usage += row.usage;
+            stats.usage_photos += row.usage_photos;
+            stats.usage_videos += row.usage_videos;
+            stats.usage_by_user.push(UsageByUserResponse {
+                user_id: row.user_id,
+                user_name: row.user_name,
+                photos: row.photos,
+                videos: row.videos,
+                usage: row.usage,
+                usage_photos: row.usage_photos,
+                usage_videos: row.usage_videos,
+                quota_size_in_bytes: row.quota_size_in_bytes,
+            });
+        }
+
+        Ok(stats)
+    }
+
+    pub fn get_apk_links(&self) -> ServerApkLinksResponse {
+        let base_url = format!(
+            "https://github.com/immich-app/immich/releases/download/v{SERVER_VERSION}"
+        );
+        ServerApkLinksResponse {
+            arm64v8a: format!("{base_url}/app-arm64-v8a-release.apk"),
+            armeabiv7a: format!("{base_url}/app-armeabi-v7a-release.apk"),
+            universal: format!("{base_url}/app-release.apk"),
+            x86_64: format!("{base_url}/app-x86_64-release.apk"),
+        }
+    }
+
+    pub async fn get_license(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<crate::models::response::user::UserLicenseResponse, ErrorResp> {
+        use crate::models::db::auth_permission::Permission;
+        use crate::utils::permission::{require_admin, require_permission};
+
+        require_permission(auth, Permission::ServerLicenseRead)?;
+        require_admin(auth)?;
+
+        let license = system_metadata::get_server_license(&self.pool)
+            .await
+            .map_err(ErrorResp::from)?
+            .ok_or_else(|| ErrorResp::BadRequest("License not found".to_string()))?;
+
+        let activated_at = chrono::DateTime::parse_from_rfc3339(&license.activated_at)
+            .map(|value| value.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+
+        Ok(crate::models::response::user::UserLicenseResponse {
+            license_key: license.license_key,
+            activation_key: license.activation_key,
+            activated_at,
+        })
+    }
+
+    pub async fn set_license(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+        dto: &LicenseKeyReq,
+    ) -> Result<crate::models::response::user::UserLicenseResponse, ErrorResp> {
+        use crate::models::db::auth_permission::Permission;
+        use crate::utils::license::{is_valid_server_license_prefix, verify_server_license};
+        use crate::utils::permission::{require_admin, require_permission};
+
+        require_permission(auth, Permission::ServerLicenseUpdate)?;
+        require_admin(auth)?;
+
+        if !is_valid_server_license_prefix(&dto.license_key)
+            || !verify_server_license(&dto.license_key, &dto.activation_key)
+        {
+            return Err(ErrorResp::BadRequest("Invalid license key".to_string()));
+        }
+
+        let activated_at = chrono::Utc::now();
+        system_metadata::set_server_license(
+            &self.pool,
+            &system_metadata::ServerLicense {
+                license_key: dto.license_key.clone(),
+                activation_key: dto.activation_key.clone(),
+                activated_at: activated_at.to_rfc3339(),
+            },
+        )
+        .await
+        .map_err(ErrorResp::from)?;
+
+        Ok(crate::models::response::user::UserLicenseResponse {
+            license_key: dto.license_key.clone(),
+            activation_key: dto.activation_key.clone(),
+            activated_at,
+        })
+    }
+
+    pub async fn delete_license(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<(), ErrorResp> {
+        use crate::models::db::auth_permission::Permission;
+        use crate::utils::permission::{require_admin, require_permission};
+
+        require_permission(auth, Permission::ServerLicenseDelete)?;
+        require_admin(auth)?;
+        system_metadata::delete_server_license(&self.pool)
+            .await
+            .map_err(ErrorResp::from)
+    }
+
+    pub async fn get_version_check(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<system_metadata::VersionCheckState, ErrorResp> {
+        use crate::models::db::auth_permission::Permission;
+        use crate::utils::permission::require_permission;
+
+        require_permission(auth, Permission::ServerVersionCheck)?;
+        system_metadata::get_version_check_state(&self.pool)
+            .await
+            .map_err(ErrorResp::from)
     }
 
     pub fn get_media_types() -> ServerMediaTypesResponse {

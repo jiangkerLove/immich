@@ -2,10 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::models::db::assets::AssetDetailRow;
 use crate::models::db::shared_links::SharedLinkRow;
-use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_asset, AssetResponse};
+use crate::models::response::asset::AssetResponse;
 use crate::service::album::AlbumResponse;
 
 #[derive(Debug, Serialize)]
@@ -45,10 +43,8 @@ pub fn encode_key(key: &[u8]) -> String {
 
 pub fn map_shared_link(
     row: &SharedLinkRow,
-    assets: &[AssetDetailRow],
+    assets: Vec<AssetResponse>,
     album: Option<SharedLinkAlbumResponse>,
-    auth: &AuthDto,
-    strip_asset_metadata: bool,
 ) -> SharedLinkResponse {
     SharedLinkResponse {
         id: row.id,
@@ -59,10 +55,7 @@ pub fn map_shared_link(
         link_type: row.link_type.clone(),
         created_at: row.created_at,
         expires_at: row.expires_at,
-        assets: assets
-            .iter()
-            .map(|asset| map_asset(asset, None, auth, strip_asset_metadata))
-            .collect(),
+        assets,
         album,
         allow_upload: row.allow_upload,
         allow_download: row.allow_download,
