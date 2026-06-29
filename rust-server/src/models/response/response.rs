@@ -23,6 +23,9 @@ pub enum ErrorResp {
     #[error("Server error: {0}")]
     ServerError(String),
 
+    #[error("Not found: {0}")]
+    NotFound(String),
+
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 }
@@ -40,6 +43,7 @@ impl IntoResponse for ErrorResp {
             ErrorResp::ReqParamError(err) => (StatusCode::BAD_REQUEST, err, ""),
             ErrorResp::DatabaseError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string(), ""),
             ErrorResp::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err, ""),
+            ErrorResp::NotFound(err) => (StatusCode::NOT_FOUND, err, "Not Found"),
             ErrorResp::NotImplemented(err) => (StatusCode::NOT_IMPLEMENTED, err, "Not Implemented"),
         };
         (

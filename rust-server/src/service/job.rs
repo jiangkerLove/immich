@@ -24,6 +24,7 @@ const QUEUE_LIBRARY: &str = "library";
 const QUEUE_BACKUP: &str = "backupDatabase";
 const QUEUE_OCR: &str = "ocr";
 const QUEUE_INTEGRITY: &str = "integrityCheck";
+const QUEUE_WORKFLOW: &str = "workflow";
 
 pub const ALBUM_UPDATE_EMAIL_DELAY_MS: u64 = 300_000;
 
@@ -239,6 +240,141 @@ impl JobService {
             EntityJob {
                 id: *asset_id,
                 source: source.map(str::to_string),
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_ocr(&self, asset_id: &Uuid, source: Option<&str>) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_OCR,
+            "Ocr",
+            EntityJob {
+                id: *asset_id,
+                source: source.map(str::to_string),
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_asset_detect_faces(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_FACE,
+            "AssetDetectFaces",
+            EntityJob {
+                id: *asset_id,
+                source: source.map(str::to_string),
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_facial_recognition(
+        &self,
+        face_id: &Uuid,
+        deferred: bool,
+    ) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_FACIAL,
+            "FacialRecognition",
+            serde_json::json!({ "id": face_id, "deferred": deferred }),
+        )
+        .await
+    }
+
+    pub async fn queue_facial_recognition_queue_all(&self, force: bool) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_FACIAL,
+            "FacialRecognitionQueueAll",
+            serde_json::json!({ "force": force }),
+        )
+        .await
+    }
+
+    pub async fn wait_for_queue_completion(&self, queue_names: &[&str]) -> Result<(), ErrorResp> {
+        loop {
+            let mut pending = Vec::new();
+            for queue_name in queue_names {
+                let queue = self.json_queue(queue_name).await?;
+                let active = queue.get_active_count().await.map_err(|err| {
+                    ErrorResp::ServerError(format!(
+                        "Failed to read active count for '{queue_name}': {err}"
+                    ))
+                })?;
+                if active > 0 {
+                    pending.push(*queue_name);
+                }
+            }
+
+            if pending.is_empty() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_queue_waiting_count(&self, queue_name: &str) -> Result<u64, ErrorResp> {
+        let queue = self.json_queue(queue_name).await?;
+        queue.get_waiting_count().await.map_err(|err| {
+            ErrorResp::ServerError(format!(
+                "Failed to read waiting count for '{queue_name}': {err}"
+            ))
+        })
+    }
+
+    pub async fn queue_workflow_asset_trigger(
+        &self,
+        workflow_id: &Uuid,
+        asset_id: &Uuid,
+        trigger: &str,
+    ) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_WORKFLOW,
+            "WorkflowAssetTrigger",
+            serde_json::json!({
+                "workflowId": workflow_id,
+                "assetId": asset_id,
+                "trigger": trigger,
+            }),
+        )
+        .await
+    }
+
+    pub async fn queue_person_cleanup(&self) -> Result<(), ErrorResp> {
+        self.queue_json_job_empty(QUEUE_BACKGROUND, "PersonCleanup")
+            .await
+    }
+
+    pub async fn queue_asset_file_migration(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_MIGRATION,
+            "AssetFileMigration",
+            EntityJob {
+                id: *asset_id,
+                source: None,
+                notify: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_person_file_migration(&self, person_id: &Uuid) -> Result<(), ErrorResp> {
+        self.add_job(
+            QUEUE_MIGRATION,
+            "PersonFileMigration",
+            EntityJob {
+                id: *person_id,
+                source: None,
                 notify: None,
             },
         )
@@ -582,6 +718,32 @@ impl JobService {
         .await
     }
 
+    pub async fn queue_library_remove_asset(
+        &self,
+        library_id: &Uuid,
+        paths: &[String],
+    ) -> Result<(), ErrorResp> {
+        self.queue_json_job(
+            QUEUE_LIBRARY,
+            "LibraryRemoveAsset",
+            serde_json::json!({ "libraryId": library_id, "paths": paths }),
+        )
+        .await
+    }
+
+    pub async fn queue_library_sync_files(
+        &self,
+        library_id: &Uuid,
+        paths: &[String],
+    ) -> Result<(), ErrorResp> {
+        self.queue_json_job(
+            QUEUE_LIBRARY,
+            "LibrarySyncFiles",
+            serde_json::json!({ "libraryId": library_id, "paths": paths }),
+        )
+        .await
+    }
+
     pub async fn queue_start_command(
         &self,
         queue_name: &str,
@@ -731,6 +893,77 @@ impl JobService {
                 "Failed to queue {job_name} on '{queue_name}': {err}"
             ))
         })?;
+
+        Ok(())
+    }
+
+    pub async fn queue_nightly_jobs(&self, config: &serde_json::Value) -> Result<(), ErrorResp> {
+        let nightly = config.get("nightlyTasks");
+
+        if nightly
+            .and_then(|value| value.get("databaseCleanup"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+        {
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "AssetDeleteCheck")
+                .await?;
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "UserDeleteCheck")
+                .await?;
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "PersonCleanup")
+                .await?;
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "MemoryCleanup")
+                .await?;
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "SessionCleanup")
+                .await?;
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "HlsSessionCleanup")
+                .await?;
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "AuditTableCleanup")
+                .await?;
+        }
+
+        if nightly
+            .and_then(|value| value.get("generateMemories"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+        {
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "MemoryGenerate")
+                .await?;
+        }
+
+        if nightly
+            .and_then(|value| value.get("syncQuotaUsage"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+        {
+            self.queue_json_job_empty(QUEUE_BACKGROUND, "UserSyncUsage")
+                .await?;
+        }
+
+        if nightly
+            .and_then(|value| value.get("missingThumbnails"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+        {
+            self.queue_json_job(
+                QUEUE_THUMBNAIL,
+                "AssetGenerateThumbnailsQueueAll",
+                serde_json::json!({ "force": false }),
+            )
+            .await?;
+        }
+
+        if nightly
+            .and_then(|value| value.get("clusterNewFaces"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+        {
+            self.queue_json_job(
+                QUEUE_FACIAL,
+                "FacialRecognitionQueueAll",
+                serde_json::json!({ "force": false, "nightly": true }),
+            )
+            .await?;
+        }
 
         Ok(())
     }

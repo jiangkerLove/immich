@@ -101,6 +101,7 @@ impl Services {
         storage: StoragePaths,
         env: &EnvDto,
         websocket: WebSocketHub,
+        hls_engine: std::sync::Arc<crate::service::transcoding::HlsEngine>,
     ) -> Self {
         let jobs = JobService::new(redis_url.clone());
         let library_path = storage.media_location().to_path_buf();
@@ -112,6 +113,8 @@ impl Services {
                 pool.clone(),
                 ServerBuildConfig::from_env(env),
                 library_path.clone(),
+                env.immich_config_file.is_some(),
+                env.immich_allow_setup.unwrap_or(true),
             ),
             session: SessionService::new(pool.clone(), websocket.clone()),
             api_key: ApiKeyService::new(pool.clone()),
@@ -120,7 +123,7 @@ impl Services {
             asset: AssetService::new(pool.clone(), jobs.clone(), websocket.clone()),
             shared_link: SharedLinkService::new(pool.clone(), albums),
             asset_media: AssetMediaService::new(pool.clone(), storage.clone(), jobs.clone()),
-            oauth: OAuthService::new(pool.clone()),
+            oauth: OAuthService::new(pool.clone(), websocket.clone()),
             timeline: TimelineService::new(pool.clone()),
             trash: TrashService::new(pool.clone(), jobs.clone(), websocket.clone()),
             search: SearchService::new(pool.clone()),
@@ -131,7 +134,7 @@ impl Services {
             sync: SyncService::new(pool.clone()),
             partner: PartnerService::new(pool.clone()),
             stack: StackService::new(pool.clone(), websocket.clone()),
-            person: PersonService::new(pool.clone()),
+            person: PersonService::new(pool.clone(), jobs.clone()),
             activity: ActivityService::new(pool.clone()),
             map: MapService::new(pool.clone()),
             download: DownloadService::new(pool.clone()),
@@ -140,7 +143,7 @@ impl Services {
             duplicate: DuplicateService::new(pool.clone(), jobs.clone(), websocket.clone()),
             system_config: SystemConfigService::new(pool.clone(), websocket.clone()),
             maintenance: MaintenanceService::new(pool.clone(), storage.clone(), websocket.clone()),
-            hls: HlsService::new(pool.clone()),
+            hls: HlsService::new(pool.clone(), storage.clone(), hls_engine),
             queue: QueueService::new(jobs.clone()),
             library: LibraryService::new(pool.clone(), jobs.clone(), library_path),
             integrity: IntegrityService::new(pool.clone(), websocket.clone()),
@@ -219,8 +222,23 @@ impl AppState {
             storage: storage.clone(),
             env: settings.clone(),
             websocket: websocket.clone(),
-            jobs,
+            jobs: jobs.clone(),
         });
+
+        if crate::utils::workers::should_run_microservices_workers(&settings) {
+            crate::service::nightly::spawn(sql_pool.clone(), jobs.clone());
+            crate::service::integrity_scheduler::spawn(sql_pool.clone(), jobs.clone());
+            crate::service::backup_scheduler::spawn(sql_pool.clone(), jobs.clone());
+            crate::service::library_scheduler::spawn(sql_pool.clone(), jobs.clone());
+            crate::service::version_scheduler::spawn(sql_pool.clone(), jobs.clone());
+        }
+
+        let hls_engine = crate::service::transcoding::HlsEngine::spawn(
+            sql_pool.clone(),
+            storage.clone(),
+        );
+        crate::service::lifecycle::register_hls_engine(hls_engine.clone());
+        crate::service::config_bootstrap::run(&sql_pool, &settings).await;
 
         (
             AppState {
@@ -233,6 +251,71 @@ impl AppState {
                     storage.clone(),
                     &settings,
                     websocket.clone(),
+                    hls_engine,
+                ),
+                websocket,
+            },
+            websocket_layer,
+        )
+    }
+
+    pub async fn new_maintenance(settings: EnvDto) -> (Self, AppSocketIoLayer) {
+        let redis_url = if !is_none_or_empty(&settings.redis_username)
+            && !is_none_or_empty(&settings.redis_password)
+        {
+            format!(
+                "redis://{}:{}@{}:{}",
+                settings.redis_username.as_ref().unwrap(),
+                settings.redis_password.as_ref().unwrap(),
+                settings.redis_hostname,
+                settings.redis_port
+            )
+        } else {
+            format!("redis://{}:{}", settings.redis_hostname, settings.redis_port)
+        };
+        let redis_client = RedisClient::open(redis_url.clone()).expect("invalid redis url");
+        let redis_pool = bb8::Pool::builder()
+            .build(redis_client)
+            .await
+            .expect("failed to connect to redis");
+
+        let db_connection_str = format!(
+            "postgres://{}:{}@{}:{}/{}",
+            settings.db_username,
+            settings.db_password,
+            settings.db_url,
+            settings.db_port,
+            settings.db_database_name,
+        );
+
+        let sql_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(std::time::Duration::from_secs(3))
+            .connect(&db_connection_str)
+            .await
+            .expect("can't connect to database");
+
+        let storage = StoragePaths::new(resolve_media_location(&settings));
+        let auth = AuthService::new(sql_pool.clone());
+        let (websocket_layer, websocket) = WebSocketHub::build(auth, &redis_url)
+            .await
+            .expect("failed to initialize websocket redis adapter");
+
+        let hls_engine = crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
+        crate::service::lifecycle::register_hls_engine(hls_engine.clone());
+
+        (
+            Self {
+                sql_pool: sql_pool.clone(),
+                redis_pool,
+                storage: storage.clone(),
+                services: Services::new(
+                    sql_pool,
+                    redis_url,
+                    storage,
+                    &settings,
+                    websocket.clone(),
+                    hls_engine,
                 ),
                 websocket,
             },

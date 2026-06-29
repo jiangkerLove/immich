@@ -224,3 +224,154 @@ pub struct WorkflowStepJson {
     pub config: Option<Value>,
     pub enabled: bool,
 }
+
+#[derive(Debug, FromRow)]
+pub struct WorkflowRunRow {
+    pub id: Uuid,
+    pub name: Option<String>,
+    pub trigger: String,
+    pub steps: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRunStep {
+    pub id: Uuid,
+    pub config: Option<Value>,
+    pub plugin_id: Uuid,
+    pub method_name: String,
+    pub types: Vec<String>,
+    pub host_functions: bool,
+}
+
+pub async fn get_for_workflow_run(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<WorkflowRunRow>, sqlx::Error> {
+    sqlx::query_as::<_, WorkflowRunRow>(
+        r#"
+        SELECT
+            workflow.id,
+            workflow.name,
+            workflow.trigger,
+            (
+                SELECT COALESCE(json_agg(step ORDER BY workflow_step."order"), '[]'::json)
+                FROM (
+                    SELECT
+                        workflow_step.id,
+                        workflow_step.config,
+                        plugin_method."pluginId" as "pluginId",
+                        plugin_method.name as "methodName",
+                        plugin_method.types,
+                        plugin_method."hostFunctions" as "hostFunctions"
+                    FROM workflow_step
+                    INNER JOIN plugin_method ON plugin_method.id = workflow_step."pluginMethodId"
+                    WHERE workflow_step."workflowId" = workflow.id
+                      AND workflow_step.enabled = true
+                    ORDER BY workflow_step."order"
+                ) AS step
+            ) AS steps
+        FROM workflow
+        WHERE workflow.id = $1
+          AND workflow.enabled = true
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_for_asset_v1(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<Option<Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT json_build_object(
+            'id', a.id,
+            'ownerId', a."ownerId",
+            'stackId', a."stackId",
+            'livePhotoVideoId', a."livePhotoVideoId",
+            'libraryId', a."libraryId",
+            'duplicateId', a."duplicateId",
+            'createdAt', a."createdAt",
+            'updatedAt', a."updatedAt",
+            'deletedAt', a."deletedAt",
+            'fileCreatedAt', a."fileCreatedAt",
+            'fileModifiedAt', a."fileModifiedAt",
+            'localDateTime', a."localDateTime",
+            'type', a.type,
+            'status', a.status,
+            'visibility', a.visibility,
+            'duration', a.duration,
+            'checksum', encode(a.checksum, 'base64'),
+            'originalPath', a."originalPath",
+            'originalFileName', a."originalFileName",
+            'isOffline', a."isOffline",
+            'isFavorite', a."isFavorite",
+            'isExternal', a."isExternal",
+            'isEdited', a."isEdited",
+            'exifInfo', (
+                SELECT json_build_object(
+                    'make', e.make,
+                    'model', e.model,
+                    'orientation', e.orientation,
+                    'dateTimeOriginal', e."dateTimeOriginal",
+                    'modifyDate', e."modifyDate",
+                    'exifImageWidth', e."exifImageWidth",
+                    'exifImageHeight', e."exifImageHeight",
+                    'fileSizeInByte', e."fileSizeInByte",
+                    'lensModel', e."lensModel",
+                    'fNumber', e."fNumber",
+                    'focalLength', e."focalLength",
+                    'iso', e.iso,
+                    'latitude', e.latitude,
+                    'longitude', e.longitude,
+                    'city', e.city,
+                    'state', e.state,
+                    'country', e.country,
+                    'description', e.description,
+                    'fps', e.fps,
+                    'exposureTime', e."exposureTime",
+                    'livePhotoCID', e."livePhotoCID",
+                    'timeZone', e."timeZone",
+                    'projectionType', e."projectionType",
+                    'profileDescription', e."profileDescription",
+                    'colorspace', e.colorspace,
+                    'bitsPerSample', e."bitsPerSample",
+                    'autoStackId', e."autoStackId",
+                    'rating', e.rating,
+                    'tags', e.tags,
+                    'updatedAt', e."updatedAt"
+                )
+                FROM asset_exif e
+                WHERE e."assetId" = a.id
+            )
+        )
+        FROM asset a
+        WHERE a.id = $1
+        "#,
+    )
+    .bind(asset_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn update_step_config(
+    pool: &Pool<Postgres>,
+    step_id: &Uuid,
+    config: &Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE workflow_step
+        SET config = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(step_id)
+    .bind(config)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

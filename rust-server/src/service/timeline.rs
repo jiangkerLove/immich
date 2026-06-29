@@ -123,16 +123,13 @@ impl TimelineService {
 
         let person_id = query.person_id;
         if let Some(person_id) = person_id {
-            if auth.shared_link.is_some() {
-                return Err(ErrorResp::BadRequest(
-                    "personId filter is not supported for shared links".to_string(),
-                ));
-            }
-            require_permission(auth, Permission::PersonRead)?;
-            if !user_owns_person(&self.pool, &auth.user.id, &person_id).await? {
-                return Err(ErrorResp::BadRequest(
-                    "Not found or no person.read access".to_string(),
-                ));
+            if auth.shared_link.is_none() {
+                require_permission(auth, Permission::PersonRead)?;
+                if !user_owns_person(&self.pool, &auth.user.id, &person_id).await? {
+                    return Err(ErrorResp::BadRequest(
+                        "Not found or no person.read access".to_string(),
+                    ));
+                }
             }
         }
 

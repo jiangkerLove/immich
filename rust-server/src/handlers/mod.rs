@@ -17,7 +17,6 @@ pub mod session;
 pub mod person;
 pub mod partner;
 pub mod stack;
-pub mod stub;
 pub mod system_metadata;
 pub mod tag;
 pub mod search;

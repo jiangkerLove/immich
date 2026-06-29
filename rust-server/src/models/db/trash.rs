@@ -46,3 +46,15 @@ pub async fn restore_by_ids(pool: &Pool<Postgres>, asset_ids: &[Uuid]) -> Result
     .await?;
     Ok(result.rows_affected())
 }
+
+pub async fn list_deleted_ids(pool: &Pool<Postgres>) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+            SELECT id
+            FROM asset
+            WHERE status = 'deleted'
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}

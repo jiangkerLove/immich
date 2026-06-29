@@ -38,6 +38,9 @@ impl SmartSearchService {
         if !is_smart_search_enabled(&config) {
             return Ok(());
         }
+        if !crate::utils::vector::smart_search_available(&self.pool).await {
+            return Ok(());
+        }
 
         let asset_ids = smart_search_job::stream_for_encode_clip(&self.pool, force)
             .await
@@ -64,6 +67,10 @@ impl SmartSearchService {
             .await
             .map_err(|err| err.to_string())?;
         if !is_smart_search_enabled(&config) {
+            return Ok(SmartSearchOutcome::Skipped);
+        }
+
+        if !crate::utils::vector::smart_search_available(&self.pool).await {
             return Ok(SmartSearchOutcome::Skipped);
         }
 

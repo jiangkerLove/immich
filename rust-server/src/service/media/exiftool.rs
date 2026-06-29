@@ -90,6 +90,25 @@ pub fn tag_string_list(tags: &Value, name: &str) -> Vec<String> {
     }
 }
 
+pub async fn extract_binary_tag(path: &str, tag_name: &str) -> Result<Vec<u8>, String> {
+    let output = Command::new("exiftool")
+        .arg("-b")
+        .arg(format!("-{tag_name}"))
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|err| format!("failed to run exiftool: {err}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("exiftool binary extract failed for {tag_name}: {stderr}"));
+    }
+
+    Ok(output.stdout)
+}
+
 pub async fn write_tags(path: &str, tags: &[(&str, TagWriteValue)]) -> Result<(), String> {
     if tags.is_empty() {
         return Ok(());

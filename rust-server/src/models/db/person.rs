@@ -150,35 +150,97 @@ pub async fn get_by_id_for_owner(
     .await
 }
 
+const PERSON_LIST_SELECT: &str = r#"
+    person.id,
+    person.name,
+    person."birthDate" as birth_date,
+    person."thumbnailPath" as thumbnail_path,
+    person."isHidden" as is_hidden,
+    person."isFavorite" as is_favorite,
+    person.color,
+    person."updatedAt" as updated_at
+"#;
+
+pub struct PersonListFilter {
+    pub with_hidden: bool,
+    pub minimum_faces: i32,
+    pub closest_face_id: Option<Uuid>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+const PERSON_LIST_FROM: &str = r#"
+    FROM person
+    INNER JOIN asset_face af ON af."personId" = person.id
+    INNER JOIN asset a ON a.id = af."assetId"
+        AND a.visibility = 'timeline'::asset_visibility_enum
+        AND a."deletedAt" IS NULL
+    WHERE person."ownerId" = $1
+      AND af."deletedAt" IS NULL
+      AND af."isVisible" = TRUE
+"#;
+
 pub async fn list_for_user(
     pool: &Pool<Postgres>,
     owner_id: &Uuid,
-    with_hidden: bool,
-    limit: i64,
-    offset: i64,
+    filter: &PersonListFilter,
 ) -> Result<Vec<PersonRow>, sqlx::Error> {
-    let mut query = format!(
+    let hidden_clause = if filter.with_hidden {
+        ""
+    } else {
+        r#" AND person."isHidden" = FALSE"#
+    };
+
+    if let Some(closest_face_id) = filter.closest_face_id {
+        let query = format!(
+            r#"
+            SELECT {PERSON_LIST_SELECT}
+            {PERSON_LIST_FROM}
+            {hidden_clause}
+            GROUP BY person.id
+            HAVING person.name <> '' OR COUNT(af."assetId") >= $2
+            ORDER BY (
+                SELECT fs_ref.embedding <=> fs_target.embedding
+                FROM face_search fs_ref
+                CROSS JOIN face_search fs_target
+                WHERE fs_ref."faceId" = person."faceAssetId"
+                  AND fs_target."faceId" = $3
+                LIMIT 1
+            ) ASC NULLS LAST
+            LIMIT $4 OFFSET $5
+            "#
+        );
+        return sqlx::query_as::<_, PersonRow>(&query)
+            .bind(owner_id)
+            .bind(filter.minimum_faces)
+            .bind(closest_face_id)
+            .bind(filter.limit)
+            .bind(filter.offset)
+            .fetch_all(pool)
+            .await;
+    }
+
+    let query = format!(
         r#"
-            SELECT {PERSON_SELECT}
-            FROM person
-            WHERE "ownerId" = $1
+        SELECT {PERSON_LIST_SELECT}
+        {PERSON_LIST_FROM}
+        {hidden_clause}
+        GROUP BY person.id
+        HAVING person.name <> '' OR COUNT(af."assetId") >= $2
+        ORDER BY person."isHidden" ASC,
+                 person."isFavorite" DESC,
+                 (NULLIF(person.name, '') IS NULL) ASC,
+                 COUNT(af."assetId") DESC,
+                 NULLIF(person.name, '') ASC NULLS LAST,
+                 person."createdAt" ASC
+        LIMIT $3 OFFSET $4
         "#
     );
-    if !with_hidden {
-        query.push_str(r#" AND "isHidden" = FALSE"#);
-    }
-    query.push_str(
-        r#"
-            ORDER BY "isHidden" ASC, "isFavorite" DESC,
-                     NULLIF(name, '') ASC NULLS LAST, "createdAt" ASC
-            LIMIT $2 OFFSET $3
-        "#,
-    );
-
     sqlx::query_as::<_, PersonRow>(&query)
         .bind(owner_id)
-        .bind(limit)
-        .bind(offset)
+        .bind(filter.minimum_faces)
+        .bind(filter.limit)
+        .bind(filter.offset)
         .fetch_all(pool)
         .await
 }
@@ -197,14 +259,84 @@ pub async fn count_for_user(
         r#"
             SELECT
                 COUNT(*)::bigint as total,
-                COUNT(*) FILTER (WHERE "isHidden" = TRUE)::bigint as hidden
+                COUNT(*) FILTER (WHERE person."isHidden" = TRUE)::bigint as hidden
             FROM person
-            WHERE "ownerId" = $1
+            WHERE person."ownerId" = $1
+              AND EXISTS (
+                  SELECT 1
+                  FROM asset_face af
+                  INNER JOIN asset a ON a.id = af."assetId"
+                  WHERE af."personId" = person.id
+                    AND af."deletedAt" IS NULL
+                    AND af."isVisible" = TRUE
+                    AND a.visibility = 'timeline'::asset_visibility_enum
+                    AND a."deletedAt" IS NULL
+              )
         "#,
     )
     .bind(owner_id)
     .fetch_one(pool)
     .await
+}
+
+pub async fn get_face_asset_id(
+    pool: &Pool<Postgres>,
+    person_id: &Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(r#"SELECT "faceAssetId" FROM person WHERE id = $1"#)
+        .bind(person_id)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn get_thumbnail_paths_for_owner(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    ids: &[Uuid],
+) -> Result<Vec<String>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    sqlx::query_scalar(
+        r#"
+            SELECT "thumbnailPath"
+            FROM person
+            WHERE id = ANY($1)
+              AND "ownerId" = $2
+              AND "thumbnailPath" <> ''
+        "#,
+    )
+    .bind(ids)
+    .bind(owner_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_without_faces(pool: &Pool<Postgres>) -> Result<Vec<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+            SELECT person.id, person."thumbnailPath"
+            FROM person
+            LEFT JOIN asset_face af ON af."personId" = person.id
+                AND af."deletedAt" IS NULL
+                AND af."isVisible" = TRUE
+            GROUP BY person.id
+            HAVING COUNT(af.id) = 0
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn delete_by_ids(pool: &Pool<Postgres>, ids: &[Uuid]) -> Result<(), sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(r#"DELETE FROM person WHERE id = ANY($1)"#)
+        .bind(ids)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 #[derive(Debug, FromRow)]
@@ -254,6 +386,95 @@ pub async fn create(
     .bind(color)
     .fetch_one(pool)
     .await
+}
+
+pub async fn create_with_id(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+    owner_id: &Uuid,
+    name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO person (id, "ownerId", name)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind(id)
+    .bind(owner_id)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_distinct_names(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+) -> Result<Vec<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT DISTINCT ON (LOWER(name)) id, name
+        FROM person
+        WHERE "ownerId" = $1
+        ORDER BY LOWER(name), "createdAt" ASC
+        "#,
+    )
+    .bind(owner_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn set_face_asset_id(
+    pool: &Pool<Postgres>,
+    person_id: &Uuid,
+    face_asset_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(r#"UPDATE person SET "faceAssetId" = $2 WHERE id = $1"#)
+        .bind(person_id)
+        .bind(face_asset_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn create_for_detected_face(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    face_id: &Uuid,
+) -> Result<PersonRow, sqlx::Error> {
+    sqlx::query_as::<_, PersonRow>(&format!(
+        r#"
+            INSERT INTO person ("ownerId", "faceAssetId")
+            VALUES ($1, $2)
+            RETURNING {PERSON_SELECT}
+        "#
+    ))
+    .bind(owner_id)
+    .bind(face_id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn unassign_ml_faces(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"UPDATE asset_face SET "personId" = NULL WHERE "sourceType" = 'machine-learning'"#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn vacuum_faces(pool: &Pool<Postgres>, reindex_vectors: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("VACUUM ANALYZE asset_face, face_search, person")
+        .execute(pool)
+        .await?;
+    sqlx::query("REINDEX TABLE asset_face").execute(pool).await?;
+    sqlx::query("REINDEX TABLE person").execute(pool).await?;
+    if reindex_vectors {
+        sqlx::query("REINDEX TABLE face_search").execute(pool).await?;
+    }
+    Ok(())
 }
 
 pub async fn update(

@@ -1,6 +1,6 @@
-const TRIGGER_ASSET_CREATE: &str = "AssetCreate";
-const TRIGGER_ASSET_METADATA: &str = "AssetMetadataExtraction";
-const TYPE_ASSET_V1: &str = "AssetV1";
+pub const TRIGGER_ASSET_CREATE: &str = "AssetCreate";
+pub const TRIGGER_ASSET_METADATA: &str = "AssetMetadataExtraction";
+pub const TYPE_ASSET_V1: &str = "AssetV1";
 
 pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
     vec![

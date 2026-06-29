@@ -17,6 +17,9 @@ use crate::models::db::asset_ocr;
 use crate::models::db::face;
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::{EntityJob, JobService};
+use crate::service::media::ffmpeg_tonemap::{
+    append_video_thumbnail_input_args, build_video_thumbnail_vf, VideoThumbnailStream,
+};
 use crate::service::media::edits::{
     apply_edits, apply_exif_orientation, face_crop_from_bbox, output_dimensions, parse_crop,
 };
@@ -25,6 +28,7 @@ use crate::service::media::visibility::{
     visible_ocr_search_text, BoundingBox, FaceForVisibility, OcrForVisibility,
 };
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::json_str;
 
 const FACE_THUMBNAIL_SIZE: u32 = 250;
 const JOBS_BATCH_SIZE: usize = 1000;
@@ -574,6 +578,16 @@ impl ThumbnailService {
         Ok(config)
     }
 
+    async fn load_ffmpeg_tonemap(&self) -> Result<String, String> {
+        let stored = get_json(&self.pool, "system-config")
+            .await
+            .map_err(|err| err.to_string())?;
+        let ffmpeg = stored
+            .and_then(|value| value.get("ffmpeg").cloned())
+            .unwrap_or_default();
+        Ok(json_str(&ffmpeg, &["tonemap"], "hable"))
+    }
+
     async fn generate_edited_image_derivatives(
         &self,
         asset: &ThumbnailAssetJob,
@@ -765,12 +779,36 @@ impl ThumbnailService {
             return Ok(ThumbnailJobOutcome::Failed);
         }
 
+        let tonemap = self.load_ffmpeg_tonemap().await?;
+        let video_ctx = if asset.asset_type == "VIDEO" {
+            let (Some(video_index), Some(codec_name)) =
+                (asset.video_index, asset.video_codec_name.clone())
+            else {
+                return Ok(ThumbnailJobOutcome::Failed);
+            };
+            Some(VideoThumbnailContext {
+                tonemap,
+                stream: VideoThumbnailStream {
+                    video_index,
+                    codec_name,
+                    pixel_format: asset.pixel_format.clone(),
+                    color_primaries: asset.color_primaries.unwrap_or(2),
+                    color_transfer: asset.color_transfer.unwrap_or(2),
+                    color_matrix: asset.color_matrix.unwrap_or(2),
+                    format_name: asset.format_name.clone(),
+                },
+            })
+        } else {
+            None
+        };
+
         render_with_ffmpeg(
             &asset.original_path,
             &preview_path,
             config.preview_size,
             &config.preview_format,
             config.preview_quality,
+            video_ctx.as_ref(),
         )
         .await?;
         render_with_ffmpeg(
@@ -779,6 +817,7 @@ impl ThumbnailService {
             config.thumbnail_size,
             &config.thumbnail_format,
             config.thumbnail_quality,
+            video_ctx.as_ref(),
         )
         .await?;
 
@@ -945,8 +984,14 @@ async fn extract_with_ffmpeg(input: &str, size: u32) -> Result<DynamicImage, Str
         .tempfile()
         .map_err(|err| err.to_string())?;
     let temp_path = temp.path().to_path_buf();
-    render_with_ffmpeg(input, &temp_path, size, "png", 90).await?;
+    render_with_ffmpeg(input, &temp_path, size, "png", 90, None).await?;
     decode_image_path(temp_path.to_str().unwrap()).await
+}
+
+#[derive(Debug, Clone)]
+struct VideoThumbnailContext {
+    tonemap: String,
+    stream: VideoThumbnailStream,
 }
 
 async fn render_with_ffmpeg(
@@ -955,41 +1000,63 @@ async fn render_with_ffmpeg(
     size: u32,
     format: &str,
     quality: u8,
+    video: Option<&VideoThumbnailContext>,
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
 
-    let vf = format!("scale={size}:{size}:force_original_aspect_ratio=decrease");
-    let mut command = Command::new("ffmpeg");
-    command
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-y")
-        .arg("-autorotate")
-        .arg("1")
-        .arg("-i")
-        .arg(input)
-        .arg("-vf")
-        .arg(vf)
-        .arg("-frames:v")
-        .arg("1");
+    let vf = if let Some(video) = video {
+        build_video_thumbnail_vf(&video.tonemap, &video.stream, size)
+    } else {
+        format!("scale={size}:{size}:force_original_aspect_ratio=decrease")
+    };
+
+    let mut args = vec![
+        "ffmpeg".into(),
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+    ];
+
+    if let Some(video) = video {
+        append_video_thumbnail_input_args(&mut args, &video.stream);
+    }
+
+    args.extend([
+        "-autorotate".into(),
+        "1".into(),
+        "-i".into(),
+        input.into(),
+        "-vf".into(),
+        vf,
+        "-frames:v".into(),
+        "1".into(),
+        "-fps_mode".into(),
+        "vfr".into(),
+    ]);
 
     match format {
         "webp" => {
-            command.arg("-c:v").arg("libwebp").arg("-quality").arg(quality.to_string());
+            args.extend([
+                "-c:v".into(),
+                "libwebp".into(),
+                "-quality".into(),
+                quality.to_string(),
+            ]);
         }
         "jpeg" | "jpg" => {
-            command.arg("-q:v").arg(map_jpeg_quality(quality).to_string());
+            args.extend(["-q:v".into(), map_jpeg_quality(quality).to_string()]);
         }
         "png" => {}
         _ => {
-            command.arg("-q:v").arg(map_jpeg_quality(quality).to_string());
+            args.extend(["-q:v".into(), map_jpeg_quality(quality).to_string()]);
         }
     }
 
-    command.arg("-update").arg("1").arg(output);
+    args.extend(["-update".into(), "1".into(), output.to_string_lossy().into_owned()]);
 
-    let output_result = command
+    let output_result = Command::new(&args[0])
+        .args(&args[1..])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()

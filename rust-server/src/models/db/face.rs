@@ -258,6 +258,34 @@ pub async fn get_asset_scale_for_face(
 }
 
 #[derive(Debug, sqlx::FromRow)]
+pub struct AssetForFacesRow {
+    pub exif_image_width: Option<i32>,
+    pub exif_image_height: Option<i32>,
+    pub orientation: Option<String>,
+}
+
+pub async fn get_asset_for_faces(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<Option<AssetForFacesRow>, sqlx::Error> {
+    sqlx::query_as::<_, AssetForFacesRow>(
+        r#"
+        SELECT
+            e."exifImageWidth" AS exif_image_width,
+            e."exifImageHeight" AS exif_image_height,
+            e.orientation
+        FROM asset a
+        INNER JOIN asset_exif e ON e."assetId" = a.id
+        WHERE a.id = $1
+          AND a."deletedAt" IS NULL
+        "#,
+    )
+    .bind(asset_id)
+    .fetch_optional(pool)
+    .await
+}
+
+#[derive(Debug, sqlx::FromRow)]
 pub struct FaceVisibilityRow {
     pub id: Uuid,
     pub bounding_box_x1: f32,
@@ -333,5 +361,154 @@ pub async fn update_visibilities(
     }
 
     tx.commit().await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct NewMlFace<'a> {
+    pub id: Uuid,
+    pub asset_id: Uuid,
+    pub image_width: i32,
+    pub image_height: i32,
+    pub bounding_box_x1: i32,
+    pub bounding_box_y1: i32,
+    pub bounding_box_x2: i32,
+    pub bounding_box_y2: i32,
+    pub embedding: &'a str,
+}
+
+pub async fn delete_ml_faces(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"DELETE FROM asset_face WHERE "sourceType" = 'machine-learning'"#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct NewExifFace {
+    pub id: Uuid,
+    pub person_id: Uuid,
+    pub asset_id: Uuid,
+    pub image_width: i32,
+    pub image_height: i32,
+    pub bounding_box_x1: i32,
+    pub bounding_box_y1: i32,
+    pub bounding_box_x2: i32,
+    pub bounding_box_y2: i32,
+}
+
+pub async fn refresh_exif_faces(
+    pool: &Pool<Postgres>,
+    faces_to_add: &[NewExifFace],
+    face_ids_to_remove: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    for face in faces_to_add {
+        sqlx::query(
+            r#"
+            INSERT INTO asset_face (
+                id, "assetId", "personId", "imageWidth", "imageHeight",
+                "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2",
+                "sourceType"
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'exif')
+            "#,
+        )
+        .bind(face.id)
+        .bind(face.asset_id)
+        .bind(face.person_id)
+        .bind(face.image_width)
+        .bind(face.image_height)
+        .bind(face.bounding_box_x1)
+        .bind(face.bounding_box_y1)
+        .bind(face.bounding_box_x2)
+        .bind(face.bounding_box_y2)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if !face_ids_to_remove.is_empty() {
+        sqlx::query(r#"DELETE FROM asset_face WHERE id = ANY($1)"#)
+            .bind(face_ids_to_remove)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn refresh_ml_faces(
+    pool: &Pool<Postgres>,
+    faces_to_add: &[NewMlFace<'_>],
+    face_ids_to_remove: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    for face in faces_to_add {
+        sqlx::query(
+            r#"
+                INSERT INTO asset_face (
+                    id, "assetId", "imageWidth", "imageHeight",
+                    "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2",
+                    "sourceType"
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'machine-learning')
+            "#,
+        )
+        .bind(face.id)
+        .bind(face.asset_id)
+        .bind(face.image_width)
+        .bind(face.image_height)
+        .bind(face.bounding_box_x1)
+        .bind(face.bounding_box_y1)
+        .bind(face.bounding_box_x2)
+        .bind(face.bounding_box_y2)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+                INSERT INTO face_search ("faceId", embedding)
+                VALUES ($1, $2::vector)
+                ON CONFLICT ("faceId") DO UPDATE SET embedding = EXCLUDED.embedding
+            "#,
+        )
+        .bind(face.id)
+        .bind(face.embedding)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if !face_ids_to_remove.is_empty() {
+        sqlx::query(r#"DELETE FROM asset_face WHERE id = ANY($1)"#)
+            .bind(face_ids_to_remove)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn upsert_face_embedding(
+    pool: &Pool<Postgres>,
+    face_id: &Uuid,
+    embedding: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            INSERT INTO face_search ("faceId", embedding)
+            VALUES ($1, $2::vector)
+            ON CONFLICT ("faceId") DO UPDATE SET embedding = EXCLUDED.embedding
+        "#,
+    )
+    .bind(face_id)
+    .bind(embedding)
+    .execute(pool)
+    .await?;
     Ok(())
 }

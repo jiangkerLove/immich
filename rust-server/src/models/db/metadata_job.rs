@@ -6,6 +6,9 @@ use uuid::Uuid;
 pub struct MetadataExtractionAsset {
     pub id: Uuid,
     pub owner_id: Uuid,
+    pub library_id: Option<Uuid>,
+    pub live_photo_video_id: Option<Uuid>,
+    pub is_external: bool,
     pub asset_type: String,
     pub original_path: String,
     pub original_file_name: String,
@@ -98,6 +101,9 @@ pub async fn get_for_metadata_extraction(
         SELECT
             asset.id,
             asset."ownerId" AS owner_id,
+            asset."libraryId" AS library_id,
+            asset."livePhotoVideoId" AS live_photo_video_id,
+            asset."isExternal" AS is_external,
             asset.type AS asset_type,
             asset."originalPath" AS original_path,
             asset."originalFileName" AS original_file_name,
@@ -126,6 +132,9 @@ pub async fn get_for_metadata_extraction(
     Ok(row.map(|row| MetadataExtractionAsset {
         id: row.id,
         owner_id: row.owner_id,
+        library_id: row.library_id,
+        live_photo_video_id: row.live_photo_video_id,
+        is_external: row.is_external,
         asset_type: row.asset_type,
         original_path: row.original_path,
         original_file_name: row.original_file_name,
@@ -363,10 +372,145 @@ pub async fn upsert_metadata(
     Ok(())
 }
 
+pub async fn find_live_photo_match(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    library_id: Option<&Uuid>,
+    other_asset_id: &Uuid,
+    live_photo_cid: &str,
+    asset_type: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let row: Option<Uuid> = if let Some(library_id) = library_id {
+        sqlx::query_scalar(
+            r#"
+            SELECT asset.id
+            FROM asset
+            INNER JOIN asset_exif ON asset_exif."assetId" = asset.id
+            WHERE asset.id != $1
+              AND asset."ownerId" = $2
+              AND asset."libraryId" = $3
+              AND asset.type = $4
+              AND asset_exif."livePhotoCID" = $5
+              AND asset."deletedAt" IS NULL
+            LIMIT 1
+            "#,
+        )
+        .bind(other_asset_id)
+        .bind(owner_id)
+        .bind(library_id)
+        .bind(asset_type)
+        .bind(live_photo_cid)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            r#"
+            SELECT asset.id
+            FROM asset
+            INNER JOIN asset_exif ON asset_exif."assetId" = asset.id
+            WHERE asset.id != $1
+              AND asset."ownerId" = $2
+              AND asset."libraryId" IS NULL
+              AND asset.type = $3
+              AND asset_exif."livePhotoCID" = $4
+              AND asset."deletedAt" IS NULL
+            LIMIT 1
+            "#,
+        )
+        .bind(other_asset_id)
+        .bind(owner_id)
+        .bind(asset_type)
+        .bind(live_photo_cid)
+        .fetch_optional(pool)
+        .await?
+    };
+    Ok(row)
+}
+
+pub async fn sync_asset_tags_from_exif(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    asset_id: &Uuid,
+    tag_names: &[String],
+) -> Result<(), sqlx::Error> {
+    let mut tag_ids = Vec::new();
+    for tag_name in tag_names {
+        let parts: Vec<&str> = tag_name.split('/').filter(|part| !part.is_empty()).collect();
+        let mut parent_id: Option<Uuid> = None;
+        let mut last_tag_id: Option<Uuid> = None;
+        for part in parts {
+            let value = if let Some(parent) = parent_id {
+                let parent_value: String = sqlx::query_scalar(
+                    r#"SELECT value FROM tag WHERE id = $1"#,
+                )
+                .bind(parent)
+                .fetch_one(pool)
+                .await?;
+                format!("{parent_value}/{part}")
+            } else {
+                part.to_string()
+            };
+
+            let tag_id: Uuid = if let Some(existing) = sqlx::query_scalar(
+                r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#,
+            )
+            .bind(owner_id)
+            .bind(&value)
+            .fetch_optional(pool)
+            .await?
+            {
+                existing
+            } else {
+                sqlx::query_scalar(
+                    r#"
+                    INSERT INTO tag ("userId", value, "parentId")
+                    VALUES ($1, $2, $3)
+                    RETURNING id
+                    "#,
+                )
+                .bind(owner_id)
+                .bind(&value)
+                .bind(parent_id)
+                .fetch_one(pool)
+                .await?
+            };
+            parent_id = Some(tag_id);
+            last_tag_id = Some(tag_id);
+        }
+        if let Some(tag_id) = last_tag_id {
+            tag_ids.push(tag_id);
+        }
+    }
+
+    sqlx::query(r#"DELETE FROM tag_asset WHERE "assetId" = $1"#)
+        .bind(asset_id)
+        .execute(pool)
+        .await?;
+
+    for tag_id in tag_ids {
+        sqlx::query(
+            r#"
+            INSERT INTO tag_asset ("tagId", "assetId")
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(tag_id)
+        .bind(asset_id)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, FromRow)]
 struct MetadataExtractionQueryRow {
     id: Uuid,
     owner_id: Uuid,
+    library_id: Option<Uuid>,
+    live_photo_video_id: Option<Uuid>,
+    is_external: bool,
     asset_type: String,
     original_path: String,
     original_file_name: String,

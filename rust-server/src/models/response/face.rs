@@ -1,8 +1,10 @@
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::models::db::asset_edit::AssetEditRow;
 use crate::models::db::face::AssetFaceWithPersonRow;
 use crate::models::response::search::PersonResponse;
+use crate::utils::transform::{transform_face_bounding_box, FaceBoundingBox, ImageDimensions};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,14 +22,47 @@ pub struct AssetFaceResponse {
 }
 
 pub fn map_asset_face(row: &AssetFaceWithPersonRow, auth_user_id: &Uuid) -> AssetFaceResponse {
+    map_asset_face_with_edits(row, auth_user_id, &[], ImageDimensions { width: 0, height: 0 })
+}
+
+pub fn map_asset_face_with_edits(
+    row: &AssetFaceWithPersonRow,
+    auth_user_id: &Uuid,
+    edits: &[AssetEditRow],
+    image_dimensions: ImageDimensions,
+) -> AssetFaceResponse {
+    let bbox = if edits.is_empty() {
+        FaceBoundingBox {
+            bounding_box_x1: row.bounding_box_x1,
+            bounding_box_y1: row.bounding_box_y1,
+            bounding_box_x2: row.bounding_box_x2,
+            bounding_box_y2: row.bounding_box_y2,
+            image_width: row.image_width,
+            image_height: row.image_height,
+        }
+    } else {
+        transform_face_bounding_box(
+            FaceBoundingBox {
+                bounding_box_x1: row.bounding_box_x1,
+                bounding_box_y1: row.bounding_box_y1,
+                bounding_box_x2: row.bounding_box_x2,
+                bounding_box_y2: row.bounding_box_y2,
+                image_width: row.image_width,
+                image_height: row.image_height,
+            },
+            edits,
+            image_dimensions,
+        )
+    };
+
     AssetFaceResponse {
         id: row.id,
-        image_height: row.image_height,
-        image_width: row.image_width,
-        bounding_box_x1: row.bounding_box_x1,
-        bounding_box_x2: row.bounding_box_x2,
-        bounding_box_y1: row.bounding_box_y1,
-        bounding_box_y2: row.bounding_box_y2,
+        image_height: bbox.image_height,
+        image_width: bbox.image_width,
+        bounding_box_x1: bbox.bounding_box_x1,
+        bounding_box_x2: bbox.bounding_box_x2,
+        bounding_box_y1: bbox.bounding_box_y1,
+        bounding_box_y2: bbox.bounding_box_y2,
         source_type: Some(row.source_type.clone()),
         person: map_face_person(row, auth_user_id),
     }

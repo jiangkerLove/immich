@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
@@ -6,12 +7,13 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::assets;
+use crate::models::db::move_history;
 use crate::models::db::storage_template_job::{self, StorageTemplateAsset};
 use crate::models::db::system_metadata::get_json;
 use crate::models::db::users::UserDb;
 use crate::service::job::{EntityJob, JobService};
-use crate::utils::checksum::sha1_bytes;
 use crate::utils::storage::StoragePaths;
+use crate::utils::storage_move::{move_file, MoveFileOptions, MoveFileOutcome};
 
 const LUXON_TOKENS: &[&str] = &[
     "s", "ss", "SSS", "m", "mm", "d", "dd", "W", "WW", "h", "hh", "H", "HH", "y", "yy", "M", "MM", "MMM", "MMMM",
@@ -126,6 +128,105 @@ impl StorageTemplateService {
         Ok(StorageTemplateOutcome::Success)
     }
 
+    pub async fn migrate_all(&self) -> Result<StorageTemplateOutcome, String> {
+        let config = get_json(&self.pool, "system-config")
+            .await
+            .map_err(|err| err.to_string())?;
+        let template_cfg = config
+            .as_ref()
+            .and_then(|value| value.get("storageTemplate"));
+        let enabled = template_cfg
+            .and_then(|value| value.get("enabled"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if !enabled {
+            return Ok(StorageTemplateOutcome::Skipped);
+        }
+
+        let template = template_cfg
+            .and_then(|value| value.get("template"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("{{y}}/{{y}}-{{MM}}-{{dd}}/{{filename}}");
+        let hash_verification = template_cfg
+            .and_then(|value| value.get("hashVerificationEnabled"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+
+        move_history::clean_move_history(&self.pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let assets = storage_template_job::stream_for_storage_template_job(&self.pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let mut storage_labels: HashMap<Uuid, Option<String>> = HashMap::new();
+
+        for asset in assets {
+            let storage_label = self
+                .storage_label_for_owner(&mut storage_labels, &asset.owner_id)
+                .await?;
+
+            let filename = if asset.original_file_name.is_empty() {
+                asset.id.to_string()
+            } else {
+                asset.original_file_name.clone()
+            };
+
+            self.move_asset(
+                &asset,
+                storage_label.as_deref(),
+                &filename,
+                None,
+                template,
+                hash_verification,
+            )
+            .await?;
+
+            if let Some(motion_id) = asset.live_photo_video_id {
+                let Some(motion_asset) =
+                    storage_template_job::get_for_storage_template_job(&self.pool, &motion_id, true)
+                        .await
+                        .map_err(|err| err.to_string())?
+                else {
+                    continue;
+                };
+                let motion_filename =
+                    live_photo_motion_filename(&filename, &motion_asset.original_path);
+                self.move_asset(
+                    &motion_asset,
+                    storage_label.as_deref(),
+                    &motion_filename,
+                    Some(&asset),
+                    template,
+                    hash_verification,
+                )
+                .await?;
+            }
+        }
+
+        StoragePaths::remove_empty_dirs(&self.storage.library_base(), false)
+            .await?;
+
+        Ok(StorageTemplateOutcome::Success)
+    }
+
+    async fn storage_label_for_owner(
+        &self,
+        cache: &mut HashMap<Uuid, Option<String>>,
+        owner_id: &Uuid,
+    ) -> Result<Option<String>, String> {
+        if let Some(label) = cache.get(owner_id) {
+            return Ok(label.clone());
+        }
+
+        let label = UserDb::select_full_by_id(&self.pool, owner_id)
+            .await
+            .map_err(|err| err.to_string())?
+            .and_then(|user| user.storage_label);
+        cache.insert(*owner_id, label.clone());
+        Ok(label)
+    }
+
     async fn move_asset(
         &self,
         asset: &StorageTemplateAsset,
@@ -156,16 +257,8 @@ impl StorageTemplateService {
             return Ok(());
         }
 
-        move_path(
-            &self.pool,
-            Some(asset_id_ref(asset)),
-            &old_path,
-            &new_path,
-            file_size,
-            &asset.checksum,
-            hash_verification,
-        )
-        .await?;
+        self.move_original_file(asset, &old_path, &new_path, file_size, hash_verification)
+            .await?;
 
         if let Some(sidecar_path) = assets::get_asset_file_path(&self.pool, &asset.id, "sidecar")
             .await
@@ -173,20 +266,66 @@ impl StorageTemplateService {
         {
             let sidecar_new = format!("{new_path}.xmp");
             if sidecar_path != sidecar_new {
-                move_path(
+                let outcome = move_file(
                     &self.pool,
-                    None,
-                    &sidecar_path,
-                    &sidecar_new,
-                    0,
-                    &[],
-                    false,
+                    MoveFileOptions {
+                        entity_id: asset.id,
+                        path_type: "sidecar".to_string(),
+                        old_path: Some(sidecar_path.clone()),
+                        new_path: sidecar_new.clone(),
+                        expected_size: None,
+                        expected_checksum: None,
+                        hash_verification: false,
+                    },
                 )
                 .await?;
-                assets::upsert_sidecar_file(&self.pool, &asset.id, &sidecar_new)
+
+                if outcome == MoveFileOutcome::Completed {
+                    assets::upsert_sidecar_file(&self.pool, &asset.id, &sidecar_new)
+                        .await
+                        .map_err(|err| err.to_string())?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn move_original_file(
+        &self,
+        asset: &StorageTemplateAsset,
+        old_path: &str,
+        new_path: &str,
+        file_size: i64,
+        hash_verification: bool,
+    ) -> Result<(), String> {
+        if !path_exists(old_path).await {
+            if path_exists(new_path).await {
+                storage_template_job::update_original_path(&self.pool, &asset.id, new_path)
                     .await
                     .map_err(|err| err.to_string())?;
             }
+            return Ok(());
+        }
+
+        let outcome = move_file(
+            &self.pool,
+            MoveFileOptions {
+                entity_id: asset.id,
+                path_type: "original".to_string(),
+                old_path: Some(old_path.to_string()),
+                new_path: new_path.to_string(),
+                expected_size: Some(file_size),
+                expected_checksum: Some(asset.checksum.clone()),
+                hash_verification,
+            },
+        )
+        .await?;
+
+        if outcome == MoveFileOutcome::Completed {
+            storage_template_job::update_original_path(&self.pool, &asset.id, new_path)
+                .await
+                .map_err(|err| err.to_string())?;
         }
 
         Ok(())
@@ -274,10 +413,6 @@ impl StorageTemplateService {
 
         Ok(destination)
     }
-}
-
-fn asset_id_ref(asset: &StorageTemplateAsset) -> &Uuid {
-    &asset.id
 }
 
 fn render_template(
@@ -377,92 +512,6 @@ async fn get_album_name(
     .map_err(|err| err.to_string())
 }
 
-async fn move_path(
-    pool: &PgPool,
-    asset_id: Option<&Uuid>,
-    old_path: &str,
-    new_path: &str,
-    expected_size: i64,
-    expected_checksum: &[u8],
-    hash_verification: bool,
-) -> Result<(), String> {
-    if old_path == new_path {
-        return Ok(());
-    }
-
-    if !Path::new(old_path).exists() {
-        if Path::new(new_path).exists() {
-            if let Some(asset_id) = asset_id {
-                storage_template_job::update_original_path(pool, asset_id, new_path)
-                    .await
-                    .map_err(|err| err.to_string())?;
-            }
-        }
-        return Ok(());
-    }
-
-    if let Some(parent) = Path::new(new_path).parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|err| err.to_string())?;
-    }
-
-    match tokio::fs::rename(old_path, new_path).await {
-        Ok(()) => {}
-        Err(err) if is_cross_device_error(&err) => {
-            tokio::fs::copy(old_path, new_path)
-                .await
-                .map_err(|err| err.to_string())?;
-            if !verify_moved_file(new_path, expected_size, expected_checksum, hash_verification).await?
-            {
-                let _ = tokio::fs::remove_file(new_path).await;
-                return Err(format!(
-                    "storage template: verification failed for {old_path} -> {new_path}"
-                ));
-            }
-            let _ = tokio::fs::remove_file(old_path).await;
-        }
-        Err(err) => return Err(err.to_string()),
-    }
-
-    if let Some(asset_id) = asset_id {
-        storage_template_job::update_original_path(pool, asset_id, new_path)
-            .await
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-async fn verify_moved_file(
-    new_path: &str,
-    expected_size: i64,
-    expected_checksum: &[u8],
-    hash_verification: bool,
-) -> Result<bool, String> {
-    if expected_size > 0 {
-        let new_meta = tokio::fs::metadata(new_path)
-            .await
-            .map_err(|err| err.to_string())?;
-        if new_meta.len() as i64 != expected_size {
-            return Ok(false);
-        }
-    }
-
-    if hash_verification && !expected_checksum.is_empty() {
-        let new_checksum = sha1_file(new_path).await?;
-        if new_checksum != expected_checksum {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
-}
-
-async fn sha1_file(path: &str) -> Result<Vec<u8>, String> {
-    let bytes = tokio::fs::read(path).await.map_err(|err| err.to_string())?;
-    Ok(sha1_bytes(&bytes))
-}
-
 async fn path_exists(path: &str) -> bool {
     tokio::fs::metadata(path).await.is_ok()
 }
@@ -470,10 +519,6 @@ async fn path_exists(path: &str) -> bool {
 fn is_android_motion_path(storage: &StoragePaths, original_path: &str) -> bool {
     let base = normalize_path_string(&storage.encoded_video_base());
     normalize_path_string(Path::new(original_path)).starts_with(&base)
-}
-
-fn is_cross_device_error(err: &std::io::Error) -> bool {
-    matches!(err.raw_os_error(), Some(18) | Some(17))
 }
 
 fn live_photo_motion_filename(still_name: &str, motion_path: &str) -> String {

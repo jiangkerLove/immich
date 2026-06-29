@@ -168,6 +168,7 @@ impl LibraryService {
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_admin(auth)?;
         self.find_or_fail(id).await?;
+        crate::service::library_watcher::request_unwatch(*id);
         library::soft_delete(&self.pool, id).await?;
         self.jobs.queue_library_delete(id).await
     }

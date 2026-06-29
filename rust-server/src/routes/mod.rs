@@ -18,7 +18,8 @@ pub mod system_metadata;
 pub mod person;
 pub mod partner;
 pub mod stack;
-pub mod stubs;
+pub mod static_web;
+pub mod maintenance_worker;
 pub mod sync;
 pub mod tag;
 pub mod search;
@@ -91,5 +92,4 @@ pub fn protected_router() -> Router<AppState> {
         .merge(database_backup::protected_router())
         .merge(plugin::router())
         .merge(workflow::router())
-        .merge(stubs::router())
 }

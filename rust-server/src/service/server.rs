@@ -9,13 +9,20 @@ use tokio::sync::OnceCell;
 
 use crate::constants::SERVER_VERSION;
 use crate::models::db::system_metadata;
-use crate::service::hls::{is_maintenance_mode, is_realtime_transcoding_enabled};
+use crate::service::hls::is_maintenance_mode;
 use crate::models::db::version_history;
 use crate::models::dto::env::EnvDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::bytes::as_human_readable;
 use crate::utils::disk::check_disk_usage;
+use crate::utils::mime_types::{
+    supported_image_extensions, supported_sidecar_extensions, supported_video_extensions,
+};
 use crate::utils::response::json_response;
+use crate::utils::system_config::{
+    get_merged, is_duplicate_detection_enabled, is_facial_recognition_enabled, is_ocr_enabled,
+    is_smart_search_enabled, json_bool, json_i32, json_str,
+};
 
 #[derive(Clone)]
 pub struct ServerBuildConfig {
@@ -66,6 +73,8 @@ pub struct ServerService {
     build_config: ServerBuildConfig,
     tool_versions: std::sync::Arc<OnceCell<ToolVersions>>,
     library_path: PathBuf,
+    config_file: bool,
+    allow_setup: bool,
 }
 
 #[derive(Clone, Default)]
@@ -182,7 +191,6 @@ pub struct ServerConfigResponse {
 pub struct ServerMediaTypesResponse {
     pub image: Vec<String>,
     pub video: Vec<String>,
-    pub audio: Vec<String>,
     pub sidecar: Vec<String>,
 }
 
@@ -249,12 +257,20 @@ pub struct WellKnownApi {
 }
 
 impl ServerService {
-    pub fn new(pool: PgPool, build_config: ServerBuildConfig, library_path: PathBuf) -> Self {
+    pub fn new(
+        pool: PgPool,
+        build_config: ServerBuildConfig,
+        library_path: PathBuf,
+        config_file: bool,
+        allow_setup: bool,
+    ) -> Self {
         Self {
             pool,
             build_config,
             tool_versions: std::sync::Arc::new(OnceCell::new()),
             library_path,
+            config_file,
+            allow_setup,
         }
     }
 
@@ -299,28 +315,32 @@ impl ServerService {
     }
 
     pub async fn get_features(&self) -> Result<ServerFeaturesResponse, ErrorResp> {
-        let realtime_transcoding = is_realtime_transcoding_enabled(&self.pool).await?;
+        let config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
+        let ml = config.get("machineLearning").cloned().unwrap_or_default();
+
         Ok(ServerFeaturesResponse {
-            smart_search: true,
-            facial_recognition: true,
-            duplicate_detection: true,
-            map: true,
-            reverse_geocoding: true,
-            import_faces: false,
+            smart_search: is_smart_search_enabled(&ml),
+            facial_recognition: is_facial_recognition_enabled(&ml),
+            duplicate_detection: is_duplicate_detection_enabled(&ml),
+            map: json_bool(&config, &["map", "enabled"], true),
+            reverse_geocoding: json_bool(&config, &["reverseGeocoding", "enabled"], true),
+            import_faces: json_bool(&config, &["metadata", "faces", "import"], false),
             sidecar: true,
             search: true,
-            trash: true,
-            oauth: false,
-            oauth_auto_launch: false,
-            ocr: false,
-            password_login: true,
-            config_file: false,
-            email: false,
-            realtime_transcoding,
+            trash: json_bool(&config, &["trash", "enabled"], true),
+            oauth: json_bool(&config, &["oauth", "enabled"], false),
+            oauth_auto_launch: json_bool(&config, &["oauth", "autoLaunch"], false),
+            ocr: is_ocr_enabled(&ml),
+            password_login: json_bool(&config, &["passwordLogin", "enabled"], true),
+            config_file: self.config_file,
+            email: json_bool(&config, &["notifications", "smtp", "enabled"], false),
+            realtime_transcoding: json_bool(&config, &["ffmpeg", "realtime", "enabled"], false),
         })
     }
 
     pub async fn get_config(&self) -> Result<ServerConfigResponse, ErrorResp> {
+        let config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
+
         let has_admin: bool = sqlx::query_scalar(
             r#"SELECT EXISTS(SELECT 1 FROM "user" WHERE "isAdmin" = true AND "deletedAt" IS NULL)"#,
         )
@@ -331,18 +351,26 @@ impl ServerService {
         let maintenance_mode = is_maintenance_mode(&self.pool).await?;
 
         Ok(ServerConfigResponse {
-            login_page_message: String::new(),
-            trash_days: 30,
-            user_delete_delay: 7,
-            oauth_button_text: String::new(),
-            is_initialized: has_admin,
+            login_page_message: json_str(&config, &["server", "loginPageMessage"], ""),
+            trash_days: json_i32(&config, &["trash", "days"], 30),
+            user_delete_delay: json_i32(&config, &["user", "deleteDelay"], 7),
+            oauth_button_text: json_str(&config, &["oauth", "buttonText"], "Login with OAuth"),
+            is_initialized: !self.allow_setup || has_admin,
             is_onboarded: admin_onboarding.is_onboarded,
-            external_domain: String::new(),
-            public_users: false,
-            map_dark_style_url: String::new(),
-            map_light_style_url: String::new(),
+            external_domain: json_str(&config, &["server", "externalDomain"], ""),
+            public_users: json_bool(&config, &["server", "publicUsers"], true),
+            map_dark_style_url: json_str(
+                &config,
+                &["map", "darkStyle"],
+                "https://tiles.immich.cloud/v1/style/dark.json",
+            ),
+            map_light_style_url: json_str(
+                &config,
+                &["map", "lightStyle"],
+                "https://tiles.immich.cloud/v1/style/light.json",
+            ),
             maintenance_mode,
-            min_faces: 3,
+            min_faces: json_i32(&config, &["machineLearning", "facialRecognition", "minFaces"], 3),
         })
     }
 
@@ -482,7 +510,7 @@ impl ServerService {
         let license = system_metadata::get_server_license(&self.pool)
             .await
             .map_err(ErrorResp::from)?
-            .ok_or_else(|| ErrorResp::BadRequest("License not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("License not found".to_string()))?;
 
         let activated_at = chrono::DateTime::parse_from_rfc3339(&license.activated_at)
             .map(|value| value.with_timezone(&chrono::Utc))
@@ -561,21 +589,9 @@ impl ServerService {
 
     pub fn get_media_types() -> ServerMediaTypesResponse {
         ServerMediaTypesResponse {
-            image: vec![
-                "image/jpeg".into(),
-                "image/png".into(),
-                "image/webp".into(),
-                "image/gif".into(),
-                "image/heic".into(),
-                "image/heif".into(),
-            ],
-            video: vec![
-                "video/mp4".into(),
-                "video/webm".into(),
-                "video/quicktime".into(),
-            ],
-            audio: vec!["audio/mpeg".into(), "audio/wav".into()],
-            sidecar: vec!["application/xml".into(), "text/xml".into()],
+            image: supported_image_extensions(),
+            video: supported_video_extensions(),
+            sidecar: supported_sidecar_extensions(),
         }
     }
 }

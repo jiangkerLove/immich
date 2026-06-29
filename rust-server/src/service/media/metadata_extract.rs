@@ -14,6 +14,8 @@ use crate::service::job::EntityJob;
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_string_list};
 use crate::service::media::ffprobe::{self, ProbeResult};
+use crate::service::media::metadata_postprocess;
+use crate::utils::storage::StoragePaths;
 
 const JOBS_BATCH_SIZE: usize = 1000;
 
@@ -27,11 +29,12 @@ pub enum MetadataExtractOutcome {
 pub struct MetadataExtractService {
     pool: PgPool,
     jobs: JobService,
+    storage: StoragePaths,
 }
 
 impl MetadataExtractService {
-    pub fn new(pool: PgPool, jobs: JobService) -> Self {
-        Self { pool, jobs }
+    pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
+        Self { pool, jobs, storage }
     }
 
     pub async fn extract_asset_metadata(
@@ -197,7 +200,32 @@ impl MetadataExtractService {
         .await
         .map_err(|err| err.to_string())?;
 
+        metadata_postprocess::run_post_processing(
+            &self.pool,
+            &self.jobs,
+            &self.storage,
+            &asset,
+            &media_tags,
+            &exif,
+            file_size,
+            modify_date,
+            local_date_time,
+        )
+        .await?;
+
         self.queue_follow_up_jobs(job).await?;
+
+        if job.source.as_deref() != Some("sidecar-write") {
+            let _ = crate::service::workflow_trigger::on_asset_trigger(
+                &self.pool,
+                &self.jobs,
+                &asset.owner_id,
+                asset_id,
+                crate::utils::workflow::TRIGGER_ASSET_METADATA,
+            )
+            .await;
+        }
+
         Ok(MetadataExtractOutcome::Success)
     }
 

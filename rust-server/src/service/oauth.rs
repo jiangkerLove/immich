@@ -19,12 +19,14 @@ use crate::models::request::auth::LoginReq;
 use crate::models::response::auth::LoginResp;
 use crate::models::response::response::ErrorResp;
 use crate::models::response::user::UserAdminResponse;
+use crate::service::websocket::WebSocketHub;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
 
 
 #[derive(Clone)]
 pub struct OAuthService {
     pool: PgPool,
+    websocket: WebSocketHub,
 }
 
 #[derive(serde::Deserialize)]
@@ -53,8 +55,8 @@ pub struct OAuthCallbackReq {
 }
 
 impl OAuthService {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, websocket: WebSocketHub) -> Self {
+        Self { pool, websocket }
     }
 
     pub async fn authorize(&self, dto: &OAuthConfigReq) -> Result<OAuthAuthorizeResp, ErrorResp> {
@@ -242,6 +244,12 @@ impl OAuthService {
 
     pub async fn backchannel_logout(&self, logout_token: &str) -> Result<(), ErrorResp> {
         let oauth = self.load_oauth().await?;
+        if !oauth.enabled {
+            return Err(ErrorResp::BadRequest(
+                "Received backchannel logout request but OAuth is not enabled".to_string(),
+            ));
+        }
+
         let claims = self
             .validate_logout_token(&oauth, logout_token)
             .await
@@ -257,12 +265,16 @@ impl OAuthService {
             ));
         }
 
-        SessionPO::invalidate_oauth(
+        let deleted_session_ids = SessionPO::invalidate_oauth(
             &self.pool,
             claims.sid.as_deref(),
             claims.sub.as_deref(),
         )
         .await?;
+
+        for session_id in deleted_session_ids {
+            self.websocket.emit_session_delete(session_id);
+        }
 
         Ok(())
     }
@@ -298,6 +310,13 @@ impl OAuthService {
         let token_data = decode::<LogoutClaims>(logout_token, &decoding_key, &validation)
             .map_err(|err| err.to_string())?;
         let claims = token_data.claims;
+
+        if let Some(issued_at) = claims.iat {
+            let now = chrono::Utc::now().timestamp();
+            if now.saturating_sub(issued_at) > 120 {
+                return Err("Logout token is too old".to_string());
+            }
+        }
 
         if claims
             .events
@@ -471,6 +490,7 @@ struct LogoutClaims {
     sid: Option<String>,
     nonce: Option<String>,
     events: Option<serde_json::Value>,
+    iat: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

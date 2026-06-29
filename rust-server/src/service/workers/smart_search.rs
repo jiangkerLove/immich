@@ -84,7 +84,7 @@ impl JobWorkerStatus {
     }
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto) {
+pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto, concurrency: usize) {
     tokio::spawn(async move {
         let jobs = JobService::new(redis_url.clone());
         let processor = Arc::new(SmartSearchProcessor::new(pool, jobs));
@@ -92,34 +92,34 @@ pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto) {
         let worker = WorkerBuilder::new(QUEUE_SMART_SEARCH)
             .prefix(BULL_PREFIX)
             .connection(RedisConnection::new(redis_url))
-            .concurrency(2)
+            .concurrency(concurrency)
             .build::<Value>();
 
         let handle = worker
             .start(move |job| {
                 let processor = processor.clone();
                 async move {
-                    match processor.process(&job.name, &job.data).await {
-                        Ok(status) if status == JobWorkerStatus::Failed => {
-                            Err(Box::new(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                status.as_str(),
-                            ))
-                                as Box<dyn std::error::Error + Send + Sync>)
+                    {
+                        let job_name = job.name.clone();
+                        crate::service::workers::begin_job(QUEUE_SMART_SEARCH, &job_name);
+                        let result = processor.process(&job_name, &job.data).await;
+                        let failed = matches!(result, Ok(JobWorkerStatus::Failed) | Err(_));
+                        crate::service::workers::end_job(QUEUE_SMART_SEARCH, &job_name, !failed);
+                        match result {
+                            Ok(status) if status == JobWorkerStatus::Failed => {
+                                Err(crate::service::workers::worker_error(status.as_str()))
+                            }
+                            Ok(_) => Ok(()),
+                            Err(err) => Err(crate::service::workers::worker_error(err)),
                         }
-                        Ok(_) => Ok(()),
-                        Err(err) => Err(Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            err,
-                        ))
-                            as Box<dyn std::error::Error + Send + Sync>),
                     }
                 }
             })
             .await;
 
         match handle {
-            Ok(_handle) => {
+            Ok(worker_handle) => {
+                crate::service::worker_registry::register(worker_handle);
                 std::future::pending::<()>().await;
             }
             Err(err) => {

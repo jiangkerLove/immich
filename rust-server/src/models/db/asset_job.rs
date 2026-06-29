@@ -29,6 +29,13 @@ pub struct ThumbnailAssetJob {
     pub projection_type: Option<String>,
     pub exif_image_width: Option<i32>,
     pub exif_image_height: Option<i32>,
+    pub video_index: Option<i32>,
+    pub video_codec_name: Option<String>,
+    pub pixel_format: Option<String>,
+    pub color_primaries: Option<i16>,
+    pub color_transfer: Option<i16>,
+    pub color_matrix: Option<i16>,
+    pub format_name: Option<String>,
     pub files: Vec<AssetFileJobRow>,
     pub edits: Vec<AssetEditRow>,
 }
@@ -65,6 +72,13 @@ pub async fn get_for_generate_thumbnail(
             asset_exif."projectionType" AS projection_type,
             asset_exif."exifImageWidth" AS exif_image_width,
             asset_exif."exifImageHeight" AS exif_image_height,
+            asset_video.index AS video_index,
+            asset_video."codecName" AS video_codec_name,
+            asset_video."pixelFormat" AS pixel_format,
+            asset_video."colorPrimaries" AS color_primaries,
+            asset_video."colorTransfer" AS color_transfer,
+            asset_video."colorMatrix" AS color_matrix,
+            asset_video."formatName" AS format_name,
             COALESCE(
                 (
                     SELECT json_agg(row_to_json(f))
@@ -97,6 +111,7 @@ pub async fn get_for_generate_thumbnail(
             ) AS edits_json
         FROM asset
         LEFT JOIN asset_exif ON asset_exif."assetId" = asset.id
+        LEFT JOIN asset_video ON asset_video."assetId" = asset.id
         WHERE asset.id = $1
           AND asset."deletedAt" IS NULL
           AND asset_exif."assetId" IS NOT NULL
@@ -201,6 +216,13 @@ struct ThumbnailAssetQueryRow {
     projection_type: Option<String>,
     exif_image_width: Option<i32>,
     exif_image_height: Option<i32>,
+    video_index: Option<i32>,
+    video_codec_name: Option<String>,
+    pixel_format: Option<String>,
+    color_primaries: Option<i16>,
+    color_transfer: Option<i16>,
+    color_matrix: Option<i16>,
+    format_name: Option<String>,
     files_json: Value,
     edits_json: Value,
 }
@@ -227,6 +249,13 @@ impl ThumbnailAssetQueryRow {
             projection_type: self.projection_type,
             exif_image_width: self.exif_image_width,
             exif_image_height: self.exif_image_height,
+            video_index: self.video_index,
+            video_codec_name: self.video_codec_name,
+            pixel_format: self.pixel_format,
+            color_primaries: self.color_primaries,
+            color_transfer: self.color_transfer,
+            color_matrix: self.color_matrix,
+            format_name: self.format_name,
             files,
             edits,
         })
@@ -472,7 +501,7 @@ pub struct VideoConversionJob {
     pub frame_count: i64,
     pub frame_rate: Option<f64>,
     pub rotation: i32,
-    pub color_transfer: Option<String>,
+    pub color_transfer: Option<i16>,
     pub format_name: String,
     pub format_long_name: Option<String>,
     pub audio_index: Option<i32>,
@@ -603,7 +632,7 @@ struct VideoConversionQueryRow {
     frame_count: i64,
     frame_rate: Option<f64>,
     rotation: i32,
-    color_transfer: Option<String>,
+    color_transfer: Option<i16>,
     format_name: String,
     format_long_name: Option<String>,
     audio_index: Option<i32>,

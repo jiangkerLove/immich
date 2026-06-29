@@ -185,6 +185,40 @@ pub async fn get_upload_id_by_checksum(
     .await
 }
 
+pub async fn get_by_checksum(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    library_id: Option<&Uuid>,
+    checksum: &[u8],
+) -> Result<Option<Uuid>, sqlx::Error> {
+    if let Some(library_id) = library_id {
+        sqlx::query_scalar(
+            r#"
+            SELECT id FROM asset
+            WHERE "ownerId" = $1 AND "libraryId" = $2 AND checksum = $3
+            LIMIT 1
+            "#,
+        )
+        .bind(owner_id)
+        .bind(library_id)
+        .bind(checksum)
+        .fetch_optional(pool)
+        .await
+    } else {
+        sqlx::query_scalar(
+            r#"
+            SELECT id FROM asset
+            WHERE "ownerId" = $1 AND "libraryId" IS NULL AND checksum = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(owner_id)
+        .bind(checksum)
+        .fetch_optional(pool)
+        .await
+    }
+}
+
 pub async fn get_by_checksums(
     pool: &Pool<Postgres>,
     owner_id: &Uuid,
@@ -248,6 +282,75 @@ pub async fn create_asset(pool: &Pool<Postgres>, asset: NewAsset<'_>) -> Result<
     .await?;
 
     Ok(id)
+}
+
+#[derive(Debug)]
+pub struct NewLibraryAsset<'a> {
+    pub owner_id: Uuid,
+    pub library_id: Uuid,
+    pub asset_type: &'a str,
+    pub original_path: &'a str,
+    pub checksum: &'a [u8],
+    pub file_created_at: DateTime<Utc>,
+    pub file_modified_at: DateTime<Utc>,
+    pub original_file_name: &'a str,
+}
+
+pub async fn create_library_asset(
+    pool: &Pool<Postgres>,
+    asset: NewLibraryAsset<'_>,
+) -> Result<Uuid, sqlx::Error> {
+    let id: Uuid = sqlx::query_scalar(
+        r#"
+            INSERT INTO asset (
+                "ownerId", "libraryId", type, "originalPath", checksum, "checksumAlgorithm",
+                "fileCreatedAt", "fileModifiedAt", "localDateTime",
+                "originalFileName", "isExternal", visibility
+            )
+            VALUES ($1, $2, $3, $4, $5, 'sha1-path', $6, $7, $6, $8, true, 'timeline'::asset_visibility_enum)
+            RETURNING id
+        "#,
+    )
+    .bind(asset.owner_id)
+    .bind(asset.library_id)
+    .bind(asset.asset_type)
+    .bind(asset.original_path)
+    .bind(asset.checksum)
+    .bind(asset.file_created_at)
+    .bind(asset.file_modified_at)
+    .bind(asset.original_file_name)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(id)
+}
+
+pub async fn filter_new_external_paths(
+    pool: &Pool<Postgres>,
+    library_id: &Uuid,
+    paths: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_scalar(
+        r#"
+            SELECT path
+            FROM UNNEST($2::text[]) AS path
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM asset
+                WHERE asset."originalPath" = path
+                  AND asset."libraryId" = $1
+                  AND asset."isExternal" = true
+            )
+        "#,
+    )
+    .bind(library_id)
+    .bind(paths)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn upsert_exif_size(

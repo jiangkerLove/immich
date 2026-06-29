@@ -11,7 +11,14 @@ use crate::models::db::asset_job::{
 };
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::JobService;
+use crate::service::media::ffmpeg_tonemap::should_tone_map_i16;
+use crate::service::media::video_hw_encode::{
+    append_hw_input_options, append_hw_rate_options, build_hw_video_filter, hw_video_encoder,
+    VideoHwConfig,
+};
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::{json_bool, json_str};
+use crate::utils::video_interfaces::detect_video_interfaces;
 
 const JOBS_BATCH_SIZE: usize = 1000;
 
@@ -48,6 +55,8 @@ struct FfmpegConfig {
     transcode: String,
     tonemap: String,
     accel: String,
+    accel_decode: bool,
+    preferred_hw_device: String,
     two_pass: bool,
 }
 
@@ -70,6 +79,8 @@ impl Default for FfmpegConfig {
             transcode: "required".into(),
             tonemap: "hable".into(),
             accel: "disabled".into(),
+            accel_decode: true,
+            preferred_hw_device: "auto".into(),
             two_pass: false,
         }
     }
@@ -115,18 +126,11 @@ impl VideoEncodeService {
             return self.handle_skip_no_transcode(&asset).await;
         }
 
-        if config.accel != "disabled" {
-            eprintln!(
-                "hardware acceleration ({}) is not supported in rust-server video worker; using software encoding for {}",
-                config.accel, asset.id
-            );
-        }
-
         let output = self.storage.encoded_video_path(&asset.owner_id, &asset.id);
         StoragePaths::ensure_parent(&output).map_err(|err| err.to_string())?;
 
-        let args = build_ffmpeg_args(&asset.original_path, &output, target, remux_required, &config, &asset)?;
-        run_ffmpeg(&args).await?;
+        self.transcode_with_fallback(&asset, &output, target, remux_required, &config)
+            .await?;
 
         asset_job::upsert_asset_files(
             &self.pool,
@@ -146,6 +150,67 @@ impl VideoEncodeService {
             .await?;
 
         Ok(VideoEncodeOutcome::Success)
+    }
+
+    async fn transcode_with_fallback(
+        &self,
+        asset: &VideoConversionJob,
+        output: &Path,
+        target: TranscodeTarget,
+        remux_required: bool,
+        config: &FfmpegConfig,
+    ) -> Result<(), String> {
+        let interfaces = detect_video_interfaces();
+        let mut attempt = config.clone();
+        let mut tried_sw_decode = false;
+
+        loop {
+            let args = build_ffmpeg_args(
+                &asset.original_path,
+                output,
+                target,
+                remux_required,
+                &attempt,
+                asset,
+                &interfaces,
+            )?;
+
+            if attempt.accel == "disabled" {
+                eprintln!("Transcoding video {} without hardware acceleration", asset.id);
+            } else {
+                eprintln!(
+                    "Transcoding video {} with {}-accelerated encoding and{} decoding",
+                    asset.id,
+                    attempt.accel.to_uppercase(),
+                    if attempt.accel_decode { "" } else { " software" }
+                );
+            }
+
+            match run_ffmpeg(&args).await {
+                Ok(()) => return Ok(()),
+                Err(err) if attempt.accel != "disabled" => {
+                    eprintln!("Error occurred during transcoding for {}: {err}", asset.id);
+                    if attempt.accel_decode && !tried_sw_decode {
+                        eprintln!(
+                            "Retrying {} with {}-accelerated encoding and software decoding",
+                            asset.id,
+                            attempt.accel.to_uppercase()
+                        );
+                        attempt.accel_decode = false;
+                        tried_sw_decode = true;
+                        continue;
+                    }
+                    eprintln!(
+                        "Retrying {} with hardware acceleration disabled",
+                        asset.id
+                    );
+                    attempt.accel = "disabled".into();
+                    attempt.accel_decode = true;
+                    tried_sw_decode = false;
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     pub async fn queue_all_video_encoding(&self, force: bool) -> Result<(), String> {
@@ -244,6 +309,9 @@ impl VideoEncodeService {
         config.transcode = read_string(&ffmpeg, "transcode", &config.transcode);
         config.tonemap = read_string(&ffmpeg, "tonemap", &config.tonemap);
         config.accel = read_string(&ffmpeg, "accel", &config.accel);
+        config.accel_decode = json_bool(&ffmpeg, &["accelDecode"], config.accel_decode);
+        config.preferred_hw_device =
+            json_str(&ffmpeg, &["preferredHwDevice"], &config.preferred_hw_device);
         config.two_pass = ffmpeg
             .get("twoPass")
             .and_then(|v| v.as_bool())
@@ -366,6 +434,7 @@ fn build_ffmpeg_args(
     remux_required: bool,
     config: &FfmpegConfig,
     asset: &VideoConversionJob,
+    interfaces: &crate::utils::video_interfaces::VideoInterfaces,
 ) -> Result<Vec<String>, String> {
     let effective_target = if target == TranscodeTarget::None && remux_required {
         TranscodeTarget::None
@@ -373,9 +442,27 @@ fn build_ffmpeg_args(
         target
     };
 
+    let use_hw = config.accel != "disabled"
+        && matches!(effective_target, TranscodeTarget::All | TranscodeTarget::Video)
+        && hw_video_encoder(&config.accel, &config.target_video_codec).is_some();
+
     let video_codec = match effective_target {
-        TranscodeTarget::All | TranscodeTarget::Video => ffmpeg_video_encoder(&config.target_video_codec)
-            .ok_or_else(|| format!("unsupported target video codec: {}", config.target_video_codec))?,
+        TranscodeTarget::All | TranscodeTarget::Video => {
+            if use_hw {
+                hw_video_encoder(&config.accel, &config.target_video_codec)
+                    .ok_or_else(|| {
+                        format!(
+                            "{} acceleration does not support codec '{}'",
+                            config.accel.to_uppercase(),
+                            config.target_video_codec.to_uppercase()
+                        )
+                    })?
+            } else {
+                ffmpeg_video_encoder(&config.target_video_codec).ok_or_else(|| {
+                    format!("unsupported target video codec: {}", config.target_video_codec)
+                })?
+            }
+        }
         _ => "copy",
     };
 
@@ -391,8 +478,24 @@ fn build_ffmpeg_args(
         "-loglevel".into(),
         "error".into(),
         "-y".into(),
-        "-i".into(),
-        input.into(),
+    ];
+
+    if use_hw {
+        let hw_config = VideoHwConfig {
+            accel: &config.accel,
+            accel_decode: config.accel_decode,
+            preferred_hw_device: &config.preferred_hw_device,
+            tonemap: &config.tonemap,
+            target_video_codec: &config.target_video_codec,
+            preset: &config.preset,
+            crf: config.crf,
+            max_bitrate: &config.max_bitrate,
+        };
+        append_hw_input_options(&mut args, &hw_config, interfaces)?;
+    }
+
+    args.extend(["-i".into(), input.into()]);
+    args.extend([
         "-c:v".into(),
         video_codec.into(),
         "-c:a".into(),
@@ -401,7 +504,7 @@ fn build_ffmpeg_args(
         format!("0:{}", asset.video_index),
         "-map_metadata".into(),
         "-1".into(),
-    ];
+    ]);
 
     if let Some(audio_index) = asset.audio_index {
         args.push("-map".into());
@@ -422,31 +525,57 @@ fn build_ffmpeg_args(
     }
 
     if matches!(effective_target, TranscodeTarget::All | TranscodeTarget::Video) {
-        if config.threads > 0 {
-            args.push("-threads".into());
-            args.push(config.threads.to_string());
-        }
-        args.push("-preset".into());
-        args.push(config.preset.clone());
-
-        let max_bitrate = parse_bitrate_to_bps(&config.max_bitrate);
-        if max_bitrate > 0 {
-            let unit = bitrate_unit(&config.max_bitrate);
-            let max_k = max_bitrate / if unit == "M" { 1_000_000 } else { 1_000 };
-            args.push("-crf".into());
-            args.push(config.crf.to_string());
-            args.push("-maxrate".into());
-            args.push(format!("{max_k}{unit}"));
-            args.push("-bufsize".into());
-            args.push(format!("{}{}", max_k * 2, unit));
+        if use_hw {
+            let hw_config = VideoHwConfig {
+                accel: &config.accel,
+                accel_decode: config.accel_decode,
+                preferred_hw_device: &config.preferred_hw_device,
+                tonemap: &config.tonemap,
+                target_video_codec: &config.target_video_codec,
+                preset: &config.preset,
+                crf: config.crf,
+                max_bitrate: &config.max_bitrate,
+            };
+            append_hw_rate_options(&mut args, &hw_config);
+            if config.accel == "rkmpp" || config.accel == "nvenc" {
+                args.extend(["-forced-idr".into(), "1".into()]);
+            }
+            if let Some(filter) = build_hw_video_filter(
+                &hw_config,
+                interfaces,
+                asset,
+                target_resolution(config, asset),
+            ) {
+                args.push("-vf".into());
+                args.push(filter);
+            }
         } else {
-            args.push("-crf".into());
-            args.push(config.crf.to_string());
-        }
+            if config.threads > 0 {
+                args.push("-threads".into());
+                args.push(config.threads.to_string());
+            }
+            args.push("-preset".into());
+            args.push(config.preset.clone());
 
-        if let Some(filter) = build_video_filter(config, asset) {
-            args.push("-vf".into());
-            args.push(filter);
+            let max_bitrate = parse_bitrate_to_bps(&config.max_bitrate);
+            if max_bitrate > 0 {
+                let unit = bitrate_unit(&config.max_bitrate);
+                let max_k = max_bitrate / if unit == "M" { 1_000_000 } else { 1_000 };
+                args.push("-crf".into());
+                args.push(config.crf.to_string());
+                args.push("-maxrate".into());
+                args.push(format!("{max_k}{unit}"));
+                args.push("-bufsize".into());
+                args.push(format!("{}{}", max_k * 2, unit));
+            } else {
+                args.push("-crf".into());
+                args.push(config.crf.to_string());
+            }
+
+            if let Some(filter) = build_video_filter(config, asset) {
+                args.push("-vf".into());
+                args.push(filter);
+            }
         }
     }
 
@@ -518,10 +647,7 @@ fn scale_filter(config: &FfmpegConfig, asset: &VideoConversionJob) -> String {
 }
 
 fn should_tone_map(config: &FfmpegConfig, asset: &VideoConversionJob) -> bool {
-    config.tonemap != "disabled"
-        && asset.color_transfer.as_deref().is_some_and(|transfer| {
-            transfer == "smpte2084" || transfer == "arib-std-b67"
-        })
+    should_tone_map_i16(&config.tonemap, asset.color_transfer)
 }
 
 fn ffmpeg_video_encoder(codec: &str) -> Option<&'static str> {

@@ -35,37 +35,38 @@ impl BackupDatabaseProcessor {
     }
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, env: EnvDto) {
+pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, env: EnvDto, concurrency: usize) {
     tokio::spawn(async move {
         let processor = Arc::new(BackupDatabaseProcessor::new(pool, storage, env));
         let worker = WorkerBuilder::new(QUEUE_BACKUP)
             .prefix(BULL_PREFIX)
             .connection(RedisConnection::new(redis_url))
-            .concurrency(1)
+            .concurrency(concurrency)
             .build::<Value>();
 
         let handle = worker
             .start(move |job| {
                 let processor = processor.clone();
                 async move {
-                    match processor.process(&job.name).await {
+                    let job_name = job.name.clone();
+                    crate::service::workers::begin_job(QUEUE_BACKUP, &job_name);
+                    let result = match processor.process(&job_name).await {
                         Ok(()) => Ok(()),
                         Err(err) if matches_unsupported_postgres(&err) => {
                             eprintln!("database backup skipped: {err}");
                             Ok(())
                         }
-                        Err(err) => Err(Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            err,
-                        ))
-                            as Box<dyn std::error::Error + Send + Sync>),
-                    }
+                        Err(err) => Err(err),
+                    };
+                    crate::service::workers::end_job(QUEUE_BACKUP, &job_name, result.is_ok());
+                    result.map_err(crate::service::workers::worker_error)
                 }
             })
             .await;
 
         match handle {
-            Ok(_handle) => {
+            Ok(worker_handle) => {
+                crate::service::worker_registry::register(worker_handle);
                 std::future::pending::<()>().await;
             }
             Err(err) => {

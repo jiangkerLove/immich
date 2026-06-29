@@ -62,7 +62,17 @@ rsa = { version = "0.9", features = ["sha2"] }
 #user_agent_parser
 user-agent-parser = "0.3.6"
 bullmq-rs = "2.2.0"
+cron = "0.15.0"
+semver = "1.0"
 handlebars = "6.2.0"
 socketioxide = { version = "0.18.4", features = ["extensions", "state"] }
 socketioxide-redis = "0.4.1"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+extism = "1.21.0"
+notify = "8.0"
+regex = "1.11"
+libc = "0.2"
+tower-http = { version = "0.6", features = ["fs"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+sysinfo = "0.33"

@@ -10,7 +10,9 @@ use crate::models::response::response::ErrorResp;
 use crate::service::access::{check_album_ids_access, require_album_access};
 use crate::service::db::DbService;
 use crate::service::job::JobService;
+use crate::models::db::user_metadata::UserMetadataPO;
 use crate::utils::permission::require_permission;
+use crate::utils::preferences::resolve_preferences;
 use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
@@ -116,11 +118,20 @@ pub struct GetAlbumsQuery {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateAlbumUserReq {
+    pub user_id: Uuid,
+    pub role: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateAlbumReq {
     pub album_name: String,
     pub description: Option<String>,
     #[serde(default)]
     pub asset_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub album_users: Vec<CreateAlbumUserReq>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -198,6 +209,9 @@ impl AlbumService {
         query: &GetAlbumsQuery,
     ) -> Result<Vec<AlbumResponse>, ErrorResp> {
         require_permission(auth, Permission::AlbumRead)?;
+        album::update_all_album_thumbnails(&self.db.pool)
+            .await
+            .map_err(ErrorResp::from)?;
 
         let album_ids = if let Some(asset_id) = query.asset_id {
             album::list_album_ids_by_asset(&self.db.pool, &auth.user.id, &asset_id).await?
@@ -213,16 +227,20 @@ impl AlbumService {
 
         let mut albums = Vec::with_capacity(album_ids.len());
         for album_id in album_ids {
-            if let Some(id) = query.id {
-                if album_id != id {
-                    continue;
+            if query.asset_id.is_none() {
+                if let Some(id) = query.id {
+                    if album_id != id {
+                        continue;
+                    }
                 }
             }
             albums.push(self.build_response(&auth.user.id, &album_id).await?);
         }
 
-        if let Some(name) = &query.name {
-            albums.retain(|album| album.album_name == *name);
+        if query.asset_id.is_none() {
+            if let Some(name) = &query.name {
+                albums.retain(|album| album.album_name == *name);
+            }
         }
 
         if !albums.is_empty() {
@@ -245,6 +263,9 @@ impl AlbumService {
 
     pub async fn get(&self, auth: &AuthDto, id: &Uuid) -> Result<AlbumResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumRead)?;
+        album::update_all_album_thumbnails(&self.db.pool)
+            .await
+            .map_err(ErrorResp::from)?;
         self.get_accessible(auth, id).await
     }
 
@@ -259,17 +280,51 @@ impl AlbumService {
     pub async fn create(&self, auth: &AuthDto, dto: &CreateAlbumReq) -> Result<AlbumResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumCreate)?;
 
+        let album_users: Vec<_> = dto
+            .album_users
+            .iter()
+            .filter(|user| user.user_id != auth.user.id)
+            .collect();
+
+        for album_user in &album_users {
+            if !album::user_exists(&self.db.pool, &album_user.user_id).await? {
+                return Err(ErrorResp::BadRequest("Invalid user".to_string()));
+            }
+        }
+
+        let elevated = auth
+            .session
+            .as_ref()
+            .is_some_and(|session| session.has_elevated_permission);
+        let allowed_assets: Vec<Uuid> = if dto.asset_ids.is_empty() {
+            vec![]
+        } else {
+            assets::filter_accessible_ids(
+                &self.db.pool,
+                &auth.user.id,
+                &dto.asset_ids,
+                elevated,
+                false,
+            )
+            .await?
+        };
+
+        let default_order = self.default_album_order(&auth.user.id).await?;
+        let thumbnail_id = allowed_assets.first().copied();
+
         let mut tx = self.db.pool.begin().await?;
 
         let album_id: Uuid = sqlx::query_scalar(
             r#"
-                INSERT INTO album ("albumName", description)
-                VALUES ($1, COALESCE($2, ''))
+                INSERT INTO album ("albumName", description, "albumThumbnailAssetId", "order")
+                VALUES ($1, COALESCE($2, ''), $3, $4)
                 RETURNING id
             "#,
         )
         .bind(&dto.album_name)
         .bind(&dto.description)
+        .bind(thumbnail_id)
+        .bind(&default_order)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -281,7 +336,7 @@ impl AlbumService {
         .execute(&mut *tx)
         .await?;
 
-        for asset_id in &dto.asset_ids {
+        for asset_id in &allowed_assets {
             sqlx::query(
                 r#"INSERT INTO album_asset ("albumId", "assetId") VALUES ($1, $2) ON CONFLICT DO NOTHING"#,
             )
@@ -291,7 +346,39 @@ impl AlbumService {
             .await?;
         }
 
+        for album_user in album_users {
+            if album_user.role == "owner" {
+                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+            }
+            let role = album::parse_album_user_role(&album_user.role).ok_or_else(|| {
+                ErrorResp::BadRequest(format!("Invalid album user role: {}", album_user.role))
+            })?;
+            if role == AlbumUserRole::Owner {
+                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+            }
+            sqlx::query(
+                r#"INSERT INTO album_user ("albumId", "userId", role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"#,
+            )
+            .bind(album_id)
+            .bind(album_user.user_id)
+            .bind(role.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+
         tx.commit().await?;
+
+        for album_user in dto
+            .album_users
+            .iter()
+            .filter(|user| user.user_id != auth.user.id)
+        {
+            let _ = self
+                .jobs
+                .queue_notify_album_invite(&album_id, &album_user.user_id, &auth.user.name)
+                .await;
+        }
+
         self.get(auth, &album_id).await
     }
 
@@ -415,6 +502,9 @@ impl AlbumService {
 
         if !new_asset_ids.is_empty() {
             album::add_asset_ids(&self.db.pool, id, &new_asset_ids).await?;
+            album::touch_album_updated_at(&self.db.pool, id)
+                .await
+                .map_err(ErrorResp::from)?;
 
             let thumbnail = album::get_album_thumbnail_asset_id(&self.db.pool, id).await?;
             if thumbnail.is_none() {
@@ -487,6 +577,9 @@ impl AlbumService {
             }
 
             album::add_asset_ids(&self.db.pool, &album_id, &not_present).await?;
+            album::touch_album_updated_at(&self.db.pool, &album_id)
+                .await
+                .map_err(ErrorResp::from)?;
             success = true;
 
             let thumbnail =
@@ -690,20 +783,7 @@ impl AlbumService {
     }
 
     async fn get_accessible(&self, auth: &AuthDto, id: &Uuid) -> Result<AlbumResponse, ErrorResp> {
-        let has_access = album::has_album_access(
-            &self.db.pool,
-            &auth.user.id,
-            id,
-            AlbumAccessLevel::Member,
-        )
-        .await?;
-
-        if !has_access {
-            return Err(ErrorResp::BadRequest(
-                "Not found or no album.read access".to_string(),
-            ));
-        }
-
+        require_album_access(&self.db.pool, auth, id, Permission::AlbumRead).await?;
         self.build_response(&auth.user.id, id).await
     }
 
@@ -794,6 +874,19 @@ impl AlbumService {
                 .await?;
         }
         Ok(())
+    }
+
+    async fn default_album_order(&self, user_id: &Uuid) -> Result<String, ErrorResp> {
+        let stored = UserMetadataPO::get_preferences_json(&self.db.pool, user_id)
+            .await
+            .map_err(ErrorResp::from)?;
+        let prefs = resolve_preferences(stored);
+        Ok(prefs
+            .get("albums")
+            .and_then(|value| value.get("defaultAssetOrder"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("desc")
+            .to_string())
     }
 }
 

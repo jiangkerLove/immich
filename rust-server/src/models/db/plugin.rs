@@ -252,6 +252,15 @@ pub struct PluginMethodJson {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginTemplateStepJson {
+    pub method: String,
+    #[serde(default)]
+    pub config: Option<Value>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginTemplateJson {
     pub name: String,
     pub title: String,
@@ -265,9 +274,174 @@ pub struct PluginTemplateJson {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginTemplateStepJson {
-    pub method: String,
-    #[serde(default)]
-    pub config: Option<Value>,
-    pub enabled: Option<bool>,
+pub struct PluginLoadMethodJson {
+    pub name: String,
+    #[serde(default, alias = "hostFunctions")]
+    pub host_functions: bool,
+}
+
+#[derive(Debug, FromRow)]
+pub struct PluginLoadRow {
+    pub id: Uuid,
+    pub name: String,
+    pub version: String,
+    pub wasm_bytes: Vec<u8>,
+    pub methods: Value,
+}
+
+pub async fn get_for_load(pool: &Pool<Postgres>) -> Result<Vec<PluginLoadRow>, sqlx::Error> {
+    sqlx::query_as::<_, PluginLoadRow>(
+        r#"
+        SELECT
+            plugin.id,
+            plugin.name,
+            plugin.version,
+            plugin."wasmBytes" as wasm_bytes,
+            (
+                SELECT COALESCE(json_agg(agg), '[]'::json)
+                FROM (
+                    SELECT
+                        plugin_method.name,
+                        plugin_method."hostFunctions" as "hostFunctions"
+                    FROM plugin_method
+                    WHERE plugin_method."pluginId" = plugin.id
+                ) AS agg
+            ) AS methods
+        FROM plugin
+        WHERE plugin.enabled = true
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_by_hash(
+    pool: &Pool<Postgres>,
+    sha256hash: &[u8],
+) -> Result<Option<PluginRow>, sqlx::Error> {
+    let query = format!("{PLUGIN_SELECT} WHERE plugin.\"sha256hash\" = $1");
+    sqlx::query_as::<_, PluginRow>(&query)
+        .bind(sha256hash)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn get_by_name(
+    pool: &Pool<Postgres>,
+    name: &str,
+) -> Result<Option<PluginRow>, sqlx::Error> {
+    let query = format!("{PLUGIN_SELECT} WHERE plugin.name = $1");
+    sqlx::query_as::<_, PluginRow>(&query)
+        .bind(name)
+        .fetch_optional(pool)
+        .await
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginUpsertInput {
+    pub name: String,
+    pub version: String,
+    pub title: String,
+    pub description: String,
+    pub author: String,
+    pub wasm_bytes: Vec<u8>,
+    pub templates: Value,
+    pub sha256hash: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginMethodUpsertInput {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub types: Vec<String>,
+    pub host_functions: bool,
+    pub schema: Option<Value>,
+    pub ui_hints: Vec<String>,
+}
+
+pub async fn upsert(
+    pool: &Pool<Postgres>,
+    input: &PluginUpsertInput,
+    methods: &[PluginMethodUpsertInput],
+) -> Result<(Uuid, bool), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let existing = get_by_name(pool, &input.name).await?;
+
+    let plugin_id: Uuid = sqlx::query_scalar(
+        r#"
+        INSERT INTO plugin (
+            enabled, name, version, title, description, author,
+            "wasmBytes", templates, "sha256hash"
+        )
+        VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (name, version) DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            author = EXCLUDED.author,
+            version = EXCLUDED.version,
+            "wasmBytes" = EXCLUDED."wasmBytes",
+            templates = EXCLUDED.templates,
+            "sha256hash" = EXCLUDED."sha256hash",
+            "updatedAt" = NOW()
+        RETURNING id
+        "#,
+    )
+    .bind(&input.name)
+    .bind(&input.version)
+    .bind(&input.title)
+    .bind(&input.description)
+    .bind(&input.author)
+    .bind(&input.wasm_bytes)
+    .bind(&input.templates)
+    .bind(&input.sha256hash)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !methods.is_empty() {
+        let method_names: Vec<&str> = methods.iter().map(|method| method.name.as_str()).collect();
+        sqlx::query(
+            r#"
+            DELETE FROM plugin_method
+            WHERE "pluginId" = $1
+              AND name != ALL($2)
+            "#,
+        )
+        .bind(plugin_id)
+        .bind(&method_names)
+        .execute(&mut *tx)
+        .await?;
+
+        for method in methods {
+            sqlx::query(
+                r#"
+                INSERT INTO plugin_method (
+                    "pluginId", name, title, description, types,
+                    "hostFunctions", schema, "uiHints"
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT ("pluginId", name) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    description = EXCLUDED.description,
+                    types = EXCLUDED.types,
+                    "hostFunctions" = EXCLUDED."hostFunctions",
+                    schema = EXCLUDED.schema,
+                    "uiHints" = EXCLUDED."uiHints"
+                "#,
+            )
+            .bind(plugin_id)
+            .bind(&method.name)
+            .bind(&method.title)
+            .bind(&method.description)
+            .bind(&method.types)
+            .bind(method.host_functions)
+            .bind(&method.schema)
+            .bind(&method.ui_hints)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok((plugin_id, existing.is_some()))
 }

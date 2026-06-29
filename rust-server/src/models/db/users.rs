@@ -626,6 +626,35 @@ impl UserDb {
         Ok(())
     }
 
+    pub async fn list_deleted_before(
+        pool: &Pool<Postgres>,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Uuid>, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+                SELECT id
+                FROM "user"
+                WHERE "deletedAt" IS NOT NULL
+                  AND "deletedAt" < $1
+            "#,
+        )
+        .bind(before)
+        .fetch_all(pool)
+        .await
+    }
+
+    pub async fn hard_delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(r#"DELETE FROM album WHERE "ownerId" = $1"#)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        sqlx::query(r#"DELETE FROM "user" WHERE id = $1"#)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn unlink_all_oauth(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
         sqlx::query(r#"UPDATE "user" SET "oauthId" = ''"#)
             .execute(pool)

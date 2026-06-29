@@ -120,6 +120,73 @@ pub struct ClipConfig {
 
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct FacialRecognitionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_facial_model")]
+    pub model_name: String,
+    #[serde(default = "default_min_score")]
+    pub min_score: f64,
+    #[serde(default = "default_max_distance")]
+    pub max_distance: f64,
+    #[serde(default = "default_min_faces")]
+    pub min_faces: i32,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_ocr_model")]
+    pub model_name: String,
+    #[serde(default = "default_min_score")]
+    pub min_detection_score: f64,
+    #[serde(default = "default_min_score")]
+    pub min_recognition_score: f64,
+    #[serde(default = "default_max_resolution")]
+    pub max_resolution: i32,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateDetectionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_duplicate_distance")]
+    pub max_distance: f64,
+}
+
+fn default_facial_model() -> String {
+    "buffalo_l".to_string()
+}
+
+fn default_ocr_model() -> String {
+    "PP-OCRv5_mobile".to_string()
+}
+
+fn default_min_score() -> f64 {
+    0.7
+}
+
+fn default_max_distance() -> f64 {
+    0.5
+}
+
+fn default_min_faces() -> i32 {
+    3
+}
+
+fn default_max_resolution() -> i32 {
+    736
+}
+
+fn default_duplicate_distance() -> f64 {
+    0.01
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct MachineLearningConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -127,6 +194,12 @@ pub struct MachineLearningConfig {
     pub urls: Vec<String>,
     #[serde(default)]
     pub clip: ClipConfig,
+    #[serde(default)]
+    pub facial_recognition: FacialRecognitionConfig,
+    #[serde(default)]
+    pub ocr: OcrConfig,
+    #[serde(default)]
+    pub duplicate_detection: DuplicateDetectionConfig,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -185,6 +258,18 @@ pub fn is_smart_search_enabled(config: &MachineLearningConfig) -> bool {
     config.enabled && config.clip.enabled
 }
 
+pub fn is_ocr_enabled(config: &MachineLearningConfig) -> bool {
+    config.enabled && config.ocr.enabled
+}
+
+pub fn is_facial_recognition_enabled(config: &MachineLearningConfig) -> bool {
+    config.enabled && config.facial_recognition.enabled
+}
+
+pub fn is_duplicate_detection_enabled(config: &MachineLearningConfig) -> bool {
+    is_smart_search_enabled(config) && config.duplicate_detection.enabled
+}
+
 const REVERSE_GEOCODING_STATE_KEY: &str = "reverse-geocoding-state";
 const VERSION_CHECK_STATE_KEY: &str = "version-check-state";
 
@@ -218,6 +303,62 @@ pub async fn get_version_check_state(
     Ok(value
         .and_then(|json| serde_json::from_value::<VersionCheckState>(json).ok())
         .unwrap_or_default())
+}
+
+const MEMORIES_STATE_KEY: &str = "memories-state";
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoriesState {
+    pub last_on_this_day_date: Option<String>,
+}
+
+pub async fn get_memories_state(pool: &Pool<Postgres>) -> Result<MemoriesState, sqlx::Error> {
+    let value = get_json(pool, MEMORIES_STATE_KEY).await?;
+    Ok(value
+        .and_then(|json| serde_json::from_value::<MemoriesState>(json).ok())
+        .unwrap_or_default())
+}
+
+pub async fn set_memories_state(
+    pool: &Pool<Postgres>,
+    state: &MemoriesState,
+) -> Result<(), sqlx::Error> {
+    set_json(
+        pool,
+        MEMORIES_STATE_KEY,
+        &serde_json::to_value(state).unwrap_or_default(),
+    )
+    .await
+}
+
+const FACIAL_RECOGNITION_STATE_KEY: &str = "facial-recognition-state";
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FacialRecognitionState {
+    pub last_run: Option<String>,
+}
+
+pub async fn get_facial_recognition_state(
+    pool: &Pool<Postgres>,
+) -> Result<FacialRecognitionState, sqlx::Error> {
+    let value = get_json(pool, FACIAL_RECOGNITION_STATE_KEY).await?;
+    Ok(value
+        .and_then(|json| serde_json::from_value::<FacialRecognitionState>(json).ok())
+        .unwrap_or_default())
+}
+
+pub async fn set_facial_recognition_state(
+    pool: &Pool<Postgres>,
+    state: &FacialRecognitionState,
+) -> Result<(), sqlx::Error> {
+    set_json(
+        pool,
+        FACIAL_RECOGNITION_STATE_KEY,
+        &serde_json::to_value(state).unwrap_or_default(),
+    )
+    .await
 }
 
 pub async fn get_custom_css(pool: &Pool<Postgres>) -> Result<String, sqlx::Error> {

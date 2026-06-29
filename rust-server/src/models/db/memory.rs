@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{FromRow, Pool, Postgres, QueryBuilder};
 use tokio::sync::OnceCell;
@@ -537,4 +538,135 @@ pub async fn remove_asset_ids(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn cleanup_stale(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    let tables = resolve_memory_tables(pool).await;
+    if tables.kind == MemoryTableKind::Missing {
+        return Ok(());
+    }
+
+    let delete_assets_sql = format!(
+        r#"
+            DELETE FROM {asset_link} ma
+            USING asset
+            WHERE ma."{asset_id_col}" = asset.id
+              AND asset.visibility <> 'timeline'::asset_visibility_enum
+        "#,
+        asset_link = tables.asset_link_table,
+        asset_id_col = tables.asset_id_column,
+    );
+    sqlx::query(&delete_assets_sql).execute(pool).await?;
+
+    let delete_memories_sql = format!(
+        r#"
+            DELETE FROM {memory_table}
+            WHERE "createdAt" < now() - interval '30 days'
+              AND "isSaved" = false
+        "#,
+        memory_table = tables.memory_table,
+    );
+    sqlx::query(&delete_memories_sql).execute(pool).await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct DayOfYearGroup {
+    pub year: i32,
+    pub asset_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DayOfYearAssetJson {
+    id: Uuid,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct DayOfYearRow {
+    year: i32,
+    assets: Option<serde_json::Value>,
+}
+
+pub async fn get_assets_by_day_of_year(
+    pool: &Pool<Postgres>,
+    owner_ids: &[Uuid],
+    month: i32,
+    day: i32,
+    year: i32,
+) -> Result<Vec<DayOfYearGroup>, sqlx::Error> {
+    if owner_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = sqlx::query_as::<_, DayOfYearRow>(
+        r#"
+            WITH res AS (
+                WITH today AS (
+                    SELECT make_date(year::int, $1::int, $2::int) AS date
+                    FROM generate_series(
+                        (
+                            SELECT date_part(
+                                'year',
+                                min(("localDateTime" AT TIME ZONE 'UTC')::date)
+                            )::int
+                            FROM asset
+                        ),
+                        $3
+                    ) AS year
+                )
+                SELECT a.*
+                FROM today
+                INNER JOIN LATERAL (
+                    SELECT asset.id, asset."localDateTime"
+                    FROM asset
+                    INNER JOIN asset_job_status ON asset.id = asset_job_status."assetId"
+                    WHERE (asset."localDateTime" AT TIME ZONE 'UTC')::date = today.date
+                      AND asset."ownerId" = ANY($4::uuid[])
+                      AND asset.visibility = 'timeline'::asset_visibility_enum
+                      AND EXISTS (
+                          SELECT 1
+                          FROM asset_file
+                          WHERE "assetId" = asset.id
+                            AND asset_file.type = 'preview'
+                      )
+                      AND asset."deletedAt" IS NULL
+                    ORDER BY (asset."localDateTime" AT TIME ZONE 'UTC')::date DESC
+                    LIMIT 20
+                ) AS a ON true
+            )
+            SELECT
+                date_part(
+                    'year',
+                    ("localDateTime" AT TIME ZONE 'UTC')::date
+                )::int AS year,
+                json_agg(res) AS assets
+            FROM res
+            GROUP BY ("localDateTime" AT TIME ZONE 'UTC')::date
+            ORDER BY ("localDateTime" AT TIME ZONE 'UTC')::date DESC
+        "#,
+    )
+    .bind(month)
+    .bind(day)
+    .bind(year - 1)
+    .bind(owner_ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut groups = Vec::new();
+    for row in rows {
+        let asset_ids: Vec<Uuid> = row
+            .assets
+            .and_then(|value| serde_json::from_value::<Vec<DayOfYearAssetJson>>(value).ok())
+            .map(|assets| assets.into_iter().map(|asset| asset.id).collect())
+            .unwrap_or_default();
+        if asset_ids.is_empty() {
+            continue;
+        }
+        groups.push(DayOfYearGroup {
+            year: row.year,
+            asset_ids,
+        });
+    }
+
+    Ok(groups)
 }

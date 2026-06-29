@@ -9,35 +9,40 @@ use crate::service::websocket::WebSocketHub;
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_NOTIFICATION: &str = "notifications";
 
-pub fn spawn(pool: PgPool, redis_url: String, websocket: WebSocketHub, jobs: JobService) {
+pub fn spawn(pool: PgPool, redis_url: String, websocket: WebSocketHub, jobs: JobService, concurrency: usize) {
     tokio::spawn(async move {
         let processor = NotificationJobProcessor::with_jobs(pool, websocket, jobs);
         let worker = WorkerBuilder::new(QUEUE_NOTIFICATION)
             .prefix(BULL_PREFIX)
             .connection(RedisConnection::new(redis_url))
-            .concurrency(5)
+            .concurrency(concurrency)
             .build::<Value>();
 
         let handle = worker
             .start(move |job| {
                 let processor = processor.clone();
                 async move {
-                    match processor.process(&job.name, &job.data).await {
-                        Ok(NotificationJobResult::Success) | Ok(NotificationJobResult::Skipped) => {
+                    let job_name = job.name.clone();
+                    crate::service::workers::begin_job(QUEUE_NOTIFICATION, &job_name);
+                    let result = processor.process(&job_name, &job.data).await;
+                    let success = matches!(
+                        result,
+                        Ok(NotificationJobResult::Success | NotificationJobResult::Skipped)
+                    );
+                    crate::service::workers::end_job(QUEUE_NOTIFICATION, &job_name, success);
+                    match result {
+                        Ok(NotificationJobResult::Success | NotificationJobResult::Skipped) => {
                             Ok(())
                         }
-                        Err(err) => Err(Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            err.to_string(),
-                        ))
-                            as Box<dyn std::error::Error + Send + Sync>),
+                        Err(err) => Err(crate::service::workers::worker_error(err.to_string())),
                     }
                 }
             })
             .await;
 
         match handle {
-            Ok(_handle) => {
+            Ok(worker_handle) => {
+                crate::service::worker_registry::register(worker_handle);
                 std::future::pending::<()>().await;
             }
             Err(err) => {

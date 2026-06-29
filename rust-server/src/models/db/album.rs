@@ -61,6 +61,29 @@ pub async fn has_album_access(
     Ok(exists)
 }
 
+pub async fn shared_link_has_album(
+    pool: &PgPool,
+    shared_link_id: &Uuid,
+    album_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    let exists: bool = sqlx::query_scalar(
+        r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM shared_link
+                WHERE id = $1
+                  AND "albumId" = $2
+            )
+        "#,
+    )
+    .bind(shared_link_id)
+    .bind(album_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(exists)
+}
+
 pub async fn get_album_thumbnail_asset_id(
     pool: &PgPool,
     album_id: &Uuid,
@@ -186,6 +209,55 @@ pub async fn update_album_thumbnails(pool: &PgPool, album_id: &Uuid) -> Result<(
                     )
                 )
               )
+        "#,
+    )
+    .bind(album_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_all_album_thumbnails(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+            UPDATE album
+            SET "albumThumbnailAssetId" = (
+                SELECT aa."assetId"
+                FROM album_asset aa
+                INNER JOIN asset ON asset.id = aa."assetId" AND asset."deletedAt" IS NULL
+                WHERE aa."albumId" = album.id
+                ORDER BY asset."fileCreatedAt" DESC
+                LIMIT 1
+            )
+            WHERE (
+                ("albumThumbnailAssetId" IS NULL AND EXISTS (
+                    SELECT 1 FROM album_asset aa
+                    INNER JOIN asset ON asset.id = aa."assetId" AND asset."deletedAt" IS NULL
+                    WHERE aa."albumId" = album.id
+                ))
+                OR (
+                    "albumThumbnailAssetId" IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM album_asset aa
+                        WHERE aa."albumId" = album.id
+                          AND aa."assetId" = album."albumThumbnailAssetId"
+                    )
+                )
+            )
+              AND album."deletedAt" IS NULL
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn touch_album_updated_at(pool: &PgPool, album_id: &Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            UPDATE album
+            SET "updatedAt" = now()
+            WHERE id = $1
         "#,
     )
     .bind(album_id)

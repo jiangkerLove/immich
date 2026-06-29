@@ -173,6 +173,15 @@ impl AssetMediaService {
 
         self.jobs.queue_asset_extract_metadata(&asset_id).await?;
 
+        let _ = crate::service::workflow_trigger::on_asset_trigger(
+            &self.pool,
+            &self.jobs,
+            &auth.user.id,
+            &asset_id,
+            crate::utils::workflow::TRIGGER_ASSET_CREATE,
+        )
+        .await;
+
         if asset_type == "IMAGE" && visibility != "hidden" {
             let pool = self.pool.clone();
             let image_path = upload_path.clone();

@@ -1,16 +1,15 @@
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::models::db::system_metadata::{get_json, set_json};
+use crate::models::db::system_metadata::set_json;
 use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::{require_admin, require_permission};
-use crate::utils::preferences::merge_preferences;
+use crate::utils::system_config::{defaults, get_merged};
 use crate::service::websocket::WebSocketHub;
 
 const CONFIG_KEY: &str = "system-config";
-const DEFAULTS_JSON: &str = include_str!("../../config/system_config_defaults.json");
 
 #[derive(Clone)]
 pub struct SystemConfigService {
@@ -24,22 +23,19 @@ impl SystemConfigService {
     }
 
     pub fn defaults(&self) -> Value {
-        serde_json::from_str(DEFAULTS_JSON).unwrap_or_else(|_| Value::Object(Default::default()))
+        defaults()
     }
 
     pub fn get_defaults(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigRead)?;
-        Ok(self.defaults())
+        Ok(defaults())
     }
 
     pub async fn get_config(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigRead)?;
-
-        let defaults = self.defaults();
-        let stored = get_json(&self.pool, CONFIG_KEY).await?;
-        Ok(merge_config(defaults, stored))
+        get_merged(&self.pool).await.map_err(ErrorResp::from)
     }
 
     pub async fn update_config(&self, auth: &AuthDto, dto: &Value) -> Result<Value, ErrorResp> {
@@ -47,6 +43,7 @@ impl SystemConfigService {
         require_permission(auth, Permission::SystemConfigUpdate)?;
 
         set_json(&self.pool, CONFIG_KEY, dto).await?;
+        crate::service::config_bootstrap::on_config_update(&self.pool).await;
         self.websocket.emit_config_update();
         Ok(dto.clone())
     }
@@ -87,16 +84,5 @@ impl SystemConfigService {
                 "{{make}}/{{model}}/{{lensModel}}/{{filename}}"
             ]
         }))
-    }
-}
-
-fn merge_config(defaults: Value, stored: Option<Value>) -> Value {
-    match stored {
-        Some(stored) => {
-            let mut merged = defaults;
-            merge_preferences(&mut merged, stored);
-            merged
-        }
-        None => defaults,
     }
 }

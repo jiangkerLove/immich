@@ -130,3 +130,88 @@ pub async fn update_visibilities(
     tx.commit().await?;
     Ok(())
 }
+
+#[derive(Debug)]
+pub struct OcrInsertRow {
+    pub asset_id: Uuid,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub x3: f32,
+    pub y3: f32,
+    pub x4: f32,
+    pub y4: f32,
+    pub box_score: f32,
+    pub text_score: f32,
+    pub text: String,
+}
+
+pub async fn delete_all(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("TRUNCATE asset_ocr").execute(&mut *tx).await?;
+    sqlx::query("TRUNCATE ocr_search").execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn upsert_for_asset(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+    rows: &[OcrInsertRow],
+    search_text: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(r#"DELETE FROM asset_ocr WHERE "assetId" = $1"#)
+        .bind(asset_id)
+        .execute(&mut *tx)
+        .await?;
+
+    for row in rows {
+        sqlx::query(
+            r#"
+                INSERT INTO asset_ocr (
+                    "assetId", x1, y1, x2, y2, x3, y3, x4, y4,
+                    "boxScore", "textScore", text
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "#,
+        )
+        .bind(asset_id)
+        .bind(row.x1)
+        .bind(row.y1)
+        .bind(row.x2)
+        .bind(row.y2)
+        .bind(row.x3)
+        .bind(row.y3)
+        .bind(row.x4)
+        .bind(row.y4)
+        .bind(row.box_score)
+        .bind(row.text_score)
+        .bind(&row.text)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if rows.is_empty() {
+        sqlx::query(r#"DELETE FROM ocr_search WHERE "assetId" = $1"#)
+            .bind(asset_id)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(
+            r#"
+                INSERT INTO ocr_search ("assetId", text)
+                VALUES ($1, $2)
+                ON CONFLICT ("assetId") DO UPDATE SET text = EXCLUDED.text
+            "#,
+        )
+        .bind(asset_id)
+        .bind(search_text)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}

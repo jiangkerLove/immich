@@ -78,3 +78,33 @@ pub async fn update_original_path(
     .await?;
     Ok(())
 }
+
+pub async fn stream_for_storage_template_job(
+    pool: &Pool<Postgres>,
+) -> Result<Vec<StorageTemplateAsset>, sqlx::Error> {
+    sqlx::query_as::<_, StorageTemplateAsset>(
+        r#"
+        SELECT
+            asset.id,
+            asset."ownerId" AS owner_id,
+            asset.type AS asset_type,
+            asset.checksum,
+            asset."originalPath" AS original_path,
+            asset."isExternal" AS is_external,
+            asset."originalFileName" AS original_file_name,
+            asset."livePhotoVideoId" AS live_photo_video_id,
+            asset."fileCreatedAt" AS file_created_at,
+            asset_exif."fileSizeInByte" AS file_size_in_byte,
+            asset_exif.make,
+            asset_exif.model,
+            asset_exif."lensModel" AS lens_model
+        FROM asset
+        INNER JOIN asset_exif ON asset.id = asset_exif."assetId"
+        WHERE asset."deletedAt" IS NULL
+          AND asset.visibility != 'hidden'
+        ORDER BY asset."fileCreatedAt" ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}

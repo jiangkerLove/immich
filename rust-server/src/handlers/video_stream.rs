@@ -1,8 +1,10 @@
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::Extension;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
@@ -65,10 +67,10 @@ pub async fn get_segment_handler(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok());
 
-    state
+    let path = state
         .services
         .hls
-        .get_segment(
+        .get_segment_path(
             &auth,
             id,
             session_id,
@@ -78,7 +80,20 @@ pub async fn get_segment_handler(
         )
         .await?;
 
-    Ok(StatusCode::NOT_FOUND.into_response())
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|err| ErrorResp::NotFound(format!("Segment not found: {err}")))?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    Ok((
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600")),
+            (header::CONTENT_TYPE, HeaderValue::from_static(HlsService::segment_content_type())),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 pub async fn end_session_handler(

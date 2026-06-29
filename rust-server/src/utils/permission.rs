@@ -24,10 +24,7 @@ pub fn require_permission(auth: &AuthDto, permission: Permission) -> Result<(), 
         )));
     }
 
-    if auth.shared_link.is_some() {
-        return Err(ErrorResp::Forbidden("Forbidden".to_string()));
-    }
-
+    // Shared-link auth is validated at the resource layer (album/asset access).
     Ok(())
 }
 

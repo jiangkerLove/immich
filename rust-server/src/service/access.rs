@@ -104,6 +104,27 @@ pub async fn require_album_access(
 ) -> Result<(), ErrorResp> {
     require_permission(auth, permission.clone())?;
 
+    if let Some(shared_link) = &auth.shared_link {
+        if permission == Permission::AlbumDownload && !shared_link.allow_download {
+            return Err(ErrorResp::BadRequest(format!(
+                "Not found or no {} access",
+                permission.as_str()
+            )));
+        }
+
+        let link_id = Uuid::parse_str(&shared_link.id)
+            .map_err(|_| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
+
+        if album::shared_link_has_album(pool, &link_id, album_id).await? {
+            return Ok(());
+        }
+
+        return Err(ErrorResp::BadRequest(format!(
+            "Not found or no {} access",
+            permission.as_str()
+        )));
+    }
+
     let level = match permission {
         Permission::AlbumDelete => AlbumAccessLevel::Owner,
         Permission::AlbumUpdate
@@ -139,6 +160,23 @@ pub async fn check_album_ids_access(
     permission: Permission,
 ) -> Result<HashSet<Uuid>, ErrorResp> {
     require_permission(auth, permission.clone())?;
+
+    if let Some(shared_link) = &auth.shared_link {
+        if permission == Permission::AlbumDownload && !shared_link.allow_download {
+            return Ok(HashSet::new());
+        }
+
+        let link_id = Uuid::parse_str(&shared_link.id)
+            .map_err(|_| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
+
+        let mut allowed = HashSet::new();
+        for album_id in album_ids {
+            if album::shared_link_has_album(pool, &link_id, album_id).await? {
+                allowed.insert(*album_id);
+            }
+        }
+        return Ok(allowed);
+    }
 
     let level = match permission {
         Permission::AlbumDelete => AlbumAccessLevel::Owner,

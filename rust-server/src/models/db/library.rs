@@ -12,6 +12,7 @@ pub struct LibraryRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub refreshed_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
     pub asset_count: i64,
 }
 
@@ -34,6 +35,7 @@ pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<LibraryRow>, sqlx::Er
                 l."createdAt" as created_at,
                 l."updatedAt" as updated_at,
                 l."refreshedAt" as refreshed_at,
+                l."deletedAt" as deleted_at,
                 COALESCE((
                     SELECT COUNT(*)
                     FROM asset a
@@ -60,6 +62,7 @@ pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<Librar
                 l."createdAt" as created_at,
                 l."updatedAt" as updated_at,
                 l."refreshedAt" as refreshed_at,
+                l."deletedAt" as deleted_at,
                 COALESCE((
                     SELECT COUNT(*)
                     FROM asset a
@@ -148,6 +151,285 @@ pub async fn soft_delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::E
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+pub async fn list_all_with_deleted(pool: &Pool<Postgres>) -> Result<Vec<LibraryRow>, sqlx::Error> {
+    sqlx::query_as::<_, LibraryRow>(
+        r#"
+            SELECT
+                l.id,
+                l.name,
+                l."ownerId" as owner_id,
+                l."importPaths" as import_paths,
+                l."exclusionPatterns" as exclusion_patterns,
+                l."createdAt" as created_at,
+                l."updatedAt" as updated_at,
+                l."refreshedAt" as refreshed_at,
+                l."deletedAt" as deleted_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM asset a
+                    WHERE a."libraryId" = l.id AND a."deletedAt" IS NULL
+                ), 0) as asset_count
+            FROM library l
+            ORDER BY l."createdAt" ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_deleted(pool: &Pool<Postgres>) -> Result<Vec<LibraryRow>, sqlx::Error> {
+    sqlx::query_as::<_, LibraryRow>(
+        r#"
+            SELECT
+                l.id,
+                l.name,
+                l."ownerId" as owner_id,
+                l."importPaths" as import_paths,
+                l."exclusionPatterns" as exclusion_patterns,
+                l."createdAt" as created_at,
+                l."updatedAt" as updated_at,
+                l."refreshedAt" as refreshed_at,
+                l."deletedAt" as deleted_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM asset a
+                    WHERE a."libraryId" = l.id AND a."deletedAt" IS NULL
+                ), 0) as asset_count
+            FROM library l
+            WHERE l."deletedAt" IS NOT NULL
+            ORDER BY l."createdAt" ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn hard_delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(r#"DELETE FROM library WHERE id = $1"#)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_refreshed_at(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+            UPDATE library
+            SET "refreshedAt" = NOW(), "updatedAt" = NOW()
+            WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn detect_offline_external_assets(
+    pool: &Pool<Postgres>,
+    library_id: &Uuid,
+    import_paths: &[String],
+    exclusion_patterns: &[String],
+) -> Result<u64, sqlx::Error> {
+    if import_paths.is_empty() {
+        return Ok(0);
+    }
+
+    let import_likes: Vec<String> = import_paths
+        .iter()
+        .map(|path| format!("{}%", path.trim_end_matches('/')))
+        .collect();
+    let exclusion_likes: Vec<String> = exclusion_patterns
+        .iter()
+        .map(|pattern| crate::utils::glob::glob_to_sql_like(pattern))
+        .collect();
+
+    let mut query = String::from(
+        r#"
+            UPDATE asset
+            SET "isOffline" = true,
+                "deletedAt" = NOW(),
+                "updatedAt" = NOW()
+            WHERE "isOffline" = false
+              AND "isExternal" = true
+              AND "libraryId" = $1
+              AND (
+        "#,
+    );
+
+    query.push_str("NOT (");
+    for (index, _) in import_likes.iter().enumerate() {
+        if index > 0 {
+            query.push_str(" OR ");
+        }
+        query.push_str(&format!(r#""originalPath" LIKE ${}"#, index + 2));
+    }
+    query.push(')');
+
+    if !exclusion_likes.is_empty() {
+        query.push_str(" OR ");
+        for (index, _) in exclusion_likes.iter().enumerate() {
+            if index > 0 {
+                query.push_str(" OR ");
+            }
+            query.push_str(&format!(
+                r#""originalPath" LIKE ${}"#,
+                import_likes.len() + index + 2
+            ));
+        }
+    }
+
+    query.push(')');
+
+    let mut q = sqlx::query(&query).bind(library_id);
+    for like in &import_likes {
+        q = q.bind(like);
+    }
+    for like in &exclusion_likes {
+        q = q.bind(like);
+    }
+
+    let result = q.execute(pool).await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn get_asset_id_by_library_path(
+    pool: &Pool<Postgres>,
+    library_id: &Uuid,
+    original_path: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT id
+        FROM asset
+        WHERE "libraryId" = $1
+          AND "originalPath" = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(library_id)
+    .bind(original_path)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn remove_asset_by_id(pool: &Pool<Postgres>, asset_id: &Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(r#"DELETE FROM asset WHERE id = $1"#)
+        .bind(asset_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct LibraryAssetSyncRow {
+    pub id: Uuid,
+    pub original_path: String,
+    pub file_modified_at: chrono::DateTime<chrono::Utc>,
+    pub is_offline: bool,
+    pub status: String,
+}
+
+pub async fn list_assets_for_sync(
+    pool: &Pool<Postgres>,
+    asset_ids: &[Uuid],
+) -> Result<Vec<LibraryAssetSyncRow>, sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_as::<_, LibraryAssetSyncRow>(
+        r#"
+            SELECT
+                id,
+                "originalPath" as original_path,
+                "fileModifiedAt" as file_modified_at,
+                "isOffline" as is_offline,
+                status::text as status
+            FROM asset
+            WHERE id = ANY($1)
+        "#,
+    )
+    .bind(asset_ids)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn mark_assets_offline(
+    pool: &Pool<Postgres>,
+    asset_ids: &[Uuid],
+    trashed: bool,
+) -> Result<(), sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+
+    if trashed {
+        sqlx::query(
+            r#"
+                UPDATE asset
+                SET "isOffline" = true, "updatedAt" = NOW()
+                WHERE id = ANY($1)
+            "#,
+        )
+        .bind(asset_ids)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+                UPDATE asset
+                SET "isOffline" = true,
+                    "deletedAt" = NOW(),
+                    "updatedAt" = NOW()
+                WHERE id = ANY($1)
+            "#,
+        )
+        .bind(asset_ids)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn mark_assets_online(
+    pool: &Pool<Postgres>,
+    asset_ids: &[Uuid],
+    trashed: bool,
+) -> Result<(), sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+
+    if trashed {
+        sqlx::query(
+            r#"
+                UPDATE asset
+                SET "isOffline" = false, "updatedAt" = NOW()
+                WHERE id = ANY($1)
+            "#,
+        )
+        .bind(asset_ids)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+                UPDATE asset
+                SET "isOffline" = false,
+                    "deletedAt" = NULL,
+                    "updatedAt" = NOW()
+                WHERE id = ANY($1)
+            "#,
+        )
+        .bind(asset_ids)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 

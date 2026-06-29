@@ -1,45 +1,21 @@
-use axum::middleware;
-use axum::Router;
-use config::{Case, Config};
-use dotenv::dotenv;
-
-use rust_server::app_state::AppState;
-use rust_server::middleware::{auth, cors, user_agent};
-use rust_server::models::dto::env::EnvDto;
-use rust_server::routes;
+use rust_server::service::admin;
+use rust_server::service::bootstrap::{self, ServerMode};
 
 #[tokio::main]
 async fn main() {
-    dotenv().ok();
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("immich-admin") {
+        admin::run(&args[2..]).await;
+        return;
+    }
 
-    let settings: EnvDto = Config::builder()
-        .add_source(config::Environment::with_convert_case(Case::UpperSnake).try_parsing(true))
-        .build()
-        .unwrap()
-        .try_deserialize()
-        .unwrap();
+    let argv_mode = args.get(1).map(|s| s.as_str());
+    if argv_mode == Some("maintenance") {
+        bootstrap::run(ServerMode::Maintenance).await;
+        return;
+    }
 
-    let port = settings.immich_port.unwrap_or(2283);
-
-    let (app_state, websocket_layer) = AppState::new(settings).await;
-
-    let protected_routes = routes::protected_router().route_layer(middleware::from_fn_with_state(
-        app_state.clone(),
-        auth::require_auth,
-    ));
-
-    let app = Router::new()
-        .merge(routes::public_router())
-        .merge(protected_routes)
-        .route_layer(middleware::from_fn(user_agent::user_agent))
-        .route_layer(middleware::from_fn(cors::cors))
-        .layer(websocket_layer)
-        .with_state(app_state);
-
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .unwrap();
-
-    println!("rust-server listening on 0.0.0.0:{port}");
-    axum::serve(listener, app).await.unwrap();
+    let settings = bootstrap::load_env();
+    let mode = bootstrap::resolve_server_mode(&settings, argv_mode);
+    bootstrap::run(mode).await;
 }
