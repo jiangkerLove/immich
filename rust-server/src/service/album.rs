@@ -36,7 +36,7 @@ pub struct AlbumUserInfo {
     pub email: String,
     pub profile_image_path: String,
     pub avatar_color: String,
-    pub profile_changed_at: DateTime<Utc>,
+    pub profile_changed_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,8 +52,8 @@ pub struct AlbumResponse {
     pub id: Uuid,
     pub album_name: String,
     pub description: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: String,
+    pub updated_at: String,
     pub album_thumbnail_asset_id: Option<Uuid>,
     pub shared: bool,
     pub album_users: Vec<AlbumUserResponse>,
@@ -824,22 +824,28 @@ impl AlbumService {
             id: row.id,
             album_name: row.album_name,
             description: row.description,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
+            created_at: format_album_datetime(&row.created_at),
+            updated_at: format_album_datetime(&row.updated_at),
             album_thumbnail_asset_id: row.album_thumbnail_asset_id,
             shared: is_shared,
             album_users: users
                 .into_iter()
-                .map(|user| AlbumUserResponse {
-                    user: AlbumUserInfo {
-                        id: user.user_id,
-                        name: user.name,
-                        email: user.email,
-                        profile_image_path: user.profile_image_path,
-                        avatar_color: user.avatar_color.unwrap_or_default(),
-                        profile_changed_at: user.profile_changed_at,
-                    },
-                    role: user.role,
+                .map(|user| {
+                    let avatar_color = user
+                        .avatar_color
+                        .filter(|color| !color.is_empty())
+                        .unwrap_or_else(|| email_to_avatar_color(&user.email));
+                    AlbumUserResponse {
+                        user: AlbumUserInfo {
+                            id: user.user_id,
+                            name: user.name,
+                            email: user.email,
+                            profile_image_path: user.profile_image_path,
+                            avatar_color,
+                            profile_changed_at: format_album_datetime(&user.profile_changed_at),
+                        },
+                        role: user.role,
+                    }
                 })
                 .collect(),
             has_shared_link,
@@ -908,4 +914,12 @@ fn apply_album_metadata(album: &mut AlbumResponse, metadata: &album::AlbumMetada
 
 fn format_album_datetime(value: &DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn email_to_avatar_color(email: &str) -> String {
+    const COLORS: [&str; 10] = [
+        "primary", "pink", "blue", "green", "yellow", "red", "purple", "orange", "gray", "amber",
+    ];
+    let sum: u32 = email.chars().map(|ch| ch as u32).sum();
+    COLORS[(sum as usize) % COLORS.len()].to_string()
 }

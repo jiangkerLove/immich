@@ -48,7 +48,7 @@ pub async fn has_album_access(
                 WHERE a.id = $1
                   AND a."deletedAt" IS NULL
                   AND au."userId" = $2
-                  AND au.role = ANY($3)
+                  AND au.role::text = ANY($3)
             )
         "#,
     )
@@ -640,7 +640,7 @@ pub async fn get_metadata_for_ids(
             INNER JOIN asset a ON a.id = aa."assetId"
             WHERE aa."albumId" = ANY($1)
               AND a."deletedAt" IS NULL
-              AND a.visibility != 'hidden'
+              AND a.visibility IN ('archive', 'timeline')
             GROUP BY aa."albumId"
         "#,
     )

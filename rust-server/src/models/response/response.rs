@@ -41,7 +41,11 @@ impl IntoResponse for ErrorResp {
             ErrorResp::Forbidden(err) => (StatusCode::FORBIDDEN, err, "Forbidden"),
             ErrorResp::BadRequest(err) => (StatusCode::BAD_REQUEST, err, "Bad Request"),
             ErrorResp::ReqParamError(err) => (StatusCode::BAD_REQUEST, err, ""),
-            ErrorResp::DatabaseError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string(), ""),
+            ErrorResp::DatabaseError(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+                "Internal Server Error",
+            ),
             ErrorResp::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err, ""),
             ErrorResp::NotFound(err) => (StatusCode::NOT_FOUND, err, "Not Found"),
             ErrorResp::NotImplemented(err) => (StatusCode::NOT_IMPLEMENTED, err, "Not Implemented"),
