@@ -56,6 +56,11 @@ pub async fn run(args: &[String]) {
                 eprintln!("{err}");
             }
         }
+        "run-migrations" => {
+            if let Err(err) = run_migrations(&settings).await {
+                eprintln!("{err}");
+            }
+        }
         "media-location" => {
             let media = StoragePaths::new(resolve_media_location(&settings));
             println!("{}", media.media_location().display());
@@ -130,6 +135,7 @@ Commands:
   grant-admin <email>       Grant admin privileges
   revoke-admin <email>      Revoke admin privileges
   schema-check              Verify kysely migrations and init.sql schema drift
+  run-migrations            Run pending Kysely database migrations
   media-location            Print current media location
   change-media-location <old> <new> [--yes]
                             Rewrite stored file paths after moving media
@@ -244,6 +250,12 @@ async fn schema_check(settings: &EnvDto) -> Result<(), String> {
     } else {
         Err("Schema check failed".to_string())
     }
+}
+
+async fn run_migrations(settings: &EnvDto) -> Result<(), String> {
+    crate::service::database_migrations::run(settings)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 async fn set_password_login(settings: &EnvDto, enabled: bool) -> Result<(), String> {

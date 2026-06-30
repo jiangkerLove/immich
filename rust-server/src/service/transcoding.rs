@@ -671,7 +671,7 @@ impl HlsEngine {
 
         let mut sessions = self.transcode_sessions.lock().await;
         let Some(session) = sessions.get_mut(&session_id) else {
-            let _ = signal_process(pid, libc::SIGKILL);
+            let _ = kill_process(pid);
             watcher_handle.abort();
             return Ok(());
         };
@@ -789,7 +789,7 @@ impl HlsEngine {
 
         if let Some(process) = process {
             process.watcher_abort.abort();
-            let _ = signal_process(process.pid, libc::SIGKILL);
+            let _ = kill_process(process.pid);
         }
     }
 
@@ -846,7 +846,7 @@ fn pause_transcode(session: &mut TranscodeSession) {
     let Some(process) = session.process.as_ref() else {
         return;
     };
-    if signal_process(process.pid, libc::SIGSTOP).is_ok() {
+    if pause_process(process.pid).is_ok() {
         session.paused = true;
     }
 }
@@ -858,17 +858,76 @@ fn resume_transcode(session: &mut TranscodeSession) {
     let Some(process) = session.process.as_ref() else {
         return;
     };
-    if signal_process(process.pid, libc::SIGCONT).is_ok() {
+    if resume_process(process.pid).is_ok() {
         session.paused = false;
     }
 }
 
-fn signal_process(pid: u32, sig: i32) -> Result<(), std::io::Error> {
-    let ret = unsafe { libc::kill(pid as i32, sig) };
-    if ret == 0 {
+fn kill_process(pid: u32) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        let ret = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("taskkill failed for pid {pid}"),
+            ))
+        }
+    }
+}
+
+fn pause_process(pid: u32) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        let ret = unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = pid;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "HLS transcode pause is not supported on Windows",
+        ))
+    }
+}
+
+fn resume_process(pid: u32) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        let ret = unsafe { libc::kill(pid as i32, libc::SIGCONT) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = pid;
         Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
     }
 }
 

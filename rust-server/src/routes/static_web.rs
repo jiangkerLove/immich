@@ -37,6 +37,7 @@ fn default_web_roots() -> Vec<PathBuf> {
         }
     }
     roots.push(PathBuf::from("./www"));
+    roots.push(PathBuf::from("/build/www"));
     roots.push(PathBuf::from("../server/build/www"));
     roots
 }

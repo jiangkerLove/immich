@@ -17,7 +17,7 @@ use crate::service::websocket::WebSocketHub;
 use crate::utils::permission::require_admin;
 use crate::utils::storage::StoragePaths;
 
-const MAINTENANCE_MODE_KEY: &str = "maintenance-mode";
+pub const MAINTENANCE_MODE_KEY: &str = "maintenance-mode";
 
 const STORAGE_FOLDERS: &[&str] = &[
     "encoded-video",
@@ -29,8 +29,8 @@ const STORAGE_FOLDERS: &[&str] = &[
 ];
 
 #[derive(Debug, Serialize, Deserialize)]
-struct MaintenanceClaims {
-    username: String,
+pub struct MaintenanceClaims {
+    pub username: String,
     exp: usize,
     iat: usize,
 }
@@ -107,24 +107,7 @@ impl MaintenanceService {
 
     pub async fn detect_prior_install(&self, auth: &AuthDto) -> Result<MaintenanceDetectInstallResp, ErrorResp> {
         require_admin(auth)?;
-        let media = self.storage.media_location();
-        let mut storage = Vec::with_capacity(STORAGE_FOLDERS.len());
-
-        for folder in STORAGE_FOLDERS {
-            let folder_path = media.join(folder);
-            let marker = folder_path.join(".immich");
-            let (readable, writable) = check_marker_access(&marker).await;
-            let files = count_files(&folder_path).await;
-
-            storage.push(MaintenanceDetectInstallFolderResp {
-                folder: (*folder).to_string(),
-                readable,
-                writable,
-                files,
-            });
-        }
-
-        Ok(MaintenanceDetectInstallResp { storage })
+        detect_prior_install_internal(&self.storage).await
     }
 
     pub async fn set_maintenance_mode(
@@ -212,13 +195,13 @@ impl MaintenanceService {
     }
 }
 
-fn generate_maintenance_secret() -> String {
+pub fn generate_maintenance_secret() -> String {
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
 
-fn sign_maintenance_jwt(secret: &str, username: &str) -> Result<String, ErrorResp> {
+pub fn sign_maintenance_jwt(secret: &str, username: &str) -> Result<String, ErrorResp> {
     let now = chrono::Utc::now().timestamp() as usize;
     let claims = MaintenanceClaims {
         username: username.to_string(),
@@ -234,7 +217,7 @@ fn sign_maintenance_jwt(secret: &str, username: &str) -> Result<String, ErrorRes
     .map_err(|err| ErrorResp::ServerError(err.to_string()))
 }
 
-fn decode_maintenance_jwt(token: &str, secret: &str) -> Result<MaintenanceClaims, ErrorResp> {
+pub fn decode_maintenance_jwt(token: &str, secret: &str) -> Result<MaintenanceClaims, ErrorResp> {
     decode::<MaintenanceClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -286,4 +269,35 @@ async fn count_files(path: &Path) -> i32 {
     }
 
     count
+}
+
+pub async fn detect_prior_install_internal(
+    storage: &StoragePaths,
+) -> Result<MaintenanceDetectInstallResp, ErrorResp> {
+    let media = storage.media_location();
+    let mut folders = Vec::with_capacity(STORAGE_FOLDERS.len());
+
+    for folder in STORAGE_FOLDERS {
+        let folder_path = media.join(folder);
+        let marker = folder_path.join(".immich");
+        let (readable, writable) = check_marker_access(&marker).await;
+        let files = count_files(&folder_path).await;
+
+        folders.push(MaintenanceDetectInstallFolderResp {
+            folder: (*folder).to_string(),
+            readable,
+            writable,
+            files,
+        });
+    }
+
+    Ok(MaintenanceDetectInstallResp { storage: folders })
+}
+
+pub fn public_maintenance_status(status: &MaintenanceStatusResp) -> MaintenanceStatusResp {
+    let mut public = status.clone();
+    if public.error.is_some() {
+        public.error = Some("Something went wrong, see logs!".into());
+    }
+    public
 }

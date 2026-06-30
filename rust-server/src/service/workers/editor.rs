@@ -82,20 +82,14 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDt
             .start(move |job| {
                 let processor = processor.clone();
                 async move {
-                    {
-                        let job_name = job.name.clone();
-                        crate::service::workers::begin_job(QUEUE_EDITOR, &job_name);
-                        let result = processor.process(&job_name, &job.data).await;
-                        let failed = matches!(result, Ok(JobWorkerStatus::Failed) | Err(_));
-                        crate::service::workers::end_job(QUEUE_EDITOR, &job_name, !failed);
-                        match result {
-                            Ok(status) if status == JobWorkerStatus::Failed => {
-                                Err(crate::service::workers::worker_error(status.as_str()))
-                            }
-                            Ok(_) => Ok(()),
-                            Err(err) => Err(crate::service::workers::worker_error(err)),
-                        }
-                    }
+                    let job_name = job.name.clone();
+                    crate::service::workers::wrap_status_job(QUEUE_EDITOR, &job_name, || async {
+                        processor
+                            .process(&job_name, &job.data)
+                            .await
+                            .map(|status| status.as_str())
+                    })
+                    .await
                 }
             })
             .await;

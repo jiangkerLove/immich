@@ -1,3 +1,26 @@
+pub fn find_database_backup_version(filename: &str) -> Option<String> {
+    let start = filename.find("-v")?;
+    let rest = &filename[start + 2..];
+    let end = rest.find('-')?;
+    let version = rest.get(..end)?;
+    if version.is_empty() {
+        return None;
+    }
+    Some(version.to_string())
+}
+
+pub fn is_legacy_pg_cluster_dump(filename: &str) -> bool {
+    let Some(version) = find_database_backup_version(filename) else {
+        return false;
+    };
+    let Ok(parsed) = semver::Version::parse(&version) else {
+        return false;
+    };
+    semver::VersionReq::parse("<=2.4.0")
+        .map(|req| req.matches(&parsed))
+        .unwrap_or(false)
+}
+
 pub fn is_valid_database_backup_name(filename: &str) -> bool {
     let bytes = filename.as_bytes();
     if bytes.is_empty() {

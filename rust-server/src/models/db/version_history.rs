@@ -50,8 +50,12 @@ pub async fn get_all(pool: &Pool<Postgres>) -> Result<Vec<VersionHistoryRow>, sq
     .await
 }
 
-async fn ensure_current_version(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
-    let latest: Option<String> = sqlx::query_scalar(
+pub async fn get_latest_version(pool: &Pool<Postgres>) -> Result<Option<String>, sqlx::Error> {
+    if !version_history_table_exists(pool).await {
+        return Ok(None);
+    }
+
+    sqlx::query_scalar(
         r#"
         SELECT version
         FROM version_history
@@ -60,9 +64,11 @@ async fn ensure_current_version(pool: &Pool<Postgres>) -> Result<(), sqlx::Error
         "#,
     )
     .fetch_optional(pool)
-    .await?;
+    .await
+}
 
-    if latest.as_deref() == Some(SERVER_VERSION) {
+pub async fn insert_version(pool: &Pool<Postgres>, version: &str) -> Result<(), sqlx::Error> {
+    if !version_history_table_exists(pool).await {
         return Ok(());
     }
 
@@ -72,9 +78,18 @@ async fn ensure_current_version(pool: &Pool<Postgres>) -> Result<(), sqlx::Error
         VALUES ($1)
         "#,
     )
-    .bind(SERVER_VERSION)
+    .bind(version)
     .execute(pool)
     .await?;
-
     Ok(())
+}
+
+async fn ensure_current_version(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    let latest = get_latest_version(pool).await?;
+
+    if latest.as_deref() == Some(SERVER_VERSION) {
+        return Ok(());
+    }
+
+    insert_version(pool, SERVER_VERSION).await
 }

@@ -10,6 +10,7 @@ use crate::models::db::system_metadata::{
 };
 use crate::service::job::{EntityJob, JobService};
 use crate::service::ml;
+use crate::utils::clip::get_clip_dim_size;
 
 const JOBS_BATCH_SIZE: usize = 1000;
 
@@ -40,6 +41,11 @@ impl SmartSearchService {
         }
         if !crate::utils::vector::smart_search_available(&self.pool).await {
             return Ok(());
+        }
+
+        if force {
+            let dim_size = get_clip_dim_size(&config.clip.model_name)?;
+            crate::utils::vector::set_dimension_size(&self.pool, dim_size, None).await?;
         }
 
         let asset_ids = smart_search_job::stream_for_encode_clip(&self.pool, force)

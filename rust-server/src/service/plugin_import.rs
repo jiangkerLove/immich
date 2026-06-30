@@ -87,6 +87,11 @@ fn resolve_core_plugin_path(env: &EnvDto) -> Option<PathBuf> {
         }
     }
 
+    let prod_path = PathBuf::from("/build/plugins/immich-plugin-core");
+    if prod_path.join("manifest.json").exists() {
+        return Some(prod_path);
+    }
+
     None
 }
 

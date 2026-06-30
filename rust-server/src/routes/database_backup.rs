@@ -27,3 +27,23 @@ pub fn public_router() -> Router<AppState> {
         post(start_database_restore_handler),
     )
 }
+
+pub fn maintenance_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/admin/database-backups",
+            get(crate::handlers::database_backup::maintenance_list_database_backups_handler),
+        )
+        .route(
+            "/api/admin/database-backups/{filename}",
+            get(crate::handlers::database_backup::maintenance_download_database_backup_handler),
+        )
+        .route(
+            "/api/admin/database-backups",
+            delete(crate::handlers::database_backup::maintenance_delete_database_backups_handler),
+        )
+        .route(
+            "/api/admin/database-backups/upload",
+            post(crate::handlers::database_backup::maintenance_upload_database_backup_handler),
+        )
+}

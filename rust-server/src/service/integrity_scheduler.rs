@@ -50,7 +50,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
         let mut last_run: HashMap<&'static str, chrono::DateTime<Local>> = HashMap::new();
 
         loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            crate::service::scheduler_notify::wait_or_notify(Duration::from_secs(60)).await;
 
             let config = match get_merged(&pool).await {
                 Ok(value) => value,

@@ -51,6 +51,10 @@ impl DatabaseBackupService {
 
     pub async fn list_backups(&self, auth: &AuthDto) -> Result<DatabaseBackupListResponse, ErrorResp> {
         require_admin(auth)?;
+        self.list_backups_internal().await
+    }
+
+    pub async fn list_backups_internal(&self) -> Result<DatabaseBackupListResponse, ErrorResp> {
         let dir = self.backups_dir();
         tokio::fs::create_dir_all(&dir)
             .await
@@ -115,6 +119,13 @@ impl DatabaseBackupService {
         filename: &str,
     ) -> Result<Response<Body>, ErrorResp> {
         require_admin(auth)?;
+        self.download_backup_internal(filename).await
+    }
+
+    pub async fn download_backup_internal(
+        &self,
+        filename: &str,
+    ) -> Result<Response<Body>, ErrorResp> {
         if !is_valid_database_backup_name(filename) {
             return Err(ErrorResp::BadRequest("Invalid backup name!".to_string()));
         }
@@ -145,6 +156,10 @@ impl DatabaseBackupService {
         filenames: &[String],
     ) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        self.delete_backups_internal(filenames).await
+    }
+
+    pub async fn delete_backups_internal(&self, filenames: &[String]) -> Result<(), ErrorResp> {
         if filenames
             .iter()
             .any(|filename| !is_valid_database_backup_name(filename))
@@ -171,7 +186,14 @@ impl DatabaseBackupService {
         bytes: Vec<u8>,
     ) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        self.upload_backup_internal(original_name, bytes).await
+    }
 
+    pub async fn upload_backup_internal(
+        &self,
+        original_name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), ErrorResp> {
         let base_name = Path::new(original_name)
             .file_name()
             .and_then(|name| name.to_str())

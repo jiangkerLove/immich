@@ -41,8 +41,9 @@ pub struct EnvDto {
     pub db_url: String,
     pub db_username: String,
     pub db_vector_extension: Option<DbVectorExtension>,
+    pub db_skip_migrations: Option<bool>,
 
-    pub no_color: Option<String>,
+    pub immich_server_path: Option<String>,
 
     pub redis_hostname: String,
     pub redis_port: u16,
@@ -57,6 +58,8 @@ pub struct EnvDto {
     pub immich_core_plugin: Option<String>,
     pub immich_allow_external_plugins: Option<bool>,
     pub immich_plugins_install_folder: Option<String>,
+
+    pub no_color: Option<String>,
 }
 
 impl Default for EnvDto {
@@ -99,6 +102,8 @@ impl Default for EnvDto {
             db_url: "localhost".into(),
             db_username: "postgres".into(),
             db_vector_extension: None,
+            db_skip_migrations: None,
+            immich_server_path: None,
             no_color: None,
             redis_hostname: "redis".into(),
             redis_port: 6379,

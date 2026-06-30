@@ -476,6 +476,12 @@ impl PersonService {
             });
         }
 
+        if results.iter().any(|result| result.success) {
+            if let Err(err) = person::vacuum_faces(&self.pool, false).await {
+                eprintln!("person merge: vacuum_faces failed: {err}");
+            }
+        }
+
         Ok(results)
     }
 

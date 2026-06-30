@@ -101,6 +101,37 @@ impl JobService {
 
     /// Queue metadata extraction after a new asset upload.
     /// Node microservices will chain thumbnail generation, smart search, etc.
+    pub async fn pause_queue(&self, queue_name: &str) -> Result<(), String> {
+        self.json_queue(queue_name)
+            .await
+            .map_err(|err| err.to_string())?
+            .pause()
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    pub async fn resume_queue(&self, queue_name: &str) -> Result<(), String> {
+        self.json_queue(queue_name)
+            .await
+            .map_err(|err| err.to_string())?
+            .resume()
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    pub async fn queue_version_check(&self) -> Result<(), ErrorResp> {
+        self.queue_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
+            .await
+    }
+
+    pub async fn pause_metadata_extraction(&self) -> Result<(), String> {
+        self.pause_queue(QUEUE_METADATA).await
+    }
+
+    pub async fn resume_metadata_extraction(&self) -> Result<(), String> {
+        self.resume_queue(QUEUE_METADATA).await
+    }
+
     pub async fn queue_asset_extract_metadata(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
         self.queue_asset_extract_metadata_with_source(asset_id, "upload")
             .await

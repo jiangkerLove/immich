@@ -586,13 +586,14 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, jobs: JobSe
             .start(move |job| {
                 let processor = processor.clone();
                 async move {
-                    {
-                        let job_name = job.name.clone();
-                        crate::service::workers::begin_job(QUEUE_LIBRARY, &job_name);
-                        let result = processor.process(&job_name, &job.data).await;
-                        crate::service::workers::end_job(QUEUE_LIBRARY, &job_name, result.is_ok());
-                        result.map_err(crate::service::workers::worker_error)
-                    }
+                    let job_name = job.name.clone();
+                    crate::service::workers::wrap_simple_job(QUEUE_LIBRARY, &job_name, || async {
+                        processor
+                            .process(&job_name, &job.data)
+                            .await
+                            .map_err(|err| err.to_string())
+                    })
+                    .await
                 }
             })
             .await;

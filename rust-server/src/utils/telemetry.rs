@@ -155,6 +155,28 @@ pub fn record_job_started(queue: &str, job_name: &str) {
     .increment(1);
 }
 
+pub fn record_queue_active_delta(queue: &str, delta: i64) {
+    if !job_metrics_enabled() {
+        return;
+    }
+    let queue = sanitize_metric_name(queue);
+    if delta >= 0 {
+        metrics::gauge!("immich.queues.active", "queue" => queue).increment(delta as f64);
+    } else {
+        metrics::gauge!("immich.queues.active", "queue" => queue)
+            .decrement((-delta) as f64);
+    }
+}
+
+pub fn record_job_status(job_name: &str, status: &str) {
+    if !job_metrics_enabled() {
+        return;
+    }
+    let job_name = sanitize_metric_name(job_name);
+    let status = sanitize_metric_name(status);
+    metrics::counter!("immich.jobs", "job" => job_name, "status" => status).increment(1);
+}
+
 fn status_group(status: u16) -> String {
     format!("{}xx", status / 100)
 }

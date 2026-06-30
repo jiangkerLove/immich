@@ -33,4 +33,6 @@ pub mod video_interfaces;
 pub mod workers;
 pub mod telemetry;
 pub mod vector;
+pub mod clip;
+pub mod geodata_paths;
 pub mod host_metrics;

@@ -277,7 +277,13 @@ impl AssetService {
             let asset = assets::get_basic_by_id(&self.pool, asset_id)
                 .await?
                 .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))?;
-            on_after_unlink(&self.pool, &auth.user.id, &motion.id, &asset.visibility).await?;
+            on_after_unlink(
+                &self.pool,
+                &self.jobs,
+                &motion.id,
+                &asset.visibility,
+            )
+            .await?;
         }
 
         if exif_changed {
@@ -743,11 +749,10 @@ async fn on_before_unlink(
 
 async fn on_after_unlink(
     pool: &PgPool,
-    user_id: &Uuid,
+    jobs: &JobService,
     live_photo_video_id: &Uuid,
     visibility: &str,
 ) -> Result<(), ErrorResp> {
-    let _ = user_id;
     assets::update_asset_fields(
         pool,
         live_photo_video_id,
@@ -759,5 +764,8 @@ async fn on_after_unlink(
         },
     )
     .await?;
+    jobs
+        .queue_asset_generate_thumbnails_with_notify(live_photo_video_id, true)
+        .await?;
     Ok(())
 }

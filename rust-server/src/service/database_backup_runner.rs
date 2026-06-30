@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use sqlx::PgPool;
@@ -10,7 +11,8 @@ use crate::models::db::system_metadata::get_json;
 use crate::models::dto::env::EnvDto;
 use crate::service::server::ServerService;
 use crate::utils::database_backups::{
-    is_failed_database_backup_name, is_valid_database_routine_backup_name,
+    is_failed_database_backup_name, is_legacy_pg_cluster_dump, is_valid_database_backup_name,
+    is_valid_database_routine_backup_name,
 };
 use crate::utils::storage::StoragePaths;
 
@@ -51,6 +53,128 @@ impl DatabaseBackupRunner {
         self.create_backup("").await?;
         self.cleanup_backups().await?;
         Ok(())
+    }
+
+    pub async fn restore_database_backup(
+        &self,
+        filename: &str,
+        mut progress_cb: impl FnMut(&str, i32) + Send + 'static,
+    ) -> Result<(), BackupRunnerError> {
+        if !is_valid_database_backup_name(filename) {
+            return Err(BackupRunnerError::Process(
+                "Invalid backup file format!".into(),
+            ));
+        }
+
+        let backup_path = self.storage.backups_folder().join(filename);
+        if tokio::fs::metadata(&backup_path).await.is_err() {
+            return Err(BackupRunnerError::Io("Backup file not found".into()));
+        }
+
+        progress_cb("backup", 5);
+
+        let restore_point = self.create_backup("restore-point-").await?;
+        progress_cb("restore", 0);
+
+        let username = self.env.db_username.clone();
+        let is_pg_cluster_dump = is_legacy_pg_cluster_dump(filename);
+        let progress = std::sync::Arc::new(std::sync::Mutex::new(progress_cb));
+        let restore_progress = std::sync::Arc::clone(&progress);
+        let result = self
+            .restore_from_file(&backup_path, &username, is_pg_cluster_dump, move |value| {
+                if let Ok(mut cb) = restore_progress.lock() {
+                    cb("restore", (value * 100.0) as i32);
+                }
+            })
+            .await;
+
+        if let Err(err) = result {
+            eprintln!("database restore failed, rolling back: {err}");
+            if let Ok(mut cb) = progress.lock() {
+                cb("rollback", 0);
+            }
+            let rollback_progress = std::sync::Arc::clone(&progress);
+            self.restore_from_file(
+                std::path::Path::new(&restore_point),
+                &username,
+                false,
+                move |value| {
+                    if let Ok(mut cb) = rollback_progress.lock() {
+                        cb("rollback", (value * 100.0) as i32);
+                    }
+                },
+            )
+            .await?;
+            return Err(err);
+        }
+
+        if let Ok(mut cb) = progress.lock() {
+            cb("migrations", 90);
+        }
+
+        crate::service::database_migrations::run(&self.env)
+            .await
+            .map_err(|err| BackupRunnerError::Process(err.to_string()))?;
+
+        let has_admin = crate::models::db::users::UserDb::get_admin(&self.pool)
+            .await
+            .map_err(|err| BackupRunnerError::Sql(err.to_string()))?
+            .is_some();
+        if !has_admin {
+            return Err(BackupRunnerError::Process(
+                "Server health check failed, no admin exists.".into(),
+            ));
+        }
+
+        crate::service::database_migrations::verify_schema(&self.pool)
+            .await
+            .map_err(|err| BackupRunnerError::Process(err.to_string()))?;
+
+        if let Ok(mut cb) = progress.lock() {
+            cb("restore", 100);
+        }
+        Ok(())
+    }
+
+    async fn restore_from_file(
+        &self,
+        backup_path: &Path,
+        username: &str,
+        is_pg_cluster_dump: bool,
+        mut progress_cb: impl FnMut(f64) + Send + 'static,
+    ) -> Result<(), BackupRunnerError> {
+        let pg_version = self.postgres_version().await?;
+        let major = parse_postgres_major(&pg_version).ok_or_else(|| {
+            BackupRunnerError::UnsupportedPostgres(pg_version.clone())
+        })?;
+        let psql = resolve_pg_binary("psql", major);
+        let args = self.psql_args(!is_pg_cluster_dump);
+        let password = self.env.db_password.clone();
+        let preamble = restore_preamble(username, is_pg_cluster_dump);
+
+        let file_size = tokio::fs::metadata(backup_path)
+            .await
+            .map_err(|err| BackupRunnerError::Io(err.to_string()))?
+            .len()
+            .max(1);
+
+        let backup_path = backup_path.to_path_buf();
+        let psql_bin = psql.clone();
+        let psql_args = args.clone();
+
+        spawn_blocking(move || {
+            run_psql_restore(
+                &psql_bin,
+                &psql_args,
+                &password,
+                &preamble,
+                &backup_path,
+                file_size,
+                &mut progress_cb,
+            )
+        })
+        .await
+        .map_err(|err| BackupRunnerError::Process(err.to_string()))?
     }
 
     async fn create_backup(&self, filename_prefix: &str) -> Result<String, BackupRunnerError> {
@@ -181,6 +305,121 @@ impl DatabaseBackupRunner {
             self.env.db_database_name.clone(),
         ]
     }
+
+    fn psql_args(&self, single_transaction: bool) -> Vec<String> {
+        let mut args = vec![
+            "--username".into(),
+            self.env.db_username.clone(),
+            "--host".into(),
+            self.env.db_url.clone(),
+            "--port".into(),
+            self.env.db_port.to_string(),
+            "--dbname".into(),
+            self.env.db_database_name.clone(),
+        ];
+        if single_transaction {
+            args.push("--single-transaction".into());
+        }
+        args
+    }
+}
+
+fn restore_preamble(username: &str, is_pg_cluster_dump: bool) -> String {
+    let drop_connections = r#"
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND pid <> pg_backend_pid();
+"#;
+    if is_pg_cluster_dump {
+        format!("{drop_connections}\n\\c postgres\n")
+    } else {
+        format!(
+            "{drop_connections}
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO \"{username}\";
+GRANT ALL ON SCHEMA public TO public;
+"
+        )
+    }
+}
+
+fn run_psql_restore<F>(
+    psql: &Path,
+    args: &[String],
+    password: &str,
+    preamble: &str,
+    backup_path: &Path,
+    file_size: u64,
+    progress_cb: &mut F,
+) -> Result<(), BackupRunnerError>
+where
+    F: FnMut(f64),
+{
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(psql)
+        .args(args)
+        .env("PGPASSWORD", password)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| BackupRunnerError::Process(format!("failed to spawn psql: {err}")))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| BackupRunnerError::Process("psql stdin unavailable".into()))?;
+
+    stdin
+        .write_all(preamble.as_bytes())
+        .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+
+    let file = std::fs::File::open(backup_path)
+        .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+    let mut reader: Box<dyn Read> = if backup_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
+        || backup_path
+            .to_string_lossy()
+            .ends_with(".sql.gz")
+    {
+        Box::new(GzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
+
+    let mut buffer = [0u8; 64 * 1024];
+    let mut bytes_read = 0u64;
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        stdin
+            .write_all(&buffer[..read])
+            .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+        bytes_read += read as u64;
+        progress_cb((bytes_read as f64 / file_size as f64).min(1.0));
+    }
+
+    drop(stdin);
+    let output = child
+        .wait()
+        .map_err(|err| BackupRunnerError::Process(err.to_string()))?;
+    if !output.success() {
+        return Err(BackupRunnerError::Process(format!(
+            "psql exited with status {output}"
+        )));
+    }
+
+    Ok(())
 }
 
 fn parse_postgres_major(version: &str) -> Option<u32> {

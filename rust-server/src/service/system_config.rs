@@ -14,12 +14,17 @@ const CONFIG_KEY: &str = "system-config";
 #[derive(Clone)]
 pub struct SystemConfigService {
     pool: PgPool,
+    redis_url: String,
     websocket: WebSocketHub,
 }
 
 impl SystemConfigService {
-    pub fn new(pool: PgPool, websocket: WebSocketHub) -> Self {
-        Self { pool, websocket }
+    pub fn new(pool: PgPool, redis_url: String, websocket: WebSocketHub) -> Self {
+        Self {
+            pool,
+            redis_url,
+            websocket,
+        }
     }
 
     pub fn defaults(&self) -> Value {
@@ -42,9 +47,17 @@ impl SystemConfigService {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigUpdate)?;
 
+        let old_config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
+        crate::service::config_validate::validate_system_config(&old_config, dto).await?;
+
         set_json(&self.pool, CONFIG_KEY, dto).await?;
-        crate::service::config_bootstrap::on_config_update(&self.pool).await;
+        crate::service::config_bootstrap::on_config_update(&self.pool, Some(&old_config)).await;
         self.websocket.emit_config_update();
+        crate::service::server_events::publish_config_update(
+            &self.redis_url,
+            Some(old_config),
+        )
+        .await;
         Ok(dto.clone())
     }
 

@@ -506,6 +506,10 @@ impl ThumbnailService {
         job: &EntityJob,
         is_video: bool,
     ) -> Result<(), String> {
+        if !job.notify.unwrap_or(false) && job.source.as_deref() != Some("upload") {
+            return Ok(());
+        }
+
         self.jobs
             .queue_post_thumbnail_ml_jobs(job, is_video)
             .await

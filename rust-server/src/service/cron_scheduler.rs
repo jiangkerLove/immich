@@ -54,7 +54,7 @@ pub fn spawn_locked<F>(
         let last_run = Arc::new(Mutex::new(LastRunMap::new()));
 
         loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            crate::service::scheduler_notify::wait_or_notify(Duration::from_secs(60)).await;
 
             let now = Local::now();
             let since = now - chrono::Duration::seconds(59);

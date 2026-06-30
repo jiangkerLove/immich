@@ -112,6 +112,21 @@ impl WebSocketHub {
         );
     }
 
+    pub fn emit_maintenance_status(&self, status: &crate::models::dto::maintenance::MaintenanceStatusResp) {
+        self.client_send("MaintenanceStatusV1", "private", status.clone());
+        let public = crate::service::maintenance::public_maintenance_status(status);
+        self.client_send("MaintenanceStatusV1", "public", public);
+    }
+
+    pub fn emit_maintenance_end(&self) {
+        self.client_broadcast(
+            "AppRestartV1",
+            AppRestartEvent {
+                is_maintenance_mode: false,
+            },
+        );
+    }
+
     pub fn emit_asset_trash(&self, user_id: Uuid, asset_ids: Vec<String>) {
         self.client_send("on_asset_trash", user_id.to_string(), asset_ids);
     }

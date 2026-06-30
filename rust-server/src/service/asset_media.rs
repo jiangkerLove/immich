@@ -7,7 +7,6 @@ use uuid::Uuid;
 
 use crate::models::db::assets::{self, NewAsset};
 use crate::models::db::shared_links;
-use crate::models::db::system_metadata::{get_machine_learning_config, is_smart_search_enabled};
 use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
@@ -181,24 +180,6 @@ impl AssetMediaService {
             crate::utils::workflow::TRIGGER_ASSET_CREATE,
         )
         .await;
-
-        if asset_type == "IMAGE" && visibility != "hidden" {
-            let pool = self.pool.clone();
-            let image_path = upload_path.clone();
-            tokio::spawn(async move {
-                if let Ok(config) = get_machine_learning_config(&pool).await {
-                    if is_smart_search_enabled(&config) {
-                        let _ = crate::service::ml::index_asset_image(
-                            &pool,
-                            &config,
-                            &asset_id,
-                            &image_path,
-                        )
-                        .await;
-                    }
-                }
-            });
-        }
 
         Ok(AssetMediaResponse {
             id: asset_id,

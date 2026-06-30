@@ -36,7 +36,10 @@ mod video_conversion;
 mod workflow;
 mod job_handler;
 
-pub use job_handler::{begin_job, end_job, finish_failed, finish_ok, worker_error};
+pub use job_handler::{
+    begin_job, end_job, end_job_with_status, finish_failed, finish_ok, wrap_simple_job,
+    wrap_status_job, worker_error,
+};
 
 static WORKER_CTX: OnceLock<WorkerContext> = OnceLock::new();
 
@@ -117,6 +120,7 @@ async fn spawn_workers(ctx: &WorkerContext, config: &Value) {
                 ctx.redis_url.clone(),
                 ctx.storage.clone(),
                 ctx.env.clone(),
+                ctx.websocket.clone(),
                 concurrency_for_queue(config, queue, 1),
             ),
             QUEUE_THUMBNAIL => thumbnail_generation::spawn(

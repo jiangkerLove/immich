@@ -7,6 +7,35 @@ pub const LOCK_LIBRARY: i64 = 1337;
 pub const LOCK_NIGHTLY_JOBS: i64 = 600;
 pub const LOCK_VERSION_CHECK: i64 = 800;
 pub const LOCK_MEMORY_CREATION: i64 = 777;
+pub const LOCK_CLIP_DIM_SIZE: i64 = 512;
+pub const LOCK_MAINTENANCE_OPERATION: i64 = 621;
+
+pub async fn wait_for_free_maintenance_lock(pool: &Pool<Postgres>) {
+    loop {
+        let acquired: bool = match sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(LOCK_MAINTENANCE_OPERATION)
+            .fetch_one(pool)
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("maintenance lock check failed: {err}");
+                false
+            }
+        };
+
+        if acquired {
+            let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+                .bind(LOCK_MAINTENANCE_OPERATION)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(false);
+            return;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
 
 pub async fn try_acquire(
     pool: &Pool<Postgres>,

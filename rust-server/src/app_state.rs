@@ -25,6 +25,7 @@ use crate::service::{
     duplicate::DuplicateService,
     system_config::SystemConfigService,
     maintenance::MaintenanceService,
+    maintenance_worker::MaintenanceWorkerRuntime,
     hls::HlsService,
     queue::QueueService,
     library::LibraryService,
@@ -50,6 +51,7 @@ pub struct AppState {
     pub services: Services,
     pub storage: StoragePaths,
     pub websocket: WebSocketHub,
+    pub maintenance_worker: Option<MaintenanceWorkerRuntime>,
 }
 
 #[derive(Clone)]
@@ -141,7 +143,7 @@ impl Services {
             view: ViewService::new(pool.clone()),
             user_admin: UserAdminService::new(pool.clone(), websocket.clone(), jobs.clone()),
             duplicate: DuplicateService::new(pool.clone(), jobs.clone(), websocket.clone()),
-            system_config: SystemConfigService::new(pool.clone(), websocket.clone()),
+            system_config: SystemConfigService::new(pool.clone(), redis_url.clone(), websocket.clone()),
             maintenance: MaintenanceService::new(pool.clone(), storage.clone(), websocket.clone()),
             hls: HlsService::new(pool.clone(), storage.clone(), hls_engine),
             queue: QueueService::new(jobs.clone()),
@@ -206,6 +208,20 @@ impl AppState {
             .await
             .expect("can't connect to database");
 
+        crate::models::db::advisory_lock::wait_for_free_maintenance_lock(&sql_pool).await;
+
+        if let Err(err) = crate::service::database_bootstrap::on_startup(&sql_pool, &settings).await {
+            panic!("Database bootstrap failed: {err}");
+        }
+
+        if let Err(err) = crate::service::database_migrations::run(&settings).await {
+            panic!("Failed to run database migrations: {err}");
+        }
+
+        if !settings.db_skip_migrations.unwrap_or(false) {
+            crate::service::database_bootstrap::log_schema_drift(&sql_pool).await;
+        }
+
         let storage = StoragePaths::new(resolve_media_location(&settings));
 
         let auth = AuthService::new(sql_pool.clone());
@@ -214,6 +230,7 @@ impl AppState {
             .expect("failed to initialize websocket redis adapter");
 
         WebSocketJobListener::spawn(sql_pool.clone(), redis_url.clone(), websocket.clone());
+        crate::service::server_events::spawn_listener(sql_pool.clone(), redis_url.clone());
 
         let jobs = JobService::new(redis_url.clone());
         workers::spawn_all(WorkerContext {
@@ -238,7 +255,7 @@ impl AppState {
             storage.clone(),
         );
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
-        crate::service::config_bootstrap::run(&sql_pool, &settings).await;
+        crate::service::config_bootstrap::run(&sql_pool, &settings, &jobs).await;
 
         (
             AppState {
@@ -254,6 +271,7 @@ impl AppState {
                     hls_engine,
                 ),
                 websocket,
+                maintenance_worker: None,
             },
             websocket_layer,
         )
@@ -304,6 +322,14 @@ impl AppState {
         let hls_engine = crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
 
+        let maintenance_worker = MaintenanceWorkerRuntime::spawn(
+            sql_pool.clone(),
+            storage.clone(),
+            settings.clone(),
+            websocket.clone(),
+        )
+        .await;
+
         (
             Self {
                 sql_pool: sql_pool.clone(),
@@ -318,6 +344,7 @@ impl AppState {
                     hls_engine,
                 ),
                 websocket,
+                maintenance_worker: Some(maintenance_worker),
             },
             websocket_layer,
         )

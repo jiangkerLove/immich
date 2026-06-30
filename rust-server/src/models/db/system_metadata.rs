@@ -296,6 +296,18 @@ pub async fn get_reverse_geocoding_state(
         .unwrap_or_default())
 }
 
+pub async fn set_reverse_geocoding_state(
+    pool: &Pool<Postgres>,
+    state: &ReverseGeocodingState,
+) -> Result<(), sqlx::Error> {
+    set_json(
+        pool,
+        REVERSE_GEOCODING_STATE_KEY,
+        &serde_json::to_value(state).unwrap_or_default(),
+    )
+    .await
+}
+
 pub async fn get_version_check_state(
     pool: &Pool<Postgres>,
 ) -> Result<VersionCheckState, sqlx::Error> {

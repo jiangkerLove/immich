@@ -413,6 +413,39 @@ impl StorageTemplateService {
 
         Ok(destination)
     }
+
+    pub fn validate_storage_template(template: &str) -> Result<(), String> {
+        let asset_id = Uuid::parse_str("d587e44b-f8c0-4832-9ba3-43268bbf5d4e")
+            .map_err(|err| err.to_string())?;
+        let owner_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001")
+            .map_err(|err| err.to_string())?;
+        let now = Utc::now();
+        let asset = StorageTemplateAsset {
+            id: asset_id,
+            owner_id,
+            asset_type: "IMAGE".to_string(),
+            checksum: vec![0],
+            original_path: "/upload/test/IMG_123.jpg".to_string(),
+            is_external: false,
+            original_file_name: "IMG_123.jpg".to_string(),
+            live_photo_video_id: None,
+            file_created_at: Some(now),
+            file_size_in_byte: Some(1),
+            make: Some("FUJIFILM".to_string()),
+            model: Some("X-T50".to_string()),
+            lens_model: Some("XF27mm F2.8 R WR".to_string()),
+        };
+        render_template(
+            template,
+            &asset,
+            "IMG_123",
+            "jpg",
+            Some("album"),
+            Some(now),
+            Some(now),
+        )?;
+        Ok(())
+    }
 }
 
 fn render_template(
