@@ -256,6 +256,13 @@ impl AppState {
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
         crate::service::config_bootstrap::run(&sql_pool, &settings, &jobs).await;
 
+        if crate::utils::telemetry::api_metrics_enabled() {
+            match crate::models::db::users::UserDb::count_active(&sql_pool).await {
+                Ok(count) => crate::utils::telemetry::set_users_total(count),
+                Err(err) => eprintln!("telemetry: failed to load user count: {err}"),
+            }
+        }
+
         (
             AppState {
                 sql_pool: sql_pool.clone(),

@@ -165,6 +165,7 @@ impl UserAdminService {
                 .await;
         }
 
+        crate::utils::telemetry::add_users_total(1);
         Ok(map_user_admin_with_license(&self.pool, user).await?)
     }
 
@@ -284,6 +285,7 @@ impl UserAdminService {
 
         let user = UserDb::admin_delete(&self.pool, id, dto.force.unwrap_or(false)).await?;
         self.websocket.emit_user_delete(*id);
+        crate::utils::telemetry::add_users_total(-1);
         Ok(map_user_admin_with_license(&self.pool, user).await?)
     }
 
@@ -293,6 +295,7 @@ impl UserAdminService {
 
         self.find_or_fail(id, true).await?;
         let user = UserDb::admin_restore(&self.pool, id).await?;
+        crate::utils::telemetry::add_users_total(1);
         Ok(map_user_admin_with_license(&self.pool, user).await?)
     }
 

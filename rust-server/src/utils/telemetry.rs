@@ -177,6 +177,24 @@ pub fn record_job_status(job_name: &str, status: &str) {
     metrics::counter!("immich.jobs", "job" => job_name, "status" => status).increment(1);
 }
 
+pub fn set_users_total(count: i64) {
+    if !api_metrics_enabled() {
+        return;
+    }
+    metrics::gauge!("immich.users.total").set(count as f64);
+}
+
+pub fn add_users_total(delta: i64) {
+    if !api_metrics_enabled() {
+        return;
+    }
+    if delta >= 0 {
+        metrics::gauge!("immich.users.total").increment(delta as f64);
+    } else {
+        metrics::gauge!("immich.users.total").decrement((-delta) as f64);
+    }
+}
+
 fn status_group(status: u16) -> String {
     format!("{}xx", status / 100)
 }

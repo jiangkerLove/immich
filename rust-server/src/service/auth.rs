@@ -109,6 +109,7 @@ impl AuthService {
             ErrorResp::from(err)
         })?;
 
+        crate::utils::telemetry::add_users_total(1);
         Ok(map_user_admin_with_license(&self.db_pool, user).await?)
     }
 
