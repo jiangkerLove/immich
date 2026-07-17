@@ -16,6 +16,7 @@ use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_string_list};
 use crate::service::media::ffprobe::{self, ProbeResult};
 use crate::service::media::metadata_postprocess;
+use crate::utils::mime_types::{is_heif_image_path, is_possibly_animated_image_path};
 use crate::utils::storage::StoragePaths;
 
 const JOBS_BATCH_SIZE: usize = 1000;
@@ -26,6 +27,11 @@ const EXIF_DATE_TAGS: &[&str] = &[
     "CreationDate",
     "CreateDate",
     "MediaCreateDate",
+    "DateTimeCreated",
+    "GPSDateTime",
+    "DateTimeUTC",
+    "SonyDateTime2",
+    "SourceImageCreateTime",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +83,9 @@ impl MetadataExtractService {
                 }
             }
         }
+        if !should_probe && !is_possibly_animated_image_path(&asset.original_path) {
+            remove_tag(&mut media_tags, "Duration");
+        }
 
         let probe = if should_probe {
             Some(ffprobe::probe(&asset.original_path).await?)
@@ -87,6 +96,7 @@ impl MetadataExtractService {
         if let Some(probe) = probe.as_ref() {
             merge_probe_tags(&mut media_tags, probe);
         }
+        apply_heif_orientation(&mut media_tags, &asset.original_path);
 
         let metadata = tokio::fs::metadata(&asset.original_path)
             .await
@@ -348,15 +358,42 @@ impl MetadataExtractService {
 }
 
 fn merge_sidecar_tags(media: &mut Value, sidecar: &Value) {
+    if extract_exif_date(sidecar).is_some() {
+        for tag in EXIF_DATE_TAGS {
+            remove_tag(media, tag);
+        }
+        remove_tag(media, "OffsetTime");
+        remove_tag(media, "TimeZone");
+    }
+
     if let Some(obj) = sidecar.as_object() {
         for (key, value) in obj {
-            if key == "SourceFile" || key == "ExifToolVersion" {
+            if key == "SourceFile" || key == "ExifToolVersion" || key == "Duration" {
                 continue;
             }
             if let Some(map) = media.as_object_mut() {
                 map.insert(key.clone(), value.clone());
             }
         }
+    }
+}
+
+fn apply_heif_orientation(media: &mut Value, path: &str) {
+    if !is_heif_image_path(path) {
+        return;
+    }
+
+    let orientation = tag_i32(media, "Rotation").and_then(|rotation| match rotation {
+        0 => Some(1),
+        1 => Some(8),
+        2 => Some(3),
+        3 => Some(6),
+        _ => None,
+    });
+
+    match orientation {
+        Some(orientation) => set_tag(media, "Orientation", Value::from(orientation)),
+        None => remove_tag(media, "Orientation"),
     }
 }
 
@@ -385,6 +422,12 @@ fn set_tag(media: &mut Value, key: &str, value: Value) {
     }
 }
 
+fn remove_tag(media: &mut Value, key: &str) {
+    if let Some(map) = media.as_object_mut() {
+        map.remove(key);
+    }
+}
+
 fn orientation_from_rotation(rotation: i32) -> Value {
     Value::from(match rotation {
         -90 => 6,
@@ -396,6 +439,17 @@ fn orientation_from_rotation(rotation: i32) -> Value {
 }
 
 fn image_dimensions(tags: &Value) -> (Option<i32>, Option<i32>) {
+    if let Some(size) = tag_string(tags, "ImageSize") {
+        let mut dimensions = size.split('x').map(str::trim);
+        if let (Some(Ok(width)), Some(Ok(height))) = (
+            dimensions.next().map(str::parse::<i32>),
+            dimensions.next().map(str::parse::<i32>),
+        ) {
+            if width > 0 && height > 0 {
+                return (Some(width), Some(height));
+            }
+        }
+    }
     (
         tag_i32(tags, "ImageWidth").or_else(|| tag_i32(tags, "ExifImageWidth")),
         tag_i32(tags, "ImageHeight").or_else(|| tag_i32(tags, "ExifImageHeight")),
@@ -415,10 +469,19 @@ fn gps_coordinates(tags: &Value) -> (Option<f64>, Option<f64>) {
 fn collect_tags(tags: &Value) -> Vec<String> {
     let mut result = tag_string_list(tags, "TagsList");
     if result.is_empty() {
-        result = tag_string_list(tags, "Keywords");
+        result = tag_string_list(tags, "HierarchicalSubject");
+        result = result
+            .into_iter()
+            .map(|tag| {
+                tag.split('|')
+                    .map(|part| part.replace('/', "|"))
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
     }
     if result.is_empty() {
-        result = tag_string_list(tags, "HierarchicalSubject");
+        result = tag_string_list(tags, "Keywords");
     }
     result
 }
@@ -507,7 +570,7 @@ mod tests {
     use chrono::{Datelike, Timelike};
     use serde_json::json;
 
-    use super::extract_exif_date;
+    use super::{apply_heif_orientation, extract_exif_date, image_dimensions, merge_sidecar_tags};
 
     #[test]
     fn preserves_exif_offset_and_local_wall_clock_time() {
@@ -547,6 +610,42 @@ mod tests {
         assert_eq!(date.local.year(), 2024);
         assert_eq!(date.local.timestamp_subsec_millis(), 987);
         assert_eq!(date.time_zone.as_deref(), Some("UTC+0"));
+    }
+
+    #[test]
+    fn sidecar_date_replaces_media_date_without_importing_sidecar_duration() {
+        let mut media = json!({
+            "DateTimeOriginal": "2020:01:01 00:00:00",
+            "OffsetTime": "+00:00",
+            "Duration": 1.0
+        });
+        let sidecar = json!({
+            "DateTimeOriginal": "2024:03:04 12:30:15+02:00",
+            "Duration": 999.0,
+            "Description": "from sidecar"
+        });
+
+        merge_sidecar_tags(&mut media, &sidecar);
+
+        let date = extract_exif_date(&media).expect("sidecar date should remain");
+        assert_eq!(date.local.year(), 2024);
+        assert!(media.get("Duration").is_some());
+        assert_eq!(media["Description"], "from sidecar");
+    }
+
+    #[test]
+    fn uses_image_size_and_heif_rotation_for_metadata() {
+        let mut tags = json!({
+            "ImageSize": "6000x4000",
+            "ImageWidth": 100,
+            "ImageHeight": 100,
+            "Rotation": 3,
+            "Orientation": 1
+        });
+
+        apply_heif_orientation(&mut tags, "photo.heic");
+        assert_eq!(image_dimensions(&tags), (Some(6000), Some(4000)));
+        assert_eq!(tags["Orientation"], 6);
     }
 }
 
