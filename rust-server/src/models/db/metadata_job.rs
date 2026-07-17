@@ -18,6 +18,7 @@ pub struct MetadataExtractionAsset {
     pub file_created_at: Option<DateTime<Utc>>,
     pub file_modified_at: Option<DateTime<Utc>>,
     pub sidecar_path: Option<String>,
+    pub locked_properties: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +113,7 @@ pub async fn get_for_metadata_extraction(
             asset."isEdited" AS is_edited,
             asset."fileCreatedAt" AS file_created_at,
             asset."fileModifiedAt" AS file_modified_at,
+            COALESCE(asset_exif."lockedProperties", ARRAY[]::text[]) AS locked_properties,
             (
                 SELECT af.path
                 FROM asset_file af
@@ -121,6 +123,7 @@ pub async fn get_for_metadata_extraction(
                 LIMIT 1
             ) AS sidecar_path
         FROM asset
+        LEFT JOIN asset_exif ON asset_exif."assetId" = asset.id
         WHERE asset.id = $1
           AND asset."deletedAt" IS NULL
         "#,
@@ -144,6 +147,7 @@ pub async fn get_for_metadata_extraction(
         file_created_at: row.file_created_at,
         file_modified_at: row.file_modified_at,
         sidecar_path: row.sidecar_path,
+        locked_properties: row.locked_properties,
     }))
 }
 
@@ -210,29 +214,51 @@ pub async fn upsert_metadata(
             "exifImageHeight" = EXCLUDED."exifImageHeight",
             "fileSizeInByte" = EXCLUDED."fileSizeInByte",
             orientation = EXCLUDED.orientation,
-            "dateTimeOriginal" = EXCLUDED."dateTimeOriginal",
+            "dateTimeOriginal" = CASE
+                WHEN 'dateTimeOriginal' = ANY(asset_exif."lockedProperties")
+                    THEN asset_exif."dateTimeOriginal"
+                ELSE EXCLUDED."dateTimeOriginal"
+            END,
             "modifyDate" = EXCLUDED."modifyDate",
             "lensModel" = EXCLUDED."lensModel",
             "fNumber" = EXCLUDED."fNumber",
             "focalLength" = EXCLUDED."focalLength",
             iso = EXCLUDED.iso,
-            latitude = EXCLUDED.latitude,
-            longitude = EXCLUDED.longitude,
+            latitude = CASE
+                WHEN 'latitude' = ANY(asset_exif."lockedProperties") THEN asset_exif.latitude
+                ELSE EXCLUDED.latitude
+            END,
+            longitude = CASE
+                WHEN 'longitude' = ANY(asset_exif."lockedProperties") THEN asset_exif.longitude
+                ELSE EXCLUDED.longitude
+            END,
             city = EXCLUDED.city,
             state = EXCLUDED.state,
             country = EXCLUDED.country,
-            description = EXCLUDED.description,
+            description = CASE
+                WHEN 'description' = ANY(asset_exif."lockedProperties") THEN asset_exif.description
+                ELSE EXCLUDED.description
+            END,
             fps = EXCLUDED.fps,
             "exposureTime" = EXCLUDED."exposureTime",
             "livePhotoCID" = EXCLUDED."livePhotoCID",
-            "timeZone" = EXCLUDED."timeZone",
+            "timeZone" = CASE
+                WHEN 'timeZone' = ANY(asset_exif."lockedProperties") THEN asset_exif."timeZone"
+                ELSE EXCLUDED."timeZone"
+            END,
             "projectionType" = EXCLUDED."projectionType",
             "profileDescription" = EXCLUDED."profileDescription",
             colorspace = EXCLUDED.colorspace,
             "bitsPerSample" = EXCLUDED."bitsPerSample",
             "autoStackId" = EXCLUDED."autoStackId",
-            rating = EXCLUDED.rating,
-            tags = EXCLUDED.tags,
+            rating = CASE
+                WHEN 'rating' = ANY(asset_exif."lockedProperties") THEN asset_exif.rating
+                ELSE EXCLUDED.rating
+            END,
+            tags = CASE
+                WHEN 'tags' = ANY(asset_exif."lockedProperties") THEN asset_exif.tags
+                ELSE EXCLUDED.tags
+            END,
             "updatedAt" = NOW()
         "#,
     )
@@ -435,29 +461,30 @@ pub async fn sync_asset_tags_from_exif(
 ) -> Result<(), sqlx::Error> {
     let mut tag_ids = Vec::new();
     for tag_name in tag_names {
-        let parts: Vec<&str> = tag_name.split('/').filter(|part| !part.is_empty()).collect();
+        let parts: Vec<&str> = tag_name
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         let mut parent_id: Option<Uuid> = None;
         let mut last_tag_id: Option<Uuid> = None;
         for part in parts {
             let value = if let Some(parent) = parent_id {
-                let parent_value: String = sqlx::query_scalar(
-                    r#"SELECT value FROM tag WHERE id = $1"#,
-                )
-                .bind(parent)
-                .fetch_one(pool)
-                .await?;
+                let parent_value: String =
+                    sqlx::query_scalar(r#"SELECT value FROM tag WHERE id = $1"#)
+                        .bind(parent)
+                        .fetch_one(pool)
+                        .await?;
                 format!("{parent_value}/{part}")
             } else {
                 part.to_string()
             };
 
-            let tag_id: Uuid = if let Some(existing) = sqlx::query_scalar(
-                r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#,
-            )
-            .bind(owner_id)
-            .bind(&value)
-            .fetch_optional(pool)
-            .await?
+            let tag_id: Uuid = if let Some(existing) =
+                sqlx::query_scalar(r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#)
+                    .bind(owner_id)
+                    .bind(&value)
+                    .fetch_optional(pool)
+                    .await?
             {
                 existing
             } else {
@@ -520,4 +547,5 @@ struct MetadataExtractionQueryRow {
     file_created_at: Option<DateTime<Utc>>,
     file_modified_at: Option<DateTime<Utc>>,
     sidecar_path: Option<String>,
+    locked_properties: Vec<String>,
 }
