@@ -28,6 +28,9 @@ pub struct ProbeVideoStream {
     pub color_primaries: i16,
     pub color_transfer: i16,
     pub color_matrix: i16,
+    pub dv_profile: Option<i16>,
+    pub dv_level: Option<i16>,
+    pub dv_bl_signal_compatibility_id: Option<i16>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +84,9 @@ struct FfprobeStream {
     color_primaries: Option<String>,
     color_transfer: Option<String>,
     color_space: Option<String>,
+    dv_profile: Option<String>,
+    dv_level: Option<String>,
+    dv_bl_signal_compatibility_id: Option<String>,
     disposition: Option<FfprobeDisposition>,
 }
 
@@ -309,6 +315,18 @@ fn parse_video_stream(stream: &FfprobeStream) -> ProbeVideoStream {
         color_primaries: map_color_primaries(stream.color_primaries.as_deref()),
         color_transfer: map_color_transfer(stream.color_transfer.as_deref()),
         color_matrix: map_color_matrix(stream.color_space.as_deref()),
+        dv_profile: stream
+            .dv_profile
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
+        dv_level: stream
+            .dv_level
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
+        dv_bl_signal_compatibility_id: stream
+            .dv_bl_signal_compatibility_id
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
     }
 }
 

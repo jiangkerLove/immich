@@ -67,6 +67,9 @@ pub struct UpsertAssetVideo {
     pub color_primaries: i16,
     pub color_transfer: i16,
     pub color_matrix: i16,
+    pub dv_profile: Option<i16>,
+    pub dv_level: Option<i16>,
+    pub dv_bl_signal_compatibility_id: Option<i16>,
     pub codec_name: String,
     pub format_name: String,
     pub format_long_name: String,
@@ -312,10 +315,11 @@ pub async fn upsert_metadata(
             r#"
             INSERT INTO asset_video (
                 "assetId", bitrate, "frameCount", "timeBase", index, profile, level,
-                "colorPrimaries", "colorTransfer", "colorMatrix", "codecName",
+                "colorPrimaries", "colorTransfer", "colorMatrix", "dvProfile", "dvLevel",
+                "dvBlSignalCompatibilityId", "codecName",
                 "formatName", "formatLongName", "pixelFormat"
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             ON CONFLICT ("assetId") DO UPDATE SET
                 bitrate = EXCLUDED.bitrate,
                 "frameCount" = EXCLUDED."frameCount",
@@ -326,6 +330,9 @@ pub async fn upsert_metadata(
                 "colorPrimaries" = EXCLUDED."colorPrimaries",
                 "colorTransfer" = EXCLUDED."colorTransfer",
                 "colorMatrix" = EXCLUDED."colorMatrix",
+                "dvProfile" = EXCLUDED."dvProfile",
+                "dvLevel" = EXCLUDED."dvLevel",
+                "dvBlSignalCompatibilityId" = EXCLUDED."dvBlSignalCompatibilityId",
                 "codecName" = EXCLUDED."codecName",
                 "formatName" = EXCLUDED."formatName",
                 "formatLongName" = EXCLUDED."formatLongName",
@@ -342,6 +349,9 @@ pub async fn upsert_metadata(
         .bind(video.color_primaries)
         .bind(video.color_transfer)
         .bind(video.color_matrix)
+        .bind(video.dv_profile)
+        .bind(video.dv_level)
+        .bind(video.dv_bl_signal_compatibility_id)
         .bind(&video.codec_name)
         .bind(&video.format_name)
         .bind(&video.format_long_name)
