@@ -83,6 +83,17 @@ pub struct UpsertAssetAudio {
 }
 
 #[derive(Debug, Clone)]
+pub struct UpsertAssetKeyframe {
+    pub asset_id: Uuid,
+    pub pts: Vec<i32>,
+    pub acc_duration: Vec<i32>,
+    pub own_duration: Vec<i32>,
+    pub total_duration: i32,
+    pub packet_count: i32,
+    pub output_frames: i32,
+}
+
+#[derive(Debug, Clone)]
 pub struct UpdateAssetAfterMetadata {
     pub asset_id: Uuid,
     pub duration: Option<i64>,
@@ -190,6 +201,7 @@ pub async fn upsert_metadata(
     exif: &UpsertAssetExif,
     video: Option<&UpsertAssetVideo>,
     audio: Option<&UpsertAssetAudio>,
+    keyframe: Option<&UpsertAssetKeyframe>,
     asset_update: &UpdateAssetAfterMetadata,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
@@ -355,6 +367,34 @@ pub async fn upsert_metadata(
         .bind(audio.index)
         .bind(audio.profile)
         .bind(&audio.codec_name)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if let Some(keyframe) = keyframe {
+        sqlx::query(
+            r#"
+            INSERT INTO asset_keyframe (
+                "assetId", pts, "accDuration", "ownDuration", "totalDuration",
+                "packetCount", "outputFrames"
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT ("assetId") DO UPDATE SET
+                pts = EXCLUDED.pts,
+                "accDuration" = EXCLUDED."accDuration",
+                "ownDuration" = EXCLUDED."ownDuration",
+                "totalDuration" = EXCLUDED."totalDuration",
+                "packetCount" = EXCLUDED."packetCount",
+                "outputFrames" = EXCLUDED."outputFrames"
+            "#,
+        )
+        .bind(keyframe.asset_id)
+        .bind(&keyframe.pts)
+        .bind(&keyframe.acc_duration)
+        .bind(&keyframe.own_duration)
+        .bind(keyframe.total_duration)
+        .bind(keyframe.packet_count)
+        .bind(keyframe.output_frames)
         .execute(&mut *tx)
         .await?;
     }

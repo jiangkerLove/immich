@@ -45,6 +45,16 @@ pub struct ProbeResult {
     pub audio: Option<ProbeAudioStream>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProbePackets {
+    pub keyframe_pts: Vec<i32>,
+    pub keyframe_acc_duration: Vec<i32>,
+    pub keyframe_own_duration: Vec<i32>,
+    pub total_duration: i32,
+    pub packet_count: i32,
+    pub output_frames: i32,
+}
+
 #[derive(Debug, Deserialize)]
 struct FfprobeOutput {
     streams: Option<Vec<FfprobeStream>>,
@@ -111,7 +121,9 @@ pub async fn probe(path: &str) -> Result<ProbeResult, String> {
     let parsed: FfprobeOutput =
         serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())?;
 
-    let format = parsed.format.ok_or_else(|| "missing ffprobe format".to_string())?;
+    let format = parsed
+        .format
+        .ok_or_else(|| "missing ffprobe format".to_string())?;
     let streams = parsed.streams.unwrap_or_default();
 
     let video = streams
@@ -137,6 +149,125 @@ pub async fn probe(path: &str) -> Result<ProbeResult, String> {
         video,
         audio,
     })
+}
+
+pub async fn probe_packets(path: &str, stream_index: i32) -> Result<Option<ProbePackets>, String> {
+    let output = Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-select_streams")
+        .arg(stream_index.to_string())
+        .arg("-show_entries")
+        .arg("packet=pts,duration,flags")
+        .arg("-of")
+        .arg("csv=p=0")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|err| format!("failed to run ffprobe packet scan: {err}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe packet scan failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(parse_packets_csv(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn parse_packets_csv(output: &str) -> Option<ProbePackets> {
+    let mut total_duration = 0i64;
+    let mut keyframe_pts = Vec::new();
+    let mut keyframe_acc_duration = Vec::new();
+    let mut keyframe_own_duration = Vec::new();
+    let mut post_discard = Vec::new();
+
+    for line in output.lines() {
+        let mut fields = line.split(',');
+        let (Some(pts), Some(duration), Some(flags)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (Ok(pts), Ok(duration)) = (pts.parse::<i64>(), duration.parse::<i64>()) else {
+            continue;
+        };
+
+        total_duration += duration;
+        let flag_bytes = flags.as_bytes();
+        if flag_bytes.get(1) != Some(&b'D') {
+            post_discard.push((pts, duration));
+        }
+        if flag_bytes.first() == Some(&b'K') {
+            keyframe_pts.push(pts);
+            keyframe_acc_duration.push(total_duration);
+            keyframe_own_duration.push(duration);
+        }
+    }
+
+    if post_discard.is_empty() || total_duration <= 0 {
+        return None;
+    }
+
+    let packet_count = post_discard.len();
+    let output_frames = cfr_output_frames(
+        &mut post_discard,
+        packet_count as f64 / total_duration as f64,
+    );
+    Some(ProbePackets {
+        keyframe_pts: keyframe_pts
+            .into_iter()
+            .map(|value| value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
+            .collect(),
+        keyframe_acc_duration: keyframe_acc_duration
+            .into_iter()
+            .map(|value| value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
+            .collect(),
+        keyframe_own_duration: keyframe_own_duration
+            .into_iter()
+            .map(|value| value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
+            .collect(),
+        total_duration: total_duration.clamp(0, i64::from(i32::MAX)) as i32,
+        packet_count: packet_count.min(i32::MAX as usize) as i32,
+        output_frames,
+    })
+}
+
+fn cfr_output_frames(packets: &mut [(i64, i64)], slots_per_tick: f64) -> i32 {
+    packets.sort_by_key(|(pts, _)| *pts);
+    let first_pts = packets[0].0;
+    let mut output_frames = 0i64;
+    let mut next_pts = 0.0;
+    let mut history = [0i64; 3];
+
+    for (pts, duration) in packets {
+        let sync_ipts = (*pts - first_pts) as f64 * slots_per_tick;
+        let duration = *duration as f64 * slots_per_tick;
+        let mut delta0 = sync_ipts - next_pts;
+        let delta = delta0 + duration;
+        if delta0 < 0.0 && delta > 0.0 {
+            delta0 = 0.0;
+        }
+        let mut frames = 1i64;
+        let mut previous = 0i64;
+        if delta < -1.1 {
+            frames = 0;
+        } else if delta > 1.1 {
+            frames = delta.round() as i64;
+            if delta0 > 1.1 {
+                previous = (delta0 - 0.6).round() as i64;
+            }
+        }
+        output_frames += frames;
+        next_pts += frames as f64;
+        history = [previous, history[0], history[1]];
+    }
+
+    history.sort_unstable();
+    (output_frames + history[1]).clamp(0, i64::from(i32::MAX)) as i32
 }
 
 fn parse_video_stream(stream: &FfprobeStream) -> ProbeVideoStream {
@@ -184,7 +315,10 @@ fn parse_video_stream(stream: &FfprobeStream) -> ProbeVideoStream {
 fn parse_audio_stream(stream: &FfprobeStream) -> ProbeAudioStream {
     ProbeAudioStream {
         index: stream.index.unwrap_or(0),
-        codec_name: stream.codec_name.clone().unwrap_or_else(|| "unknown".into()),
+        codec_name: stream
+            .codec_name
+            .clone()
+            .unwrap_or_else(|| "unknown".into()),
         profile: stream.profile.as_deref().and_then(parse_profile),
         bitrate: parse_i64(stream.bit_rate.as_deref()),
     }
@@ -258,5 +392,29 @@ fn map_color_matrix(value: Option<&str>) -> i16 {
         "smpte170m" => 6,
         "bt2020nc" => 9,
         _ => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_packets_csv;
+
+    #[test]
+    fn parses_keyframes_and_excludes_discarded_packets_from_count() {
+        let packets = parse_packets_csv("0,100,K_\n100,100,__\n200,100,KD\n")
+            .expect("packet data should parse");
+
+        assert_eq!(packets.keyframe_pts, vec![0, 200]);
+        assert_eq!(packets.keyframe_acc_duration, vec![100, 300]);
+        assert_eq!(packets.keyframe_own_duration, vec![100, 100]);
+        assert_eq!(packets.total_duration, 300);
+        assert_eq!(packets.packet_count, 2);
+        assert_eq!(packets.output_frames, 2);
+    }
+
+    #[test]
+    fn rejects_packet_streams_without_usable_packets() {
+        assert!(parse_packets_csv("N/A,N/A,__").is_none());
+        assert!(parse_packets_csv("").is_none());
     }
 }

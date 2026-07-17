@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::models::db::map;
 use crate::models::db::metadata_job::{
-    self, UpdateAssetAfterMetadata, UpsertAssetAudio, UpsertAssetExif, UpsertAssetVideo,
+    self, UpdateAssetAfterMetadata, UpsertAssetAudio, UpsertAssetExif, UpsertAssetKeyframe,
+    UpsertAssetVideo,
 };
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::EntityJob;
@@ -187,6 +188,23 @@ impl MetadataExtractService {
                 codec_name: audio.codec_name.clone(),
             });
 
+        let keyframe = if let Some(video) = probe.as_ref().and_then(|probe| probe.video.as_ref()) {
+            ffprobe::probe_packets(&asset.original_path, video.index)
+                .await?
+                .filter(|packets| !packets.keyframe_pts.is_empty())
+                .map(|packets| UpsertAssetKeyframe {
+                    asset_id: asset.id,
+                    pts: packets.keyframe_pts,
+                    acc_duration: packets.keyframe_acc_duration,
+                    own_duration: packets.keyframe_own_duration,
+                    total_duration: packets.total_duration,
+                    packet_count: packets.packet_count,
+                    output_frames: packets.output_frames,
+                })
+        } else {
+            None
+        };
+
         let duration_ms = probe
             .as_ref()
             .and_then(|p| p.format.duration)
@@ -207,6 +225,7 @@ impl MetadataExtractService {
             &exif,
             video.as_ref(),
             audio.as_ref(),
+            keyframe.as_ref(),
             &UpdateAssetAfterMetadata {
                 asset_id: asset.id,
                 duration: duration_ms,
