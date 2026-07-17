@@ -9,6 +9,10 @@ pub const LOCK_VERSION_CHECK: i64 = 800;
 pub const LOCK_MEMORY_CREATION: i64 = 777;
 pub const LOCK_CLIP_DIM_SIZE: i64 = 512;
 pub const LOCK_MAINTENANCE_OPERATION: i64 = 621;
+pub const LOCK_SYSTEM_FILE_MOUNTS: i64 = 300;
+pub const LOCK_MEDIA_LOCATION: i64 = 700;
+pub const LOCK_STORAGE_TEMPLATE_MIGRATION: i64 = 420;
+pub const LOCK_HLS_SESSION_CLEANUP: i64 = 850;
 
 pub async fn wait_for_free_maintenance_lock(pool: &Pool<Postgres>) {
     loop {
@@ -74,4 +78,27 @@ where
         .fetch_one(&mut *conn)
         .await?;
     result.map(Some)
+}
+
+pub async fn run_with_lock<F, Fut, T>(
+    pool: &Pool<Postgres>,
+    lock_id: i64,
+    f: F,
+) -> Result<T, sqlx::Error>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let mut conn = pool.acquire().await?;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(lock_id)
+        .execute(&mut *conn)
+        .await?;
+
+    let result = f().await;
+    let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        .bind(lock_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(result)
 }

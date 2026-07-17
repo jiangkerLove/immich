@@ -8,12 +8,14 @@ use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::service::album::{BulkIdErrorReason, BulkIdResponse, BulkIdsReq};
 use crate::service::db::DbService;
+use crate::service::job::JobService;
 use crate::utils::permission::require_permission;
 use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct TagService {
     db: DbService,
+    jobs: JobService,
 }
 
 #[derive(Debug, Serialize, FromRow, Clone)]
@@ -61,9 +63,10 @@ pub struct TagBulkAssetsResponse {
 }
 
 impl TagService {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub fn new(pool: sqlx::PgPool, jobs: JobService) -> Self {
         Self {
             db: DbService::new(pool),
+            jobs,
         }
     }
 
@@ -221,6 +224,7 @@ impl TagService {
         }
 
         let mut count = 0i64;
+        let mut touched = std::collections::HashSet::new();
         for tag_id in &dto.tag_ids {
             for asset_id in &dto.asset_ids {
                 let inserted = sqlx::query(
@@ -234,9 +238,16 @@ impl TagService {
                 .bind(asset_id)
                 .execute(&self.db.pool)
                 .await?;
-                count += inserted.rows_affected() as i64;
-                self.sync_asset_tags(asset_id).await?;
+                let rows = inserted.rows_affected() as i64;
+                count += rows;
+                if rows > 0 {
+                    touched.insert(*asset_id);
+                }
             }
+        }
+        for asset_id in touched {
+            self.sync_asset_tags(&asset_id).await?;
+            self.jobs.queue_sidecar_write(&asset_id).await?;
         }
         Ok(TagBulkAssetsResponse { count })
     }
@@ -262,6 +273,7 @@ impl TagService {
                     .execute(&self.db.pool)
                     .await;
                     self.sync_asset_tags(asset_id).await?;
+                    self.jobs.queue_sidecar_write(asset_id).await?;
                     results.push(BulkIdResponse {
                         id: *asset_id,
                         success: true,
@@ -299,6 +311,7 @@ impl TagService {
                     .execute(&self.db.pool)
                     .await;
                     self.sync_asset_tags(asset_id).await?;
+                    self.jobs.queue_sidecar_write(asset_id).await?;
                     results.push(BulkIdResponse {
                         id: *asset_id,
                         success: true,

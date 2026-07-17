@@ -378,7 +378,7 @@ impl AuthService {
         })
     }
 
-    async fn validate_shared_link_key(
+    pub async fn validate_shared_link_key(
         &self,
         key: &str,
         path: &str,
@@ -398,7 +398,7 @@ impl AuthService {
         })
     }
 
-    async fn validate_shared_link_slug(
+    pub async fn validate_shared_link_slug(
         &self,
         slug: &str,
         path: &str,

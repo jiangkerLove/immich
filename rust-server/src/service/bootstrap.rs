@@ -41,14 +41,9 @@ pub async fn run(mode: ServerMode) {
     }
 
     if telemetry_util::host_metrics_enabled() {
-        let media = StoragePaths::new(
-            settings
-                .immich_media_location
-                .as_ref()
-                .or(settings.upload_location.as_ref())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::path::PathBuf::from("./library")),
-        );
+        let media = StoragePaths::new(crate::service::storage_bootstrap::detect_media_location(
+            &settings,
+        ));
         host_metrics::spawn_collector(media.media_location().to_path_buf());
     }
 

@@ -121,7 +121,7 @@ impl Services {
             session: SessionService::new(pool.clone(), websocket.clone()),
             api_key: ApiKeyService::new(pool.clone()),
             album: albums.clone(),
-            tag: TagService::new(pool.clone()),
+            tag: TagService::new(pool.clone(), jobs.clone()),
             asset: AssetService::new(pool.clone(), jobs.clone(), websocket.clone()),
             shared_link: SharedLinkService::new(pool.clone(), albums),
             asset_media: AssetMediaService::new(pool.clone(), storage.clone(), jobs.clone()),
@@ -162,13 +162,7 @@ fn is_none_or_empty(opt: &Option<String>) -> bool {
 }
 
 fn resolve_media_location(settings: &EnvDto) -> PathBuf {
-    settings
-        .immich_media_location
-        .as_ref()
-        .or(settings.upload_location.as_ref())
-        .cloned()
-        .unwrap_or_else(|| "./library".to_string())
-        .into()
+    crate::service::storage_bootstrap::detect_media_location(settings)
 }
 
 impl AppState {
@@ -223,6 +217,11 @@ impl AppState {
         }
 
         let storage = StoragePaths::new(resolve_media_location(&settings));
+        if let Err(err) =
+            crate::service::storage_bootstrap::on_bootstrap(&sql_pool, &settings, &storage).await
+        {
+            panic!("Storage bootstrap failed: {err}");
+        }
 
         let auth = AuthService::new(sql_pool.clone());
         let (websocket_layer, websocket) = WebSocketHub::build(auth, &redis_url)
@@ -314,6 +313,12 @@ impl AppState {
             .expect("can't connect to database");
 
         let storage = StoragePaths::new(resolve_media_location(&settings));
+        if let Err(err) =
+            crate::service::storage_bootstrap::on_bootstrap(&sql_pool, &settings, &storage).await
+        {
+            panic!("Storage bootstrap failed: {err}");
+        }
+
         let auth = AuthService::new(sql_pool.clone());
         let (websocket_layer, websocket) = WebSocketHub::build(auth, &redis_url)
             .await
