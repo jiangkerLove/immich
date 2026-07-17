@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use chrono_tz::Tz;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -153,8 +153,16 @@ fn sidecar_candidates(original_path: &str, existing_sidecar: Option<&str>) -> Ve
     candidates.push(format!("{original_path}.xmp"));
 
     let path = Path::new(original_path);
-    if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem().and_then(|value| value.to_str())) {
-        candidates.push(parent.join(format!("{stem}.xmp")).to_string_lossy().into_owned());
+    if let (Some(parent), Some(stem)) = (
+        path.parent(),
+        path.file_stem().and_then(|value| value.to_str()),
+    ) {
+        candidates.push(
+            parent
+                .join(format!("{stem}.xmp"))
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
 
     candidates
@@ -165,10 +173,14 @@ fn build_write_tags(
     locked_properties: &[String],
 ) -> Vec<(&'static str, TagWriteValue)> {
     let mut values: HashMap<&'static str, TagWriteValue> = HashMap::new();
-    let locked: std::collections::HashSet<&str> = locked_properties.iter().map(String::as_str).collect();
+    let locked: std::collections::HashSet<&str> =
+        locked_properties.iter().map(String::as_str).collect();
 
     if locked.contains("description") {
-        values.insert("Description", TagWriteValue::Text(asset.description.clone()));
+        values.insert(
+            "Description",
+            TagWriteValue::Text(asset.description.clone()),
+        );
         values.insert(
             "ImageDescription",
             TagWriteValue::Text(asset.description.clone()),
@@ -176,7 +188,9 @@ fn build_write_tags(
     }
 
     if locked.contains("dateTimeOriginal") || locked.contains("timeZone") {
-        if let Some(formatted) = merge_time_zone(asset.date_time_original, asset.time_zone.as_deref()) {
+        if let Some(formatted) =
+            merge_time_zone(asset.date_time_original, asset.time_zone.as_deref())
+        {
             values.insert("DateTimeOriginal", TagWriteValue::Text(formatted));
         }
     }
@@ -228,6 +242,14 @@ fn merge_time_zone(
         return Some(date_time.to_rfc3339());
     };
 
-    let tz: Tz = time_zone.parse().ok()?;
-    Some(date_time.with_timezone(&tz).to_rfc3339())
+    if let Ok(tz) = time_zone.parse::<Tz>() {
+        return Some(date_time.with_timezone(&tz).to_rfc3339());
+    }
+
+    let offset = time_zone.parse::<FixedOffset>().ok().or_else(|| {
+        time_zone
+            .strip_prefix("UTC")
+            .and_then(|value| value.parse().ok())
+    })?;
+    Some(date_time.with_timezone(&offset).to_rfc3339())
 }

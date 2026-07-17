@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -18,6 +18,14 @@ use crate::service::media::metadata_postprocess;
 use crate::utils::storage::StoragePaths;
 
 const JOBS_BATCH_SIZE: usize = 1000;
+const EXIF_DATE_TAGS: &[&str] = &[
+    "SubSecDateTimeOriginal",
+    "SubSecCreateDate",
+    "DateTimeOriginal",
+    "CreationDate",
+    "CreateDate",
+    "MediaCreateDate",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataExtractOutcome {
@@ -34,7 +42,11 @@ pub struct MetadataExtractService {
 
 impl MetadataExtractService {
     pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
-        Self { pool, jobs, storage }
+        Self {
+            pool,
+            jobs,
+            storage,
+        }
     }
 
     pub async fn extract_asset_metadata(
@@ -93,16 +105,22 @@ impl MetadataExtractService {
         let (city, state, country) = self.reverse_geocode(latitude, longitude).await?;
 
         let tags = collect_tags(&media_tags);
+        let exif_date = extract_exif_date(&media_tags);
+        let date_time_original = exif_date.as_ref().map(|date| date.instant);
+        let time_zone = tag_string(&media_tags, "TimeZone")
+            .or_else(|| tag_string(&media_tags, "OffsetTime"))
+            .or_else(|| exif_date.as_ref().and_then(|date| date.time_zone.clone()));
         let exif = UpsertAssetExif {
             asset_id: asset.id,
-            make: tag_string(&media_tags, "Make").or_else(|| tag_string(&media_tags, "AndroidMake")),
-            model: tag_string(&media_tags, "Model").or_else(|| tag_string(&media_tags, "AndroidModel")),
+            make: tag_string(&media_tags, "Make")
+                .or_else(|| tag_string(&media_tags, "AndroidMake")),
+            model: tag_string(&media_tags, "Model")
+                .or_else(|| tag_string(&media_tags, "AndroidModel")),
             exif_image_width: width,
             exif_image_height: height,
             file_size_in_byte: Some(file_size),
             orientation,
-            date_time_original: parse_exif_datetime(&media_tags, "DateTimeOriginal")
-                .or_else(|| parse_exif_datetime(&media_tags, "CreateDate")),
+            date_time_original,
             modify_date,
             lens_model: tag_string(&media_tags, "LensModel"),
             f_number: tag_f64(&media_tags, "FNumber"),
@@ -126,9 +144,9 @@ impl MetadataExtractService {
             exposure_time: tag_string(&media_tags, "ExposureTime"),
             live_photo_cid: tag_string(&media_tags, "ContentIdentifier")
                 .or_else(|| tag_string(&media_tags, "MediaGroupUUID")),
-            time_zone: tag_string(&media_tags, "OffsetTime")
-                .or_else(|| tag_string(&media_tags, "TimeZone")),
-            projection_type: tag_string(&media_tags, "ProjectionType").map(|v| v.to_ascii_uppercase()),
+            time_zone,
+            projection_type: tag_string(&media_tags, "ProjectionType")
+                .map(|v| v.to_ascii_uppercase()),
             profile_description: tag_string(&media_tags, "ProfileDescription"),
             colorspace: tag_string(&media_tags, "ColorSpace"),
             bits_per_sample: tag_i32(&media_tags, "BitsPerSample"),
@@ -158,15 +176,16 @@ impl MetadataExtractService {
             })
         });
 
-        let audio = probe.as_ref().and_then(|p| p.audio.as_ref()).map(|audio| {
-            UpsertAssetAudio {
+        let audio = probe
+            .as_ref()
+            .and_then(|p| p.audio.as_ref())
+            .map(|audio| UpsertAssetAudio {
                 asset_id: asset.id,
                 bitrate: audio.bitrate.clamp(0, i64::from(i32::MAX)) as i32,
                 index: audio.index as i16,
                 profile: audio.profile.map(|v| v as i16),
                 codec_name: audio.codec_name.clone(),
-            }
-        });
+            });
 
         let duration_ms = probe
             .as_ref()
@@ -174,8 +193,9 @@ impl MetadataExtractService {
             .map(|seconds| (seconds * 1000.0).round() as i64)
             .or_else(|| tag_f64(&media_tags, "Duration").map(|s| (s * 1000.0).round() as i64));
 
-        let local_date_time = exif
-            .date_time_original
+        let local_date_time = exif_date
+            .as_ref()
+            .map(|date| date.local)
             .or(asset.file_created_at)
             .or(asset.file_modified_at);
 
@@ -299,10 +319,7 @@ impl MetadataExtractService {
                 .map_err(|err| err.to_string())?;
         } else if matches!(job.source.as_deref(), Some("upload") | Some("copy")) {
             self.jobs
-                .queue_asset_generate_thumbnails_with_notify(
-                    &job.id,
-                    job.notify.unwrap_or(false),
-                )
+                .queue_asset_generate_thumbnails_with_notify(&job.id, job.notify.unwrap_or(false))
                 .await
                 .map_err(|err| err.to_string())?;
         }
@@ -332,7 +349,11 @@ fn merge_probe_tags(media: &mut Value, probe: &ProbeResult) {
         if video.height > 0 {
             set_tag(media, "ImageHeight", Value::from(video.height));
         }
-        set_tag(media, "Orientation", orientation_from_rotation(video.rotation));
+        set_tag(
+            media,
+            "Orientation",
+            orientation_from_rotation(video.rotation),
+        );
     }
     if let Some(duration) = probe.format.duration {
         set_tag(media, "Duration", Value::from(duration));
@@ -383,21 +404,131 @@ fn collect_tags(tags: &Value) -> Vec<String> {
     result
 }
 
-fn parse_exif_datetime(tags: &Value, name: &str) -> Option<DateTime<Utc>> {
-    let raw = tag_string(tags, name)?;
-    for format in [
-        "%Y:%m:%d %H:%M:%S%z",
-        "%Y:%m:%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S%.fZ",
-        "%Y-%m-%dT%H:%M:%S%.f%z",
-    ] {
-        if let Ok(dt) = NaiveDateTime::parse_from_str(&raw, format) {
-            return Some(Utc.from_utc_datetime(&dt));
+#[derive(Debug, Clone)]
+struct ExifDate {
+    /// The absolute capture instant.
+    instant: DateTime<Utc>,
+    /// The capture's wall-clock date/time, represented in UTC for the
+    /// timezone-agnostic `asset.localDateTime` database column.
+    local: DateTime<Utc>,
+    time_zone: Option<String>,
+}
+
+fn extract_exif_date(tags: &Value) -> Option<ExifDate> {
+    let raw = EXIF_DATE_TAGS
+        .iter()
+        .find_map(|tag| tag_string(tags, tag))?;
+    let offset = tag_string(tags, "OffsetTime").or_else(|| tag_string(tags, "TimeZone"));
+    parse_exif_date(&raw, offset.as_deref())
+}
+
+fn parse_exif_date(raw: &str, explicit_offset: Option<&str>) -> Option<ExifDate> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(raw) {
+        return Some(ExifDate {
+            instant: datetime.with_timezone(&Utc),
+            local: Utc.from_utc_datetime(&datetime.naive_local()),
+            time_zone: Some(offset_label(datetime.offset())),
+        });
+    }
+
+    for format in ["%Y:%m:%d %H:%M:%S%.f%:z", "%Y:%m:%d %H:%M:%S%.f%z"] {
+        if let Ok(datetime) = DateTime::parse_from_str(raw, format) {
+            return Some(ExifDate {
+                instant: datetime.with_timezone(&Utc),
+                local: Utc.from_utc_datetime(&datetime.naive_local()),
+                time_zone: Some(offset_label(datetime.offset())),
+            });
         }
     }
-    DateTime::parse_from_rfc3339(&raw)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+
+    let local = parse_exif_local_datetime(raw)?;
+    let parsed_offset = explicit_offset.and_then(parse_offset);
+    let instant = parsed_offset
+        .and_then(|offset| offset.from_local_datetime(&local).single())
+        .map(|datetime| datetime.with_timezone(&Utc))
+        .unwrap_or_else(|| Utc.from_utc_datetime(&local));
+
+    Some(ExifDate {
+        instant,
+        local: Utc.from_utc_datetime(&local),
+        time_zone: explicit_offset.map(str::to_string),
+    })
+}
+
+fn parse_exif_local_datetime(raw: &str) -> Option<NaiveDateTime> {
+    [
+        "%Y:%m:%d %H:%M:%S%.f",
+        "%Y:%m:%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+    ]
+    .iter()
+    .find_map(|format| NaiveDateTime::parse_from_str(raw, format).ok())
+}
+
+fn parse_offset(value: &str) -> Option<FixedOffset> {
+    value.parse().ok().or_else(|| {
+        value
+            .strip_prefix("UTC")
+            .and_then(|offset| offset.parse().ok())
+    })
+}
+
+fn offset_label(offset: &FixedOffset) -> String {
+    let offset = offset.to_string();
+    if offset == "+00:00" {
+        "UTC+0".to_string()
+    } else {
+        offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Datelike, Timelike};
+    use serde_json::json;
+
+    use super::extract_exif_date;
+
+    #[test]
+    fn preserves_exif_offset_and_local_wall_clock_time() {
+        let date = extract_exif_date(&json!({
+            "DateTimeOriginal": "2024:03:04 12:30:15+02:00"
+        }))
+        .expect("EXIF date should parse");
+
+        assert_eq!(date.instant.hour(), 10);
+        assert_eq!(date.instant.minute(), 30);
+        assert_eq!(date.local.hour(), 12);
+        assert_eq!(date.local.minute(), 30);
+        assert_eq!(date.time_zone.as_deref(), Some("+02:00"));
+    }
+
+    #[test]
+    fn applies_separate_offset_time_to_timezone_less_exif_date() {
+        let date = extract_exif_date(&json!({
+            "DateTimeOriginal": "2024:03:04 12:30:15",
+            "OffsetTime": "-05:00"
+        }))
+        .expect("EXIF date should parse");
+
+        assert_eq!(date.instant.hour(), 17);
+        assert_eq!(date.local.hour(), 12);
+        assert_eq!(date.time_zone.as_deref(), Some("-05:00"));
+    }
+
+    #[test]
+    fn uses_subsecond_date_time_original_before_fallback_tags() {
+        let date = extract_exif_date(&json!({
+            "SubSecDateTimeOriginal": "2024:03:04 12:30:15.987+00:00",
+            "CreateDate": "2020:01:01 00:00:00"
+        }))
+        .expect("EXIF date should parse");
+
+        assert_eq!(date.local.year(), 2024);
+        assert_eq!(date.local.timestamp_subsec_millis(), 987);
+        assert_eq!(date.time_zone.as_deref(), Some("UTC+0"));
+    }
 }
 
 fn system_time_to_utc(time: std::time::SystemTime) -> Option<DateTime<Utc>> {
