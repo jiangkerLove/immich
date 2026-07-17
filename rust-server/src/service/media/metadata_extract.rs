@@ -102,6 +102,13 @@ impl MetadataExtractService {
             .await
             .map_err(|err| err.to_string())?;
         let modify_date = metadata.modified().ok().and_then(system_time_to_utc);
+        let created_date = metadata.created().ok().and_then(system_time_to_utc);
+        let fallback_date = earliest_file_date([
+            asset.file_created_at,
+            created_date,
+            modify_date,
+            asset.file_modified_at,
+        ]);
         let file_size = metadata.len() as i64;
 
         let (width, height) = image_dimensions(&media_tags);
@@ -117,7 +124,10 @@ impl MetadataExtractService {
 
         let tags = collect_tags(&media_tags);
         let exif_date = extract_exif_date(&media_tags);
-        let date_time_original = exif_date.as_ref().map(|date| date.instant);
+        let date_time_original = exif_date
+            .as_ref()
+            .map(|date| date.instant)
+            .or(fallback_date);
         let time_zone = tag_string(&media_tags, "TimeZone")
             .or_else(|| tag_string(&media_tags, "OffsetTime"))
             .or_else(|| exif_date.as_ref().and_then(|date| date.time_zone.clone()));
@@ -221,11 +231,7 @@ impl MetadataExtractService {
             .map(|seconds| (seconds * 1000.0).round() as i64)
             .or_else(|| tag_f64(&media_tags, "Duration").map(|s| (s * 1000.0).round() as i64));
 
-        let local_date_time = exif_date
-            .as_ref()
-            .map(|date| date.local)
-            .or(asset.file_created_at)
-            .or(asset.file_modified_at);
+        let local_date_time = exif_date.as_ref().map(|date| date.local).or(fallback_date);
 
         let update_dims = (!asset.is_edited || asset.width.is_none() || asset.height.is_none())
             .then_some((asset_width, asset_height));
@@ -240,7 +246,7 @@ impl MetadataExtractService {
                 asset_id: asset.id,
                 duration: duration_ms,
                 local_date_time,
-                file_created_at: exif.date_time_original.or(asset.file_created_at),
+                file_created_at: exif.date_time_original.or(fallback_date),
                 file_modified_at: modify_date.or(asset.file_modified_at),
                 width: update_dims.and_then(|(w, _)| w),
                 height: update_dims.and_then(|(_, h)| h),
@@ -565,12 +571,19 @@ fn offset_label(offset: &FixedOffset) -> String {
     }
 }
 
+fn earliest_file_date<const N: usize>(dates: [Option<DateTime<Utc>>; N]) -> Option<DateTime<Utc>> {
+    dates.into_iter().flatten().min()
+}
+
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, Timelike};
+    use chrono::{Datelike, TimeZone, Timelike, Utc};
     use serde_json::json;
 
-    use super::{apply_heif_orientation, extract_exif_date, image_dimensions, merge_sidecar_tags};
+    use super::{
+        apply_heif_orientation, earliest_file_date, extract_exif_date, image_dimensions,
+        merge_sidecar_tags,
+    };
 
     #[test]
     fn preserves_exif_offset_and_local_wall_clock_time() {
@@ -646,6 +659,18 @@ mod tests {
         apply_heif_orientation(&mut tags, "photo.heic");
         assert_eq!(image_dimensions(&tags), (Some(6000), Some(4000)));
         assert_eq!(tags["Orientation"], 6);
+    }
+
+    #[test]
+    fn falls_back_to_the_earliest_available_file_timestamp() {
+        let upload_time = Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap();
+        let birth_time = Utc.with_ymd_and_hms(2021, 1, 1, 12, 0, 0).unwrap();
+        let modify_time = Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap();
+
+        assert_eq!(
+            earliest_file_date([Some(upload_time), Some(birth_time), Some(modify_time), None]),
+            Some(modify_time)
+        );
     }
 }
 
