@@ -552,22 +552,23 @@ fn orient_region_list(
                     4 => y = 1.0 - y,
                     5 => {
                         let old_x = x;
-                        x = 1.0 - y;
+                        x = y;
                         y = old_x;
                     }
                     6 => {
                         let old_x = x;
-                        x = y;
-                        y = 1.0 - old_x;
+                        x = 1.0 - y;
+                        y = old_x;
                     }
                     7 => {
-                        x = y;
-                        y = 1.0 - x;
+                        let old_x = x;
+                        x = 1.0 - y;
+                        y = 1.0 - old_x;
                     }
                     8 => {
                         let old_x = x;
-                        x = 1.0 - y;
-                        y = old_x;
+                        x = y;
+                        y = 1.0 - old_x;
                     }
                     _ => {}
                 }
@@ -586,4 +587,33 @@ struct RegionArea {
     y: f64,
     w: f64,
     h: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::orient_region_list;
+
+    #[test]
+    fn orients_mirrored_sideways_exif_face_regions() {
+        let region_info = json!({
+            "AppliedToDimensions": { "W": 100, "H": 200 },
+            "RegionList": [{
+                "Name": "Ada",
+                "Area": { "X": 0.2, "Y": 0.3, "W": 0.1, "H": 0.2 }
+            }]
+        });
+
+        let expected = [(5, 0.3, 0.2), (6, 0.7, 0.2), (7, 0.7, 0.8), (8, 0.3, 0.8)];
+        for (orientation, x, y) in expected {
+            let regions =
+                orient_region_list(&region_info, Some(orientation)).expect("regions should parse");
+            let area = regions[0].1;
+            assert!((area.x - x).abs() < f64::EPSILON);
+            assert!((area.y - y).abs() < f64::EPSILON);
+            assert!((area.w - 0.2).abs() < f64::EPSILON);
+            assert!((area.h - 0.1).abs() < f64::EPSILON);
+        }
+    }
 }
