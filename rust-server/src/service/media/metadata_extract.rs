@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -123,14 +124,20 @@ impl MetadataExtractService {
         let (city, state, country) = self.reverse_geocode(latitude, longitude).await?;
 
         let tags = collect_tags(&media_tags);
-        let exif_date = extract_exif_date(&media_tags);
+        let raw_exif_date = EXIF_DATE_TAGS
+            .iter()
+            .find_map(|tag| tag_string(&media_tags, tag));
+        let time_zone =
+            resolve_time_zone(&media_tags, raw_exif_date.as_deref(), latitude, longitude);
+        let exif_date = raw_exif_date
+            .as_deref()
+            .and_then(|raw| parse_exif_date(raw, time_zone.as_deref()));
         let date_time_original = exif_date
             .as_ref()
             .map(|date| date.instant)
             .or(fallback_date);
-        let time_zone = tag_string(&media_tags, "TimeZone")
-            .or_else(|| tag_string(&media_tags, "OffsetTime"))
-            .or_else(|| exif_date.as_ref().and_then(|date| date.time_zone.clone()));
+        let time_zone =
+            time_zone.or_else(|| exif_date.as_ref().and_then(|date| date.time_zone.clone()));
         let exif = UpsertAssetExif {
             asset_id: asset.id,
             make: tag_string(&media_tags, "Make")
@@ -367,7 +374,10 @@ impl MetadataExtractService {
 }
 
 fn merge_sidecar_tags(media: &mut Value, sidecar: &Value) {
-    if extract_exif_date(sidecar).is_some() {
+    if EXIF_DATE_TAGS
+        .iter()
+        .any(|tag| tag_string(sidecar, tag).is_some())
+    {
         for tag in EXIF_DATE_TAGS {
             remove_tag(media, tag);
         }
@@ -505,15 +515,39 @@ struct ExifDate {
     time_zone: Option<String>,
 }
 
-fn extract_exif_date(tags: &Value) -> Option<ExifDate> {
+fn resolve_time_zone(
+    tags: &Value,
+    raw_date: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> Option<String> {
+    tag_string(tags, "TimeZone")
+        .or_else(|| tag_string(tags, "OffsetTime"))
+        .or_else(|| {
+            raw_date.and_then(|raw| {
+                if raw.ends_with('Z') || raw.ends_with("+00:00") {
+                    Some("UTC+0".to_string())
+                } else {
+                    None
+                }
+            })
+        })
+        .or_else(|| {
+            latitude
+                .zip(longitude)
+                .and_then(|(lat, lon)| crate::utils::geo_tz::find_timezone(lon, lat))
+        })
+}
+
+#[cfg(test)]
+fn extract_exif_date(tags: &Value, resolved_time_zone: Option<&str>) -> Option<ExifDate> {
     let raw = EXIF_DATE_TAGS
         .iter()
         .find_map(|tag| tag_string(tags, tag))?;
-    let offset = tag_string(tags, "OffsetTime").or_else(|| tag_string(tags, "TimeZone"));
-    parse_exif_date(&raw, offset.as_deref())
+    parse_exif_date(&raw, resolved_time_zone)
 }
 
-fn parse_exif_date(raw: &str, explicit_offset: Option<&str>) -> Option<ExifDate> {
+fn parse_exif_date(raw: &str, resolved_time_zone: Option<&str>) -> Option<ExifDate> {
     if let Ok(datetime) = DateTime::parse_from_rfc3339(raw) {
         return Some(ExifDate {
             instant: datetime.with_timezone(&Utc),
@@ -533,16 +567,30 @@ fn parse_exif_date(raw: &str, explicit_offset: Option<&str>) -> Option<ExifDate>
     }
 
     let local = parse_exif_local_datetime(raw)?;
-    let parsed_offset = explicit_offset.and_then(parse_offset);
-    let instant = parsed_offset
-        .and_then(|offset| offset.from_local_datetime(&local).single())
-        .map(|datetime| datetime.with_timezone(&Utc))
-        .unwrap_or_else(|| Utc.from_utc_datetime(&local));
+    if let Some(time_zone) = resolved_time_zone {
+        if let Ok(tz) = time_zone.parse::<Tz>() {
+            let zoned = tz.from_local_datetime(&local).single()?;
+            return Some(ExifDate {
+                instant: zoned.with_timezone(&Utc),
+                local: Utc.from_utc_datetime(&local),
+                time_zone: Some(time_zone.to_string()),
+            });
+        }
+
+        if let Some(offset) = parse_offset(time_zone) {
+            let zoned = offset.from_local_datetime(&local).single()?;
+            return Some(ExifDate {
+                instant: zoned.with_timezone(&Utc),
+                local: Utc.from_utc_datetime(&local),
+                time_zone: Some(offset_label(&offset)),
+            });
+        }
+    }
 
     Some(ExifDate {
-        instant,
+        instant: Utc.from_utc_datetime(&local),
         local: Utc.from_utc_datetime(&local),
-        time_zone: explicit_offset.map(str::to_string),
+        time_zone: resolved_time_zone.map(str::to_string),
     })
 }
 
@@ -585,14 +633,17 @@ mod tests {
 
     use super::{
         apply_heif_orientation, earliest_file_date, extract_exif_date, image_dimensions,
-        merge_sidecar_tags,
+        merge_sidecar_tags, parse_exif_date, resolve_time_zone,
     };
 
     #[test]
     fn preserves_exif_offset_and_local_wall_clock_time() {
-        let date = extract_exif_date(&json!({
-            "DateTimeOriginal": "2024:03:04 12:30:15+02:00"
-        }))
+        let date = extract_exif_date(
+            &json!({
+                "DateTimeOriginal": "2024:03:04 12:30:15+02:00"
+            }),
+            None,
+        )
         .expect("EXIF date should parse");
 
         assert_eq!(date.instant.hour(), 10);
@@ -604,11 +655,12 @@ mod tests {
 
     #[test]
     fn applies_separate_offset_time_to_timezone_less_exif_date() {
-        let date = extract_exif_date(&json!({
+        let tags = json!({
             "DateTimeOriginal": "2024:03:04 12:30:15",
             "OffsetTime": "-05:00"
-        }))
-        .expect("EXIF date should parse");
+        });
+        let time_zone = resolve_time_zone(&tags, Some("2024:03:04 12:30:15"), None, None);
+        let date = extract_exif_date(&tags, time_zone.as_deref()).expect("EXIF date should parse");
 
         assert_eq!(date.instant.hour(), 17);
         assert_eq!(date.local.hour(), 12);
@@ -617,11 +669,12 @@ mod tests {
 
     #[test]
     fn uses_subsecond_date_time_original_before_fallback_tags() {
-        let date = extract_exif_date(&json!({
+        let tags = json!({
             "SubSecDateTimeOriginal": "2024:03:04 12:30:15.987+00:00",
             "CreateDate": "2020:01:01 00:00:00"
-        }))
-        .expect("EXIF date should parse");
+        });
+        let time_zone = resolve_time_zone(&tags, Some("2024:03:04 12:30:15.987+00:00"), None, None);
+        let date = extract_exif_date(&tags, time_zone.as_deref()).expect("EXIF date should parse");
 
         assert_eq!(date.local.year(), 2024);
         assert_eq!(date.local.timestamp_subsec_millis(), 987);
@@ -643,7 +696,7 @@ mod tests {
 
         merge_sidecar_tags(&mut media, &sidecar);
 
-        let date = extract_exif_date(&media).expect("sidecar date should remain");
+        let date = extract_exif_date(&media, None).expect("sidecar date should remain");
         assert_eq!(date.local.year(), 2024);
         assert!(media.get("Duration").is_some());
         assert_eq!(media["Description"], "from sidecar");
@@ -674,6 +727,41 @@ mod tests {
             earliest_file_date([Some(upload_time), Some(birth_time), Some(modify_time), None]),
             Some(modify_time)
         );
+    }
+
+    #[test]
+    fn infers_timezone_from_gps_coordinates_for_naive_exif_date() {
+        let tags = json!({
+            "GPSDateTime": "2023:11:15 04:30:00",
+            "GPSLatitude": 34.0522,
+            "GPSLongitude": -118.2437
+        });
+        let time_zone = resolve_time_zone(
+            &tags,
+            Some("2023:11:15 04:30:00"),
+            Some(34.0522),
+            Some(-118.2437),
+        );
+        let date = parse_exif_date("2023:11:15 04:30:00", time_zone.as_deref())
+            .expect("GPS date should parse");
+
+        assert_eq!(time_zone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(date.instant.hour(), 12);
+        assert_eq!(date.instant.minute(), 30);
+        assert_eq!(date.local.hour(), 4);
+        assert_eq!(date.local.minute(), 30);
+        assert_eq!(date.time_zone.as_deref(), Some("America/Los_Angeles"));
+    }
+
+    #[test]
+    fn treats_explicit_utc_zero_suffix_as_utc_plus_zero() {
+        let time_zone = resolve_time_zone(
+            &json!({}),
+            Some("2024-09-01T00:00:00.000+00:00"),
+            None,
+            None,
+        );
+        assert_eq!(time_zone.as_deref(), Some("UTC+0"));
     }
 }
 
