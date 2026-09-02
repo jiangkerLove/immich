@@ -47,7 +47,9 @@ pub async fn read_tags(path: &str, extended_video: bool) -> Result<Value, String
         .arg("-struct")
         .arg("-n")
         .arg("-charset")
-        .arg("filename=utf8");
+        .arg("filename=utf8")
+        .arg("--ICC_Profile:DeviceManufacturer")
+        .arg("--ICC_Profile:DeviceModelName");
     if extended_video {
         command.arg("-ee");
     }

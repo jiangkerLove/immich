@@ -6,6 +6,7 @@ pub mod cookie;
 pub mod cron;
 pub mod crypto;
 pub mod database_backups;
+pub mod date;
 pub mod disk;
 pub mod duplicate;
 pub mod file_response;

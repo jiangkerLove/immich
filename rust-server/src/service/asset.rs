@@ -1,18 +1,18 @@
-use sqlx::PgPool;
-use uuid::Uuid;
 use serde::Serialize;
 use serde_json::Value;
+use sqlx::PgPool;
+use uuid::Uuid;
 
-use crate::service::job::JobService;
-use crate::service::websocket::WebSocketHub;
 use crate::models::db::assets::{
-    self, AssetBasicRow, AssetUpdateFields, ExifUpdateFields, AssetStatsRow,
+    self, AssetBasicRow, AssetStatsRow, AssetUpdateFields, ExifUpdateFields,
 };
 use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_assets, AssetResponse, AssetStatsResponse};
+use crate::models::response::asset::{AssetResponse, AssetStatsResponse, map_assets};
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
+use crate::service::job::JobService;
+use crate::service::websocket::WebSocketHub;
 use crate::utils::permission::require_permission;
 use crate::utils::query::parse_query_bool;
 
@@ -41,7 +41,10 @@ pub struct UpdateAssetReq {
     pub longitude: Option<f64>,
     pub rating: Option<i32>,
     pub description: Option<String>,
-    #[serde(default, deserialize_with = "crate::utils::serde::deserialize_patch_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
     pub live_photo_video_id: Option<Option<Uuid>>,
 }
 
@@ -203,7 +206,11 @@ impl AssetService {
             &auth.user.id,
             query.visibility.as_deref(),
             query.is_favorite.as_deref().and_then(parse_query_bool),
-            query.is_trashed.as_deref().and_then(parse_query_bool).unwrap_or(false),
+            query
+                .is_trashed
+                .as_deref()
+                .and_then(parse_query_bool)
+                .unwrap_or(false),
         )
         .await?;
 
@@ -222,8 +229,8 @@ impl AssetService {
             .as_ref()
             .is_some_and(|link| !link.show_exif);
 
-        let mut responses = map_assets(&self.pool, std::slice::from_ref(&row), auth, strip_metadata)
-            .await?;
+        let mut responses =
+            map_assets(&self.pool, std::slice::from_ref(&row), auth, strip_metadata).await?;
         responses
             .pop()
             .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))
@@ -241,11 +248,9 @@ impl AssetService {
         let mut previous_motion: Option<AssetBasicRow> = None;
         if let Some(live_photo_video_id) = &dto.live_photo_video_id {
             if let Some(video_id) = live_photo_video_id {
-                if let Some(hidden_id) =
-                    on_before_link(&self.pool, &auth.user.id, video_id).await?
+                if let Some(hidden_id) = on_before_link(&self.pool, &auth.user.id, video_id).await?
                 {
-                    self.websocket
-                        .emit_asset_hidden(auth.user.id, hidden_id);
+                    self.websocket.emit_asset_hidden(auth.user.id, hidden_id);
                 }
             } else {
                 let asset = assets::get_basic_by_id(&self.pool, asset_id)
@@ -277,13 +282,7 @@ impl AssetService {
             let asset = assets::get_basic_by_id(&self.pool, asset_id)
                 .await?
                 .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))?;
-            on_after_unlink(
-                &self.pool,
-                &self.jobs,
-                &motion.id,
-                &asset.visibility,
-            )
-            .await?;
+            on_after_unlink(&self.pool, &self.jobs, &motion.id, &asset.visibility).await?;
         }
 
         if exif_changed {
@@ -293,16 +292,22 @@ impl AssetService {
         self.get(auth, asset_id).await
     }
 
-    pub async fn update_all(&self, auth: &AuthDto, dto: &AssetBulkUpdateReq) -> Result<(), ErrorResp> {
+    pub async fn update_all(
+        &self,
+        auth: &AuthDto,
+        dto: &AssetBulkUpdateReq,
+    ) -> Result<(), ErrorResp> {
         validate_lat_lon(dto.latitude, dto.longitude)?;
         require_assets_access(&self.pool, auth, &dto.ids, Permission::AssetUpdate).await?;
 
+        let extracted_time_zone = dto
+            .date_time_original
+            .as_deref()
+            .and_then(crate::utils::date::extract_fixed_time_zone);
         let exif_fields = ExifUpdateFields {
             description: dto.description.clone(),
-            date_time_original: dto
-                .date_time_original
-                .as_ref()
-                .and_then(|s| s.parse().ok()),
+            date_time_original: dto.date_time_original.as_ref().and_then(|s| s.parse().ok()),
+            time_zone: extracted_time_zone.clone(),
             latitude: dto.latitude,
             longitude: dto.longitude,
             rating: dto.rating.map(Some),
@@ -313,12 +318,15 @@ impl AssetService {
             assets::update_all_exif_fields(&self.pool, &dto.ids, &exif_fields).await?;
         }
 
-        if dto.date_time_relative.is_some() || dto.time_zone.is_some() {
+        let should_update_relative = dto.date_time_relative.is_some_and(|delta| delta != 0)
+            || dto.time_zone.is_some()
+            || extracted_time_zone.is_some();
+        if should_update_relative {
             assets::update_date_time_relative(
                 &self.pool,
                 &dto.ids,
                 dto.date_time_relative,
-                dto.time_zone.as_deref(),
+                dto.time_zone.as_deref().or(extracted_time_zone.as_deref()),
             )
             .await?;
         }
@@ -341,7 +349,11 @@ impl AssetService {
         Ok(())
     }
 
-    pub async fn delete_all(&self, auth: &AuthDto, dto: &AssetBulkDeleteReq) -> Result<(), ErrorResp> {
+    pub async fn delete_all(
+        &self,
+        auth: &AuthDto,
+        dto: &AssetBulkDeleteReq,
+    ) -> Result<(), ErrorResp> {
         require_assets_access(&self.pool, auth, &dto.ids, Permission::AssetDelete).await?;
         let force = dto.force.unwrap_or(false);
         assets::trash_assets(&self.pool, &dto.ids, force).await?;
@@ -429,12 +441,8 @@ impl AssetService {
         };
 
         if let Some(target_stack_id) = target.stack_id {
-            crate::models::db::stack::merge_stacks(
-                &self.pool,
-                &source_stack_id,
-                &target_stack_id,
-            )
-            .await?;
+            crate::models::db::stack::merge_stacks(&self.pool, &source_stack_id, &target_stack_id)
+                .await?;
             crate::models::db::stack::delete(&self.pool, &source_stack_id).await?;
         } else {
             assets::update_stack_id(&self.pool, &target.id, Some(source_stack_id)).await?;
@@ -524,7 +532,8 @@ impl AssetService {
             .iter()
             .map(|item| (item.key.clone(), item.value.clone()))
             .collect();
-        let rows = crate::models::db::asset_metadata::upsert_items(&self.pool, asset_id, &items).await?;
+        let rows =
+            crate::models::db::asset_metadata::upsert_items(&self.pool, asset_id, &items).await?;
         Ok(rows.into_iter().map(map_metadata_row).collect())
     }
 
@@ -640,7 +649,9 @@ fn map_stats(stats: &AssetStatsRow) -> AssetStatsResponse {
     }
 }
 
-fn map_metadata_row(row: crate::models::db::asset_metadata::AssetMetadataRow) -> AssetMetadataResponse {
+fn map_metadata_row(
+    row: crate::models::db::asset_metadata::AssetMetadataRow,
+) -> AssetMetadataResponse {
     AssetMetadataResponse {
         key: row.key,
         value: row.value,
@@ -670,12 +681,14 @@ fn validate_unique_keys(items: &[AssetMetadataItemReq]) -> Result<(), ErrorResp>
 }
 
 fn build_exif_fields(dto: &UpdateAssetReq) -> ExifUpdateFields {
+    let time_zone = dto
+        .date_time_original
+        .as_deref()
+        .and_then(crate::utils::date::extract_fixed_time_zone);
     ExifUpdateFields {
         description: dto.description.clone(),
-        date_time_original: dto
-            .date_time_original
-            .as_ref()
-            .and_then(|s| s.parse().ok()),
+        date_time_original: dto.date_time_original.as_ref().and_then(|s| s.parse().ok()),
+        time_zone,
         latitude: dto.latitude,
         longitude: dto.longitude,
         rating: dto.rating.map(Some),
@@ -764,8 +777,7 @@ async fn on_after_unlink(
         },
     )
     .await?;
-    jobs
-        .queue_asset_generate_thumbnails_with_notify(live_photo_video_id, true)
+    jobs.queue_asset_generate_thumbnails_with_notify(live_photo_video_id, true)
         .await?;
     Ok(())
 }

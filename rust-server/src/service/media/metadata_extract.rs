@@ -140,17 +140,15 @@ impl MetadataExtractService {
             time_zone.or_else(|| exif_date.as_ref().and_then(|date| date.time_zone.clone()));
         let exif = UpsertAssetExif {
             asset_id: asset.id,
-            make: tag_string(&media_tags, "Make")
-                .or_else(|| tag_string(&media_tags, "AndroidMake")),
-            model: tag_string(&media_tags, "Model")
-                .or_else(|| tag_string(&media_tags, "AndroidModel")),
+            make: camera_make(&media_tags),
+            model: camera_model(&media_tags),
             exif_image_width: width,
             exif_image_height: height,
             file_size_in_byte: Some(file_size),
             orientation,
             date_time_original,
             modify_date,
-            lens_model: tag_string(&media_tags, "LensModel"),
+            lens_model: lens_model(&media_tags),
             f_number: tag_f64(&media_tags, "FNumber"),
             focal_length: tag_f64(&media_tags, "FocalLength"),
             iso: tag_i32(&media_tags, "ISO"),
@@ -177,9 +175,10 @@ impl MetadataExtractService {
                 .map(|v| v.to_ascii_uppercase()),
             profile_description: tag_string(&media_tags, "ProfileDescription"),
             colorspace: tag_string(&media_tags, "ColorSpace"),
-            bits_per_sample: tag_i32(&media_tags, "BitsPerSample"),
+            bits_per_sample: bits_per_sample(&media_tags),
             auto_stack_id: tag_string(&media_tags, "BurstID")
                 .or_else(|| tag_string(&media_tags, "BurstUUID"))
+                .or_else(|| tag_string(&media_tags, "CameraBurstID"))
                 .or_else(|| tag_string(&media_tags, "MediaUniqueID")),
             rating: tag_i32(&media_tags, "Rating").filter(|v| (1..=5).contains(v)),
             tags: if tags.is_empty() { None } else { Some(tags) },
@@ -485,6 +484,73 @@ fn gps_coordinates(tags: &Value) -> (Option<f64>, Option<f64>) {
     }
 }
 
+fn camera_make(tags: &Value) -> Option<String> {
+    tag_string(tags, "Make")
+        .or_else(|| tag_nested_string(tags, "Device", "Manufacturer"))
+        .or_else(|| tag_string(tags, "AndroidMake"))
+        .or_else(|| tag_string(tags, "DeviceManufacturer"))
+}
+
+fn camera_model(tags: &Value) -> Option<String> {
+    tag_string(tags, "Model")
+        .or_else(|| tag_nested_string(tags, "Device", "ModelName"))
+        .or_else(|| tag_string(tags, "AndroidModel"))
+        .or_else(|| tag_string(tags, "DeviceModelName"))
+}
+
+fn lens_model(tags: &Value) -> Option<String> {
+    let lens_model = [
+        tag_string(tags, "LensID"),
+        tag_string(tags, "LensType"),
+        tag_string(tags, "LensSpec"),
+        tag_string(tags, "LensModel"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.is_empty())
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+
+    if lens_model.is_empty() || lens_model == "----" || lens_model.starts_with("Unknown") {
+        None
+    } else {
+        Some(lens_model)
+    }
+}
+
+fn bits_per_sample(tags: &Value) -> Option<i32> {
+    let candidates = [
+        tag_i32(tags, "BitsPerSample"),
+        tag_i32(tags, "ComponentBitDepth"),
+        parse_bit_depth_tag(tags, "ImagePixelDepth"),
+        tag_i32(tags, "BitDepth"),
+        tag_i32(tags, "ColorBitDepth"),
+    ];
+
+    let mut bits_per_sample = candidates.into_iter().flatten().next()?;
+    if bits_per_sample >= 24 && bits_per_sample % 3 == 0 {
+        bits_per_sample /= 3;
+    }
+    Some(bits_per_sample)
+}
+
+fn parse_bit_depth_tag(tags: &Value, name: &str) -> Option<i32> {
+    tag_string(tags, name)
+        .and_then(|value| value.split_whitespace().next()?.parse().ok())
+        .or_else(|| tag_i32(tags, name))
+}
+
+fn tag_nested_string(tags: &Value, object: &str, field: &str) -> Option<String> {
+    tags.get(object)
+        .and_then(|value| value.get(field))
+        .and_then(|value| match value {
+            Value::String(text) if !text.is_empty() => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+}
+
 fn collect_tags(tags: &Value) -> Vec<String> {
     let mut result = tag_string_list(tags, "TagsList");
     if result.is_empty() {
@@ -632,8 +698,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_heif_orientation, earliest_file_date, extract_exif_date, image_dimensions,
-        merge_sidecar_tags, parse_exif_date, resolve_time_zone,
+        apply_heif_orientation, bits_per_sample, camera_make, camera_model, earliest_file_date,
+        extract_exif_date, image_dimensions, lens_model, merge_sidecar_tags, parse_exif_date,
+        resolve_time_zone,
     };
 
     #[test]
@@ -727,6 +794,26 @@ mod tests {
             earliest_file_date([Some(upload_time), Some(birth_time), Some(modify_time), None]),
             Some(modify_time)
         );
+    }
+
+    #[test]
+    fn reads_camera_make_model_and_lens_metadata() {
+        let tags = json!({
+            "Device": { "Manufacturer": "icc-make", "ModelName": "icc-model" },
+            "LensID": "24-70mm",
+            "BitsPerSample": 24
+        });
+
+        assert_eq!(camera_make(&tags).as_deref(), Some("icc-make"));
+        assert_eq!(camera_model(&tags).as_deref(), Some("icc-model"));
+        assert_eq!(lens_model(&tags).as_deref(), Some("24-70mm"));
+        assert_eq!(bits_per_sample(&tags), Some(8));
+    }
+
+    #[test]
+    fn ignores_unknown_lens_identifiers() {
+        assert!(lens_model(&json!({ "LensID": "----" })).is_none());
+        assert!(lens_model(&json!({ "LensID": "Unknown (0 ff ff)" })).is_none());
     }
 
     #[test]
