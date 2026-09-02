@@ -756,6 +756,19 @@ impl UserDb {
             .await?;
         Ok(())
     }
+
+    pub async fn update_cluster_group_id(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+        cluster_group_id: &Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(r#"UPDATE "user" SET "clusterGroupId" = $2 WHERE id = $1"#)
+            .bind(user_id)
+            .bind(cluster_group_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
 }
 
 impl AuthUserDb {

@@ -40,6 +40,7 @@ impl FacialRecognitionService {
         &self,
         force: bool,
         nightly: bool,
+        cluster_group_id: Option<Uuid>,
     ) -> Result<FacialRecognitionQueueAllOutcome, String> {
         let config = get_machine_learning_config(&self.pool)
             .await
@@ -82,9 +83,15 @@ impl FacialRecognitionService {
         }
 
         if force {
-            person::unassign_ml_faces(&self.pool)
-                .await
-                .map_err(|err| err.to_string())?;
+            if let Some(cluster_group_id) = cluster_group_id.as_ref() {
+                person::unassign_ml_faces_for_cluster(&self.pool, cluster_group_id)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            } else {
+                person::unassign_ml_faces(&self.pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            }
             self.jobs
                 .queue_person_cleanup()
                 .await
@@ -96,7 +103,11 @@ impl FacialRecognitionService {
 
         ml_job::prewarm_face_vectors(&self.pool).await;
 
-        let face_ids = ml_job::stream_unassigned_ml_faces(&self.pool, force)
+        let face_ids = ml_job::stream_unassigned_ml_faces(
+            &self.pool,
+            force,
+            cluster_group_id.as_ref(),
+        )
             .await
             .map_err(|err| err.to_string())?;
 

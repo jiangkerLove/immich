@@ -156,3 +156,167 @@ pub async fn invited_cluster_group_ids(
     .fetch_all(pool)
     .await
 }
+
+#[derive(Debug, FromRow)]
+struct CreateRequestRow {
+    id: Uuid,
+    cluster_group_id: Uuid,
+    user_id: Uuid,
+    created_at: DateTime<Utc>,
+    is_inserted: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateRequestResult {
+    pub row: ClusterGroupRequestRow,
+    pub is_inserted: bool,
+}
+
+pub async fn create_request(
+    pool: &Pool<Postgres>,
+    cluster_group_id: &Uuid,
+    user_id: &Uuid,
+) -> Result<CreateRequestResult, sqlx::Error> {
+    let row = sqlx::query_as::<_, CreateRequestRow>(
+        r#"
+        INSERT INTO cluster_group_request ("clusterGroupId", "userId")
+        VALUES ($1, $2)
+        ON CONFLICT ("clusterGroupId", "userId") DO UPDATE
+            SET "clusterGroupId" = EXCLUDED."clusterGroupId"
+        RETURNING
+            id,
+            "clusterGroupId" AS cluster_group_id,
+            "userId" AS user_id,
+            "createdAt" AS created_at,
+            (xmax = 0) AS is_inserted
+        "#,
+    )
+    .bind(cluster_group_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(CreateRequestResult {
+        row: ClusterGroupRequestRow {
+            id: row.id,
+            cluster_group_id: row.cluster_group_id,
+            user_id: row.user_id,
+            created_at: row.created_at,
+        },
+        is_inserted: row.is_inserted,
+    })
+}
+
+pub async fn get_request(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<ClusterGroupRequestRow>, sqlx::Error> {
+    sqlx::query_as::<_, ClusterGroupRequestRow>(
+        r#"
+        SELECT
+            id,
+            "clusterGroupId" AS cluster_group_id,
+            "userId" AS user_id,
+            "createdAt" AS created_at
+        FROM cluster_group_request
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn delete_request(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(r#"DELETE FROM cluster_group_request WHERE id = $1"#)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn has_other_members(
+    pool: &Pool<Postgres>,
+    cluster_group_id: &Uuid,
+    user_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    let exists: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM "user"
+            WHERE "clusterGroupId" = $1
+              AND id != $2
+              AND "deletedAt" IS NULL
+        )
+        "#,
+    )
+    .bind(cluster_group_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+pub async fn request_owned_by_user(
+    pool: &Pool<Postgres>,
+    request_id: &Uuid,
+    user_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM cluster_group_request
+            WHERE id = $1
+              AND "userId" = $2
+        )
+        "#,
+    )
+    .bind(request_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn can_delete_request(
+    pool: &Pool<Postgres>,
+    request_id: &Uuid,
+    user_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM cluster_group_request
+            WHERE id = $1
+              AND (
+                "userId" = $2
+                OR "clusterGroupId" = (
+                    SELECT "clusterGroupId" FROM "user" WHERE id = $2
+                )
+              )
+        )
+        "#,
+    )
+    .bind(request_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn user_exists(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM "user" WHERE id = $1 AND "deletedAt" IS NULL
+        )
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}

@@ -780,3 +780,128 @@ pub async fn reassign_faces_by_person(
     .await?;
     Ok(())
 }
+
+#[derive(Debug, FromRow)]
+struct ClusterMappingRow {
+    old_id: Uuid,
+    new_id: Uuid,
+}
+
+pub async fn reassign_cluster(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+    new_cluster_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    if !schema.is_cluster_groups() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+        UPDATE person_group
+        SET "clusterGroupId" = $2
+        WHERE id IN (
+            SELECT person."personGroupId" FROM person WHERE person."ownerId" = $1
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM person other
+            WHERE other."personGroupId" = person_group.id
+              AND other."ownerId" != $1
+        )
+        "#,
+    )
+    .bind(user_id)
+    .bind(new_cluster_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let mappings = sqlx::query_as::<_, ClusterMappingRow>(
+        r#"
+        WITH shared AS (
+            SELECT DISTINCT person."personGroupId" AS old_id
+            FROM person
+            WHERE person."ownerId" = $1
+              AND EXISTS (
+                SELECT 1 FROM person other
+                WHERE other."personGroupId" = person."personGroupId"
+                  AND other."ownerId" != $1
+              )
+        ),
+        mapping AS (
+            SELECT old_id, uuid_generate_v4() AS new_id FROM shared
+        ),
+        created AS (
+            INSERT INTO person_group (id, "clusterGroupId")
+            SELECT new_id, $2 FROM mapping
+        )
+        SELECT old_id, new_id FROM mapping
+        "#,
+    )
+    .bind(user_id)
+    .bind(new_cluster_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for mapping in mappings {
+        sqlx::query(
+            r#"
+            UPDATE person
+            SET "personGroupId" = $3
+            WHERE "personGroupId" = $2
+              AND "ownerId" = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(mapping.old_id)
+        .bind(mapping.new_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE asset_face
+            SET "personGroupId" = $3
+            WHERE "personGroupId" = $2
+              AND EXISTS (
+                SELECT 1 FROM asset
+                WHERE asset.id = asset_face."assetId"
+                  AND asset."ownerId" = $1
+              )
+            "#,
+        )
+        .bind(user_id)
+        .bind(mapping.old_id)
+        .bind(mapping.new_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn unassign_ml_faces_for_cluster(
+    pool: &Pool<Postgres>,
+    cluster_group_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+    sqlx::query(&format!(
+        r#"
+        UPDATE asset_face
+        SET {face_col} = NULL
+        FROM asset
+        INNER JOIN "user" ON "user".id = asset."ownerId"
+        WHERE asset_face."assetId" = asset.id
+          AND asset_face."sourceType" = 'machine-learning'
+          AND "user"."clusterGroupId" = $1
+        "#
+    ))
+    .bind(cluster_group_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

@@ -436,8 +436,29 @@ pub async fn get_for_facial_recognition(
 pub async fn stream_unassigned_ml_faces(
     pool: &Pool<Postgres>,
     force: bool,
+    cluster_group_id: Option<&Uuid>,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+
     if force {
+        if let Some(cluster_group_id) = cluster_group_id {
+            return sqlx::query_scalar(
+                r#"
+                SELECT asset_face.id
+                FROM asset_face
+                INNER JOIN asset ON asset.id = asset_face."assetId"
+                INNER JOIN "user" ON "user".id = asset."ownerId"
+                WHERE asset_face."sourceType" = 'machine-learning'
+                  AND asset_face."deletedAt" IS NULL
+                  AND "user"."clusterGroupId" = $1
+                "#,
+            )
+            .bind(cluster_group_id)
+            .fetch_all(pool)
+            .await;
+        }
+
         return sqlx::query_scalar(
             r#"
                 SELECT asset_face.id
@@ -450,8 +471,23 @@ pub async fn stream_unassigned_ml_faces(
         .await;
     }
 
-    let schema = PersonSchema::get(pool).await?;
-    let face_col = schema.face_person_col_quoted();
+    if let Some(cluster_group_id) = cluster_group_id {
+        return sqlx::query_scalar(&format!(
+            r#"
+            SELECT asset_face.id
+            FROM asset_face
+            INNER JOIN asset ON asset.id = asset_face."assetId"
+            INNER JOIN "user" ON "user".id = asset."ownerId"
+            WHERE asset_face."sourceType" = 'machine-learning'
+              AND asset_face.{face_col} IS NULL
+              AND asset_face."deletedAt" IS NULL
+              AND "user"."clusterGroupId" = $1
+            "#
+        ))
+        .bind(cluster_group_id)
+        .fetch_all(pool)
+        .await;
+    }
 
     sqlx::query_scalar(&format!(
         r#"

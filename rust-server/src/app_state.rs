@@ -142,7 +142,7 @@ impl Services {
             partner: PartnerService::new(pool.clone()),
             stack: StackService::new(pool.clone(), websocket.clone()),
             person: PersonService::new(pool.clone(), jobs.clone()),
-            cluster_group: ClusterGroupService::new(pool.clone()),
+            cluster_group: ClusterGroupService::new(pool.clone(), jobs.clone()),
             activity: ActivityService::new(pool.clone()),
             map: MapService::new(pool.clone()),
             download: DownloadService::new(pool.clone()),

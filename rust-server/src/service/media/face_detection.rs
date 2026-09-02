@@ -185,7 +185,7 @@ impl FaceDetectionService {
 
         if !new_face_ids.is_empty() {
             self.jobs
-                .queue_facial_recognition_queue_all(false)
+                .queue_facial_recognition_queue_all(false, None)
                 .await
                 .map_err(|err| err.to_string())?;
             for face_id in new_face_ids {
