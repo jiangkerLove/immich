@@ -17,6 +17,7 @@ use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_string_list};
 use crate::service::media::ffprobe::{self, ProbeResult};
 use crate::service::media::metadata_postprocess;
+use crate::service::websocket::WebSocketHub;
 use crate::utils::mime_types::{is_heif_image_path, is_possibly_animated_image_path};
 use crate::utils::storage::StoragePaths;
 
@@ -46,14 +47,21 @@ pub struct MetadataExtractService {
     pool: PgPool,
     jobs: JobService,
     storage: StoragePaths,
+    websocket: WebSocketHub,
 }
 
 impl MetadataExtractService {
-    pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
+    pub fn new(
+        pool: PgPool,
+        storage: StoragePaths,
+        jobs: JobService,
+        websocket: WebSocketHub,
+    ) -> Self {
         Self {
             pool,
             jobs,
             storage,
+            websocket,
         }
     }
 
@@ -268,6 +276,7 @@ impl MetadataExtractService {
             &self.pool,
             &self.jobs,
             &self.storage,
+            &self.websocket,
             &asset,
             &media_tags,
             &exif,

@@ -154,6 +154,7 @@ async fn spawn_workers(ctx: &WorkerContext, config: &Value) {
                 ctx.redis_url.clone(),
                 ctx.storage.clone(),
                 ctx.env.clone(),
+                ctx.websocket.clone(),
                 concurrency_for_queue(config, queue, 5),
             ),
             QUEUE_STORAGE_TEMPLATE => storage_template_migration::spawn(
