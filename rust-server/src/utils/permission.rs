@@ -9,6 +9,14 @@ pub fn is_granted(requested: &Permission, current: &[Permission]) -> bool {
     current.iter().any(|p| p == requested)
 }
 
+pub fn are_permissions_granted(requested: &[String], current: &[Permission]) -> bool {
+    requested.iter().all(|permission| {
+        Permission::from_str(permission)
+            .map(|permission| is_granted(&permission, current))
+            .unwrap_or(false)
+    })
+}
+
 pub fn require_permission(auth: &AuthDto, permission: Permission) -> Result<(), ErrorResp> {
     if auth.user.is_admin {
         return Ok(());

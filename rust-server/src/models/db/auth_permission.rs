@@ -130,6 +130,9 @@ pub enum Permission {
     SystemConfigRead,
     SystemConfigUpdate,
 
+    AdminConfigRead,
+    AdminConfigUpdate,
+
     UserConfigRead,
 
     SystemMetadataRead,
@@ -141,6 +144,7 @@ pub enum Permission {
     WorkflowRead,
     WorkflowUpdate,
     WorkflowDelete,
+    WorkflowLogs,
 
     ServerLicenseRead,
     ServerLicenseUpdate,
@@ -305,6 +309,8 @@ impl Permission {
 
             Permission::SystemConfigRead => "systemConfig.read",
             Permission::SystemConfigUpdate => "systemConfig.update",
+            Permission::AdminConfigRead => "adminConfig.read",
+            Permission::AdminConfigUpdate => "adminConfig.update",
             Permission::UserConfigRead => "userConfig.read",
 
             Permission::SystemMetadataRead => "systemMetadata.read",
@@ -316,6 +322,7 @@ impl Permission {
             Permission::WorkflowRead => "workflow.read",
             Permission::WorkflowUpdate => "workflow.update",
             Permission::WorkflowDelete => "workflow.delete",
+            Permission::WorkflowLogs => "workflow.logs",
 
             Permission::ServerLicenseRead => "serverLicense.read",
             Permission::ServerLicenseUpdate => "serverLicense.update",
@@ -480,6 +487,8 @@ impl Permission {
 
             "systemConfig.read" => Some(Permission::SystemConfigRead),
             "systemConfig.update" => Some(Permission::SystemConfigUpdate),
+            "adminConfig.read" => Some(Permission::AdminConfigRead),
+            "adminConfig.update" => Some(Permission::AdminConfigUpdate),
             "userConfig.read" => Some(Permission::UserConfigRead),
 
             "systemMetadata.read" => Some(Permission::SystemMetadataRead),
@@ -491,6 +500,7 @@ impl Permission {
             "workflow.read" => Some(Permission::WorkflowRead),
             "workflow.update" => Some(Permission::WorkflowUpdate),
             "workflow.delete" => Some(Permission::WorkflowDelete),
+            "workflow.logs" => Some(Permission::WorkflowLogs),
 
             "serverLicense.read" => Some(Permission::ServerLicenseRead),
             "serverLicense.update" => Some(Permission::ServerLicenseUpdate),

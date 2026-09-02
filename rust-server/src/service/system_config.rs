@@ -38,6 +38,24 @@ impl SystemConfigService {
         Ok(defaults())
     }
 
+    pub async fn get_admin_config(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminConfigRead)?;
+        get_merged(&self.pool).await.map_err(ErrorResp::from)
+    }
+
+    pub fn get_admin_config_defaults(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminConfigRead)?;
+        Ok(defaults())
+    }
+
+    pub async fn update_admin_config(&self, auth: &AuthDto, dto: &Value) -> Result<Value, ErrorResp> {
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminConfigUpdate)?;
+        self.apply_config_update(dto).await
+    }
+
     pub async fn get_config(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigRead)?;
@@ -67,7 +85,10 @@ impl SystemConfigService {
     pub async fn update_config(&self, auth: &AuthDto, dto: &Value) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigUpdate)?;
+        self.apply_config_update(dto).await
+    }
 
+    async fn apply_config_update(&self, dto: &Value) -> Result<Value, ErrorResp> {
         let old_config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
         crate::service::config_validate::validate_system_config(&old_config, dto).await?;
 

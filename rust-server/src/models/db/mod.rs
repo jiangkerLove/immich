@@ -48,5 +48,6 @@ pub mod asset_delete;
 pub mod asset_file;
 pub mod plugin;
 pub mod workflow;
+pub mod workflow_log;
 pub mod video_stream;
 pub mod asset_ocr;

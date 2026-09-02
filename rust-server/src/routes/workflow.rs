@@ -4,8 +4,8 @@ use axum::routing::{delete, get, patch, post, put};
 use crate::app_state::AppState;
 use crate::handlers::workflow::{
     create_workflow_handler, delete_workflow_handler, get_workflow_handler,
-    get_workflow_share_handler, get_workflow_triggers_handler, patch_workflow_handler,
-    search_workflows_handler, update_workflow_handler,
+    get_workflow_logs_handler, get_workflow_share_handler, get_workflow_triggers_handler,
+    patch_workflow_handler, search_workflows_handler, update_workflow_handler,
 };
 
 pub fn router() -> Router<AppState> {
@@ -18,4 +18,5 @@ pub fn router() -> Router<AppState> {
         .route("/api/workflows/{id}", put(update_workflow_handler))
         .route("/api/workflows/{id}", patch(patch_workflow_handler))
         .route("/api/workflows/{id}", delete(delete_workflow_handler))
+        .route("/api/workflows/{id}/logs", get(get_workflow_logs_handler))
 }

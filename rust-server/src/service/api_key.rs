@@ -8,7 +8,7 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::db::DbService;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
-use crate::utils::permission::require_permission;
+use crate::utils::permission::{are_permissions_granted, require_permission};
 
 #[derive(Clone)]
 pub struct ApiKeyService {
@@ -144,6 +144,37 @@ impl ApiKeyService {
             .execute(&self.db.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn rotate(&self, auth: &AuthDto, id: &Uuid) -> Result<ApiKeyCreateResp, ErrorResp> {
+        require_permission(auth, Permission::ApiKeyUpdate)?;
+        let existing = self.get_owned(auth, id).await?;
+
+        if let Some(api_key) = &auth.api_key {
+            if !are_permissions_granted(&existing.permissions, &api_key.permissions) {
+                return Err(ErrorResp::BadRequest(
+                    "Cannot rotate an API Key with permissions you do not have".to_string(),
+                ));
+            }
+        }
+
+        let secret = random_bytes_as_text(32);
+        let hashed = hash_sha256(&secret);
+
+        let api_key = sqlx::query_as::<_, ApiKeyResponse>(
+            r#"
+                UPDATE api_key
+                SET key = $1, "updatedAt" = NOW()
+                WHERE id = $2
+                RETURNING id, name, "createdAt" as created_at, "updatedAt" as updated_at, permissions
+            "#,
+        )
+        .bind(&hashed)
+        .bind(id)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        Ok(ApiKeyCreateResp { api_key, secret })
     }
 
     async fn get_owned(&self, auth: &AuthDto, id: &Uuid) -> Result<ApiKeyResponse, ErrorResp> {
