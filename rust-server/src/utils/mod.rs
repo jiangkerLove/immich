@@ -25,6 +25,8 @@ pub mod preferences;
 pub mod query;
 pub mod response;
 pub mod search;
+pub mod search_cursor;
+pub mod search_filter;
 pub mod serde;
 pub mod storage;
 pub mod storage_move;

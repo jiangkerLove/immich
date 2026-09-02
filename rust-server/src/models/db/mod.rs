@@ -21,6 +21,7 @@ pub mod asset_edit;
 pub mod duplicate;
 pub mod system_metadata;
 pub mod search;
+pub mod search_v3;
 pub mod smart_search;
 pub mod memory;
 pub mod notification;

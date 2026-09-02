@@ -202,6 +202,25 @@ pub async fn check_album_ids_access(
     Ok(allowed)
 }
 
+pub async fn require_album_ids_access(
+    pool: &sqlx::PgPool,
+    auth: &AuthDto,
+    album_ids: &[Uuid],
+    permission: Permission,
+) -> Result<(), ErrorResp> {
+    if album_ids.is_empty() {
+        return Ok(());
+    }
+    let allowed = check_album_ids_access(pool, auth, album_ids, permission.clone()).await?;
+    if allowed.len() != album_ids.len() {
+        return Err(ErrorResp::BadRequest(format!(
+            "Not found or no {} access",
+            permission.as_str()
+        )));
+    }
+    Ok(())
+}
+
 pub fn require_upload_access(auth: &AuthDto) -> Result<(), ErrorResp> {
     if let Some(shared_link) = &auth.shared_link {
         if shared_link.allow_upload {
