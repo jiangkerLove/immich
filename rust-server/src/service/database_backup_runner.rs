@@ -460,11 +460,19 @@ fn run_pg_dump_gzip(
     let file = std::fs::File::create(output_path)
         .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
     let mut encoder = GzEncoder::new(file, Compression::default());
-    std::io::copy(&mut stdout, &mut encoder)
-        .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
-    encoder
-        .finish()
-        .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+
+    let copy_result = std::io::copy(&mut stdout, &mut encoder);
+    if let Err(err) = copy_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(BackupRunnerError::Io(err.to_string()));
+    }
+
+    if let Err(err) = encoder.finish() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(BackupRunnerError::Io(err.to_string()));
+    }
 
     let status = child
         .wait()

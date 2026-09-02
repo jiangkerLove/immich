@@ -258,8 +258,23 @@ impl IntegrityProcessor {
         let job: PathReportRefreshJob =
             serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
 
+        if job.items.is_empty() {
+            return Ok(());
+        }
+
+        let paths: Vec<String> = job.items.iter().map(|item| item.path.clone()).collect();
+        let tracked_rows = integrity::get_tracked_paths(&self.pool, &paths)
+            .await
+            .map_err(|err| err.to_string())?;
+        let tracked_paths: HashSet<String> = tracked_rows.into_iter().map(|row| row.path).collect();
+
         let mut stale = Vec::new();
         for item in job.items {
+            if tracked_paths.contains(&item.path) {
+                stale.push(item.report_id);
+                continue;
+            }
+
             if tokio::fs::metadata(&item.path).await.is_err() {
                 stale.push(item.report_id);
             }
@@ -649,10 +664,20 @@ impl IntegrityProcessor {
             .iter()
             .filter(|report| report.asset_id.is_none() && report.file_asset_id.is_none())
             .collect();
-        for report in &path_reports {
-            let _ = tokio::fs::remove_file(&report.path).await;
-        }
         if !path_reports.is_empty() {
+            let paths: Vec<String> = path_reports.iter().map(|report| report.path.clone()).collect();
+            let tracked_rows = integrity::get_tracked_paths(&self.pool, &paths)
+                .await
+                .map_err(|err| err.to_string())?;
+            let tracked_paths: HashSet<String> =
+                tracked_rows.into_iter().map(|row| row.path).collect();
+
+            for report in &path_reports {
+                if !tracked_paths.contains(&report.path) {
+                    let _ = tokio::fs::remove_file(&report.path).await;
+                }
+            }
+
             let ids: Vec<Uuid> = path_reports.iter().map(|report| report.id).collect();
             integrity::delete_by_ids(&self.pool, &ids)
                 .await

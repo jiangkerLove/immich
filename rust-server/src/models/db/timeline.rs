@@ -214,6 +214,10 @@ pub async fn get_time_bucket_json(
     );
     query.push(order_dir);
     query.push(
+        r#", asset."originalFileName" "#,
+    );
+    query.push(order_dir);
+    query.push(
         r#"
         ),
         agg AS (

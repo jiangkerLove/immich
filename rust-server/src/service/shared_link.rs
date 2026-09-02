@@ -178,6 +178,9 @@ impl SharedLinkService {
                 let album_id = dto
                     .album_id
                     .ok_or_else(|| ErrorResp::BadRequest("Invalid albumId".to_string()))?;
+                if dto.asset_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+                    return Err(ErrorResp::BadRequest("Invalid assetIds".to_string()));
+                }
                 require_permission(auth, Permission::AlbumShare)?;
                 if !shared_links::user_owns_album(&self.pool, &auth.user.id, &album_id).await? {
                     return Err(ErrorResp::BadRequest(
