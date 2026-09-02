@@ -7,9 +7,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::dto::env::EnvDto;
-use crate::utils::storage::StoragePaths;
 use crate::service::job::JobService;
 use crate::service::media::metadata_extract::{MetadataExtractOutcome, MetadataExtractService};
+use crate::service::websocket::WebSocketHub;
+use crate::utils::storage::StoragePaths;
 
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_METADATA: &str = "metadataExtraction";
@@ -32,9 +33,14 @@ pub struct MetadataExtractionProcessor {
 }
 
 impl MetadataExtractionProcessor {
-    pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
+    pub fn new(
+        pool: PgPool,
+        storage: StoragePaths,
+        jobs: JobService,
+        websocket: WebSocketHub,
+    ) -> Self {
         Self {
-            service: MetadataExtractService::new(pool, storage, jobs),
+            service: MetadataExtractService::new(pool, storage, jobs, websocket),
         }
     }
 
@@ -92,10 +98,19 @@ impl JobWorkerStatus {
     }
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDto, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    storage: StoragePaths,
+    _env: EnvDto,
+    websocket: WebSocketHub,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let jobs = JobService::new(redis_url.clone());
-        let processor = Arc::new(MetadataExtractionProcessor::new(pool, storage, jobs));
+        let processor = Arc::new(MetadataExtractionProcessor::new(
+            pool, storage, jobs, websocket,
+        ));
 
         let worker = WorkerBuilder::new(QUEUE_METADATA)
             .prefix(BULL_PREFIX)

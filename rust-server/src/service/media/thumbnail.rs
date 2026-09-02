@@ -10,22 +10,21 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::models::db::asset_edit::AssetEditRow;
-use crate::models::db::asset_job::{
-    self, ThumbnailAssetJob, UpsertAssetFile,
-};
+use crate::models::db::asset_job::{self, ThumbnailAssetJob, UpsertAssetFile};
 use crate::models::db::asset_ocr;
 use crate::models::db::face;
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::{EntityJob, JobService};
-use crate::service::media::ffmpeg_tonemap::{
-    append_video_thumbnail_input_args, build_video_thumbnail_vf, VideoThumbnailStream,
-};
 use crate::service::media::edits::{
     apply_edits, apply_exif_orientation, face_crop_from_bbox, output_dimensions, parse_crop,
 };
+use crate::service::media::exiftool;
+use crate::service::media::ffmpeg_tonemap::{
+    VideoThumbnailStream, append_video_thumbnail_input_args, build_video_thumbnail_vf,
+};
 use crate::service::media::visibility::{
-    asset_dimensions_from_exif, check_face_visibility, check_ocr_visibility,
-    visible_ocr_search_text, BoundingBox, FaceForVisibility, OcrForVisibility,
+    BoundingBox, FaceForVisibility, OcrForVisibility, asset_dimensions_from_exif,
+    check_face_visibility, check_ocr_visibility, visible_ocr_search_text,
 };
 use crate::utils::storage::StoragePaths;
 use crate::utils::system_config::json_str;
@@ -100,7 +99,11 @@ pub struct ThumbnailService {
 
 impl ThumbnailService {
     pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
-        Self { pool, storage, jobs }
+        Self {
+            pool,
+            storage,
+            jobs,
+        }
     }
 
     pub async fn generate_asset_thumbnails(
@@ -122,7 +125,10 @@ impl ThumbnailService {
 
         let config = self.load_image_config().await?;
 
-        let is_gif = asset.original_file_name.to_ascii_lowercase().ends_with(".gif");
+        let is_gif = asset
+            .original_file_name
+            .to_ascii_lowercase()
+            .ends_with(".gif");
         let generated = if asset.asset_type == "VIDEO" || is_gif {
             self.generate_video_like(&asset, &config, false).await?
         } else if asset.asset_type == "IMAGE" {
@@ -203,10 +209,7 @@ impl ThumbnailService {
         }
 
         let (width, height) = if let Some(outputs) = &generated {
-            (
-                outputs.width.unwrap_or(0),
-                outputs.height.unwrap_or(0),
-            )
+            (outputs.width.unwrap_or(0), outputs.height.unwrap_or(0))
         } else {
             (
                 asset.exif_image_width.unwrap_or(0),
@@ -262,15 +265,34 @@ impl ThumbnailService {
         }
 
         let config = self.load_image_config().await?;
-        let decoded = match decode_image_path(&input_path).await {
-            Ok(image) => image,
-            Err(err) => {
-                eprintln!("person thumbnail decode failed for {person_id}: {err}");
-                extract_with_ffmpeg(&input_path, config.preview_size).await?
+        let mut skip_orientation = false;
+        let decoded = if data.asset_type != "VIDEO"
+            && config.extract_embedded
+            && is_raw_file(&data.original_path)
+        {
+            if let Some(preview) =
+                extract_raw_embedded_preview(&data.original_path, config.preview_size).await?
+            {
+                skip_orientation = true;
+                decode_image_bytes(&preview).await?
+            } else {
+                extract_with_ffmpeg(&data.original_path, config.preview_size).await?
+            }
+        } else {
+            match decode_image_path(&input_path).await {
+                Ok(image) => image,
+                Err(err) => {
+                    eprintln!("person thumbnail decode failed for {person_id}: {err}");
+                    extract_with_ffmpeg(&input_path, config.preview_size).await?
+                }
             }
         };
 
-        let oriented = apply_exif_orientation(decoded, data.exif_orientation.as_deref());
+        let oriented = if skip_orientation {
+            decoded
+        } else {
+            apply_exif_orientation(decoded, data.exif_orientation.as_deref())
+        };
         let (width, height) = oriented.dimensions();
         let crop = face_crop_from_bbox(
             data.old_width,
@@ -318,13 +340,10 @@ impl ThumbnailService {
 
     pub async fn queue_all_thumbnails(&self, force: bool) -> Result<(), String> {
         let config = self.load_image_config().await?;
-        let assets = asset_job::stream_for_thumbnail_job(
-            &self.pool,
-            force,
-            config.fullsize_enabled,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        let assets =
+            asset_job::stream_for_thumbnail_job(&self.pool, force, config.fullsize_enabled)
+                .await
+                .map_err(|err| err.to_string())?;
 
         let mut batch: Vec<(String, EntityJob)> = Vec::new();
         for asset in assets {
@@ -501,11 +520,7 @@ impl ThumbnailService {
         Ok(())
     }
 
-    async fn queue_follow_up_jobs(
-        &self,
-        job: &EntityJob,
-        is_video: bool,
-    ) -> Result<(), String> {
+    async fn queue_follow_up_jobs(&self, job: &EntityJob, is_video: bool) -> Result<(), String> {
         if !job.notify.unwrap_or(false) && job.source.as_deref() != Some("upload") {
             return Ok(());
         }
@@ -569,8 +584,7 @@ impl ThumbnailService {
                     .get("enabled")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                config.fullsize_format =
-                    read_string(fullsize, "format", &config.fullsize_format);
+                config.fullsize_format = read_string(fullsize, "format", &config.fullsize_format);
                 config.fullsize_quality =
                     read_u32(fullsize, "quality", config.fullsize_quality as u32) as u8;
             }
@@ -668,10 +682,7 @@ impl ThumbnailService {
         let decoded = match self.decode_asset_image(asset, config, is_edited).await {
             Ok((image, _, _)) => image,
             Err(err) => {
-                eprintln!(
-                    "image decode failed for {}, trying ffmpeg: {err}",
-                    asset.id
-                );
+                eprintln!("image decode failed for {}, trying ffmpeg: {err}", asset.id);
                 extract_with_ffmpeg(&asset.original_path, config.preview_size).await?
             }
         };
@@ -867,14 +878,21 @@ impl ThumbnailService {
         config: &ImageFormatConfig,
         is_edited: bool,
     ) -> Result<(DynamicImage, u32, u32), String> {
-        let use_ffmpeg_first = config.extract_embedded && is_raw_file(&asset.original_file_name);
-        let mut image = if use_ffmpeg_first {
-            extract_with_ffmpeg(&asset.original_path, config.preview_size).await?
+        let mut skip_orientation = false;
+        let mut image = if config.extract_embedded && is_raw_file(&asset.original_file_name) {
+            if let Some(preview) =
+                extract_raw_embedded_preview(&asset.original_path, config.preview_size).await?
+            {
+                skip_orientation = true;
+                decode_image_bytes(&preview).await?
+            } else {
+                extract_with_ffmpeg(&asset.original_path, config.preview_size).await?
+            }
         } else {
             decode_image_path(&asset.original_path).await?
         };
 
-        if !is_edited {
+        if !is_edited && !skip_orientation {
             image = apply_exif_orientation(image, asset.orientation.as_deref());
         }
 
@@ -982,6 +1000,46 @@ async fn decode_image_path(path: &str) -> Result<DynamicImage, String> {
     .map_err(|err| err.to_string())?
 }
 
+async fn decode_image_bytes(data: &[u8]) -> Result<DynamicImage, String> {
+    let data = data.to_vec();
+    tokio::task::spawn_blocking(move || {
+        image::load_from_memory(&data).map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+const RAW_EMBEDDED_PREVIEW_TAGS: &[&str] =
+    &["JpgFromRaw2", "JpgFromRaw", "PreviewJXL", "PreviewImage"];
+
+async fn extract_raw_embedded_preview(
+    path: &str,
+    min_size: u32,
+) -> Result<Option<Vec<u8>>, String> {
+    for tag in RAW_EMBEDDED_PREVIEW_TAGS {
+        let Ok(data) = exiftool::extract_binary_tag(path, tag).await else {
+            continue;
+        };
+        if data.is_empty() {
+            continue;
+        }
+        if should_use_embedded_preview(&data, min_size) {
+            return Ok(Some(data));
+        }
+    }
+    Ok(None)
+}
+
+fn should_use_embedded_preview(data: &[u8], target_size: u32) -> bool {
+    image::load_from_memory(data)
+        .ok()
+        .map(|image| {
+            let (width, height) = image.dimensions();
+            width.min(height) >= target_size
+        })
+        .unwrap_or(false)
+}
+
 async fn extract_with_ffmpeg(input: &str, size: u32) -> Result<DynamicImage, String> {
     let temp = tempfile::Builder::new()
         .suffix(".png")
@@ -1057,7 +1115,11 @@ async fn render_with_ffmpeg(
         }
     }
 
-    args.extend(["-update".into(), "1".into(), output.to_string_lossy().into_owned()]);
+    args.extend([
+        "-update".into(),
+        "1".into(),
+        output.to_string_lossy().into_owned(),
+    ]);
 
     let output_result = Command::new(&args[0])
         .args(&args[1..])
@@ -1094,9 +1156,15 @@ fn write_resized(
         image.clone()
     } else {
         let (new_w, new_h) = if width >= height {
-            (size, ((height as f64 * size as f64) / width as f64).round() as u32)
+            (
+                size,
+                ((height as f64 * size as f64) / width as f64).round() as u32,
+            )
         } else {
-            (((width as f64 * size as f64) / height as f64).round() as u32, size)
+            (
+                ((width as f64 * size as f64) / height as f64).round() as u32,
+                size,
+            )
         };
         image.resize(new_w.max(1), new_h.max(1), FilterType::Lanczos3)
     };
@@ -1121,12 +1189,7 @@ fn compute_thumbhash_from_image(rgba: &DynamicImage) -> Result<Vec<u8>, String> 
     let rgba = rgba.to_rgba8();
     let (width, height) = rgba.dimensions();
     let (width, height) = fit_thumbhash_dimensions(width, height);
-    let resized = image::imageops::resize(
-        &rgba,
-        width,
-        height,
-        FilterType::Triangle,
-    );
+    let resized = image::imageops::resize(&rgba, width, height, FilterType::Triangle);
     Ok(rgba_to_thumb_hash(
         width as usize,
         height as usize,
@@ -1140,10 +1203,36 @@ fn fit_thumbhash_dimensions(width: u32, height: u32) -> (u32, u32) {
         return (width.max(1), height.max(1));
     }
     if width >= height {
-        let new_h = ((height as f64 * max as f64) / width as f64).round().max(1.0) as u32;
+        let new_h = ((height as f64 * max as f64) / width as f64)
+            .round()
+            .max(1.0) as u32;
         (max, new_h)
     } else {
-        let new_w = ((width as f64 * max as f64) / height as f64).round().max(1.0) as u32;
+        let new_w = ((width as f64 * max as f64) / height as f64)
+            .round()
+            .max(1.0) as u32;
         (new_w, max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use image::{ImageBuffer, Rgb};
+
+    use super::should_use_embedded_preview;
+
+    #[test]
+    fn accepts_embedded_preview_when_long_edge_meets_target_size() {
+        let image = ImageBuffer::from_fn(1440, 1080, |_, _| Rgb([0u8, 0, 0]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Jpeg,
+            )
+            .expect("jpeg encode");
+
+        assert!(should_use_embedded_preview(&bytes, 1080));
+        assert!(!should_use_embedded_preview(&bytes, 2000));
     }
 }

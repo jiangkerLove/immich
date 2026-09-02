@@ -12,6 +12,7 @@ use crate::models::db::person;
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_value};
+use crate::service::websocket::WebSocketHub;
 use crate::utils::checksum::sha1_bytes;
 use crate::utils::storage::StoragePaths;
 
@@ -21,6 +22,7 @@ pub async fn run_post_processing(
     pool: &PgPool,
     jobs: &JobService,
     storage: &StoragePaths,
+    websocket: &WebSocketHub,
     asset: &MetadataExtractionAsset,
     media_tags: &Value,
     exif: &UpsertAssetExif,
@@ -44,6 +46,7 @@ pub async fn run_post_processing(
             pool,
             jobs,
             storage,
+            websocket,
             asset,
             media_tags,
             exif.date_time_original,
@@ -59,7 +62,13 @@ pub async fn run_post_processing(
     }
 
     if exif.live_photo_cid.is_some() {
-        link_live_photos(pool, asset, exif.live_photo_cid.as_deref().unwrap()).await?;
+        link_live_photos(
+            pool,
+            websocket,
+            asset,
+            exif.live_photo_cid.as_deref().unwrap(),
+        )
+        .await?;
     }
 
     Ok(())
@@ -93,6 +102,7 @@ fn has_tagged_faces(tags: &Value) -> bool {
 
 async fn link_live_photos(
     pool: &PgPool,
+    websocket: &WebSocketHub,
     asset: &MetadataExtractionAsset,
     live_photo_cid: &str,
 ) -> Result<(), String> {
@@ -152,6 +162,8 @@ async fn link_live_photos(
         .await
         .map_err(|err| err.to_string())?;
 
+    websocket.emit_asset_hidden(asset.owner_id, motion_id);
+
     Ok(())
 }
 
@@ -159,6 +171,7 @@ async fn apply_motion_photos(
     pool: &PgPool,
     jobs: &JobService,
     storage: &StoragePaths,
+    websocket: &WebSocketHub,
     asset: &MetadataExtractionAsset,
     tags: &Value,
     date_time_original: Option<DateTime<Utc>>,
@@ -318,6 +331,7 @@ async fn apply_motion_photos(
                 )
                 .await
                 .map_err(|err| err.to_string())?;
+                websocket.emit_asset_hidden(asset.owner_id, motion_asset_id);
             }
         }
     }
