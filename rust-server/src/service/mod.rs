@@ -10,6 +10,7 @@ pub mod asset;
 pub mod asset_file;
 pub mod auth;
 pub mod access;
+pub mod cluster_group;
 pub mod asset_media;
 pub mod db;
 pub mod ml;

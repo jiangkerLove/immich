@@ -10,6 +10,7 @@ use crate::service::shared_link::SharedLinkService;
 use crate::service::asset::AssetService;
 use crate::service::asset_file::AssetFileService;
 use crate::service::asset_media::AssetMediaService;
+use crate::service::cluster_group::ClusterGroupService;
 use crate::service::oauth::OAuthService;
 use crate::service::search::SearchService;
 use crate::service::system_metadata::SystemMetadataService;
@@ -80,6 +81,7 @@ pub struct Services {
     pub partner: PartnerService,
     pub stack: StackService,
     pub person: PersonService,
+    pub cluster_group: ClusterGroupService,
     pub activity: ActivityService,
     pub map: MapService,
     pub download: DownloadService,
@@ -140,6 +142,7 @@ impl Services {
             partner: PartnerService::new(pool.clone()),
             stack: StackService::new(pool.clone(), websocket.clone()),
             person: PersonService::new(pool.clone(), jobs.clone()),
+            cluster_group: ClusterGroupService::new(pool.clone()),
             activity: ActivityService::new(pool.clone()),
             map: MapService::new(pool.clone()),
             download: DownloadService::new(pool.clone()),

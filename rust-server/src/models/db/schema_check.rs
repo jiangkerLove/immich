@@ -6,7 +6,20 @@ const INIT_SQL: &str = include_str!("../../../schema/init.sql");
 include!(concat!(env!("OUT_DIR"), "/kysely_migrations.rs"));
 
 const OPTIONAL_TABLES: &[&str] = &["smart_search", "face_search"];
-const IGNORED_EXTRA_TABLES: &[&str] = &["kysely_migrations", "migration_overrides"];
+const IGNORED_EXTRA_TABLES: &[&str] = &[
+    "kysely_migrations",
+    "migration_overrides",
+    "cluster_group",
+    "cluster_group_request",
+    "person_group",
+    "person_group_audit",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonSchemaVariant {
+    Legacy,
+    ClusterGroups,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationStatus {
@@ -73,6 +86,29 @@ pub fn compare_migrations(expected: &[&str], applied: &[String]) -> Vec<Migratio
             MigrationCheck { name, status }
         })
         .collect()
+}
+
+pub async fn detect_person_schema_variant(
+    pool: &Pool<Postgres>,
+) -> Result<PersonSchemaVariant, sqlx::Error> {
+    let has_person_group: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = 'person_group'
+        )
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(if has_person_group {
+        PersonSchemaVariant::ClusterGroups
+    } else {
+        PersonSchemaVariant::Legacy
+    })
 }
 
 pub async fn run(pool: &Pool<Postgres>) -> Result<SchemaCheckReport, sqlx::Error> {
@@ -294,5 +330,11 @@ mod tests {
                 .map(|item| item.status),
             Some(MigrationStatus::Applied)
         );
+    }
+
+    #[test]
+    fn cluster_group_tables_are_ignored_as_extra() {
+        assert!(IGNORED_EXTRA_TABLES.contains(&"cluster_group"));
+        assert!(IGNORED_EXTRA_TABLES.contains(&"person_group"));
     }
 }

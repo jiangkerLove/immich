@@ -48,6 +48,12 @@ pub enum Permission {
 
     AuthChangePassword,
 
+    ClusterGroupRead,
+    ClusterGroupLeave,
+    ClusterGroupRequestCreate,
+    ClusterGroupRequestRead,
+    ClusterGroupRequestDelete,
+
     AuthDeviceDelete,
 
     PinCodeCreate,
@@ -218,6 +224,12 @@ impl Permission {
 
             Permission::AuthChangePassword => "auth.changePassword",
 
+            Permission::ClusterGroupRead => "clusterGroup.read",
+            Permission::ClusterGroupLeave => "clusterGroup.leave",
+            Permission::ClusterGroupRequestCreate => "clusterGroupRequest.create",
+            Permission::ClusterGroupRequestRead => "clusterGroupRequest.read",
+            Permission::ClusterGroupRequestDelete => "clusterGroupRequest.delete",
+
             Permission::AuthDeviceDelete => "authDevice.delete",
 
             Permission::PinCodeCreate => "pinCode.create",
@@ -386,6 +398,12 @@ impl Permission {
             "album.download" => Some(Permission::AlbumDownload),
 
             "auth.changePassword" => Some(Permission::AuthChangePassword),
+
+            "clusterGroup.read" => Some(Permission::ClusterGroupRead),
+            "clusterGroup.leave" => Some(Permission::ClusterGroupLeave),
+            "clusterGroupRequest.create" => Some(Permission::ClusterGroupRequestCreate),
+            "clusterGroupRequest.read" => Some(Permission::ClusterGroupRequestRead),
+            "clusterGroupRequest.delete" => Some(Permission::ClusterGroupRequestDelete),
 
             "authDevice.delete" => Some(Permission::AuthDeviceDelete),
 

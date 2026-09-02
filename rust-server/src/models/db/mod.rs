@@ -35,6 +35,7 @@ pub mod sync_repository;
 pub mod library;
 pub mod integrity;
 pub mod advisory_lock;
+pub mod cluster_group;
 pub mod maintenance;
 pub mod media_location;
 pub mod schema_check;

@@ -26,6 +26,7 @@ pub mod tag;
 pub mod search;
 pub mod trash;
 pub mod timeline;
+pub mod cluster_group;
 pub mod config;
 pub mod duplicate;
 pub mod system_config;
@@ -79,6 +80,7 @@ pub fn protected_router() -> Router<AppState> {
         .merge(partner::router())
         .merge(stack::router())
         .merge(person::router())
+        .merge(cluster_group::router())
         .merge(activity::router())
         .merge(map::router())
         .merge(download::router())
