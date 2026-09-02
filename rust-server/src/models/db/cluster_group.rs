@@ -20,6 +20,12 @@ pub struct ClusterGroupUserRow {
     pub profile_changed_at: DateTime<Utc>,
 }
 
+pub async fn create(pool: &Pool<Postgres>) -> Result<Uuid, sqlx::Error> {
+    sqlx::query_scalar(r#"INSERT INTO cluster_group DEFAULT VALUES RETURNING id"#)
+        .fetch_one(pool)
+        .await
+}
+
 pub async fn tables_exist(pool: &Pool<Postgres>) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         r#"

@@ -5,6 +5,8 @@ use sqlx::{FromRow, Pool, Postgres, QueryBuilder};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
+use super::person_schema::PersonSchema;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTableKind {
     Modern,
@@ -181,6 +183,9 @@ pub async fn get_memory_assets(
         return Ok(vec![]);
     }
 
+    let schema = PersonSchema::get(pool).await?;
+    let join = schema.join_person_to_face("person", "asset_face");
+
     let sql = format!(
         r#"
         SELECT
@@ -194,7 +199,7 @@ pub async fn get_memory_assets(
           AND NOT EXISTS (
               SELECT 1
               FROM asset_face
-              INNER JOIN person ON person.id = asset_face."personId"
+              INNER JOIN person ON {join}
               WHERE asset_face."assetId" = asset.id
                 AND person."isHidden" = TRUE
           )

@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
+use super::person_schema::PersonSchema;
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
     pub user_ids: Vec<Uuid>,
@@ -54,13 +56,14 @@ pub async fn search_metadata_ids(
     page: &SearchPage,
     order_desc: bool,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let offset = (page.page - 1) * page.size;
     let limit = page.size + 1;
 
     let mut query = QueryBuilder::new(r#"SELECT asset.id FROM asset "#);
     append_search_from(&mut query, filter);
     query.push(" WHERE 1=1 ");
-    append_search_filters(&mut query, filter);
+    append_search_filters(&mut query, filter, &schema);
     query.push(" ORDER BY asset.\"fileCreatedAt\" ");
     query.push(if order_desc { "DESC" } else { "ASC" });
     query.push(" LIMIT ");
@@ -75,10 +78,11 @@ pub async fn search_statistics_count(
     pool: &Pool<Postgres>,
     filter: &SearchFilter,
 ) -> Result<i64, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let mut query = QueryBuilder::new(r#"SELECT COUNT(*)::bigint FROM asset "#);
     append_search_from(&mut query, filter);
     query.push(" WHERE 1=1 ");
-    append_search_filters(&mut query, filter);
+    append_search_filters(&mut query, filter, &schema);
     query.build_query_scalar().fetch_one(pool).await
 }
 
@@ -87,10 +91,11 @@ pub async fn search_random_ids(
     filter: &SearchFilter,
     size: i64,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let mut query = QueryBuilder::new(r#"SELECT asset.id FROM asset "#);
     append_search_from(&mut query, filter);
     query.push(" WHERE 1=1 ");
-    append_search_filters(&mut query, filter);
+    append_search_filters(&mut query, filter, &schema);
     query.push(" ORDER BY random() LIMIT ");
     query.push_bind(size);
     query.build_query_scalar().fetch_all(pool).await
@@ -101,6 +106,7 @@ pub async fn search_large_asset_ids(
     filter: &SearchFilter,
     size: i64,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let mut query = QueryBuilder::new(
         r#"
         SELECT asset.id FROM asset
@@ -108,7 +114,7 @@ pub async fn search_large_asset_ids(
         "#,
     );
     query.push(" WHERE 1=1 ");
-    append_search_filters(&mut query, filter);
+    append_search_filters(&mut query, filter, &schema);
     if filter.min_file_size.unwrap_or(0) > 0 {
         query.push(r#" AND asset_exif."fileSizeInByte" > "#);
         query.push_bind(filter.min_file_size.unwrap_or(0));
@@ -126,6 +132,7 @@ pub async fn search_smart_ids(
     embedding: &str,
     page: &SearchPage,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let offset = (page.page - 1) * page.size;
     let limit = page.size + 1;
     let embedding = crate::models::db::smart_search::normalize_embedding(embedding);
@@ -140,7 +147,7 @@ pub async fn search_smart_ids(
     append_search_from(&mut query, filter);
     query.push(r#" INNER JOIN smart_search ON asset.id = smart_search."assetId" "#);
     query.push(" WHERE 1=1 ");
-    append_search_filters(&mut query, filter);
+    append_search_filters(&mut query, filter, &schema);
     query.push(" ORDER BY smart_search.embedding <=> CAST(");
     query.push_bind(embedding);
     query.push(" AS vector) LIMIT ");
@@ -401,7 +408,11 @@ fn needs_exif_join(filter: &SearchFilter) -> bool {
         || filter.min_file_size.is_some()
 }
 
-fn append_search_filters(query: &mut QueryBuilder<'_, Postgres>, filter: &SearchFilter) {
+fn append_search_filters(
+    query: &mut QueryBuilder<'_, Postgres>,
+    filter: &SearchFilter,
+    schema: &PersonSchema,
+) {
     let visibility = filter
         .visibility
         .clone()
@@ -468,21 +479,26 @@ fn append_search_filters(query: &mut QueryBuilder<'_, Postgres>, filter: &Search
 
     if let Some(person_ids) = &filter.person_ids {
         if !person_ids.is_empty() {
+            let face_col = schema.face_person_col_quoted();
             query.push(
-                r#"
+                format!(
+                    r#"
                 AND EXISTS (
                     SELECT 1 FROM asset_face
                     WHERE asset_face."assetId" = asset.id
-                      AND asset_face."personId" = ANY(
-                "#,
+                      AND asset_face.{face_col} = ANY(
+                "#
+                ),
             );
             query.push_bind(person_ids.clone());
             query.push(
-                r#")
+                format!(
+                    r#")
                       AND asset_face."deletedAt" IS NULL
                       AND asset_face."isVisible" = TRUE
                     GROUP BY asset_face."assetId"
-                    HAVING COUNT(DISTINCT asset_face."personId") = "#,
+                    HAVING COUNT(DISTINCT asset_face.{face_col}) = "#
+                ),
             );
             query.push_bind(person_ids.len() as i64);
             query.push(") ");

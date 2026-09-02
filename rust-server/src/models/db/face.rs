@@ -2,6 +2,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
+use super::person_schema::PersonSchema;
+
 #[derive(Debug, FromRow)]
 pub struct AssetFaceWithPersonRow {
     pub id: Uuid,
@@ -36,7 +38,7 @@ pub struct CreateAssetFaceData {
     pub bounding_box_y2: i32,
 }
 
-const FACE_SELECT: &str = r#"
+const FACE_SELECT_LEGACY: &str = r#"
     af.id,
     af."assetId" AS asset_id,
     af."personId" AS person_id,
@@ -57,20 +59,63 @@ const FACE_SELECT: &str = r#"
     p."updatedAt" AS person_updated_at
 "#;
 
+const FACE_SELECT_CLUSTER: &str = r#"
+    af.id,
+    af."assetId" AS asset_id,
+    af."personGroupId" AS person_id,
+    af."imageWidth" AS image_width,
+    af."imageHeight" AS image_height,
+    af."boundingBoxX1" AS bounding_box_x1,
+    af."boundingBoxY1" AS bounding_box_y1,
+    af."boundingBoxX2" AS bounding_box_x2,
+    af."boundingBoxY2" AS bounding_box_y2,
+    af."sourceType"::text AS source_type,
+    p."ownerId" AS person_owner_id,
+    p.name AS person_name,
+    p."birthDate" AS person_birth_date,
+    p."thumbnailPath" AS person_thumbnail_path,
+    p."isHidden" AS person_is_hidden,
+    p."isFavorite" AS person_is_favorite,
+    p.color AS person_color,
+    p."updatedAt" AS person_updated_at
+"#;
+
+fn face_select(schema: &PersonSchema) -> &'static str {
+    if schema.is_cluster_groups() {
+        FACE_SELECT_CLUSTER
+    } else {
+        FACE_SELECT_LEGACY
+    }
+}
+
+fn join_person(schema: &PersonSchema) -> String {
+    if schema.is_cluster_groups() {
+        r#"LEFT JOIN person p ON p."personGroupId" = af."personGroupId" AND p."ownerId" = (
+            SELECT a."ownerId" FROM asset a WHERE a.id = af."assetId"
+        )"#
+        .to_string()
+    } else {
+        r#"LEFT JOIN person p ON p.id = af."personId""#.to_string()
+    }
+}
+
 pub async fn get_faces_by_asset(
     pool: &Pool<Postgres>,
     asset_id: &Uuid,
 ) -> Result<Vec<AssetFaceWithPersonRow>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let sql = format!(
         r#"
-        SELECT {FACE_SELECT}
+        SELECT {select}
         FROM asset_face af
-        LEFT JOIN person p ON p.id = af."personId"
+        {join}
         WHERE af."assetId" = $1
           AND af."deletedAt" IS NULL
           AND af."isVisible" = TRUE
         ORDER BY af."boundingBoxX1" ASC
-        "#
+        "#,
+        select = face_select(&schema),
+        join = join_person(&schema),
     );
     sqlx::query_as::<_, AssetFaceWithPersonRow>(&sql)
         .bind(asset_id)
@@ -82,14 +127,17 @@ pub async fn get_face_by_id(
     pool: &Pool<Postgres>,
     face_id: &Uuid,
 ) -> Result<Option<AssetFaceWithPersonRow>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let sql = format!(
         r#"
-        SELECT {FACE_SELECT}
+        SELECT {select}
         FROM asset_face af
-        LEFT JOIN person p ON p.id = af."personId"
+        {join}
         WHERE af.id = $1
           AND af."deletedAt" IS NULL
-        "#
+        "#,
+        select = face_select(&schema),
+        join = join_person(&schema),
     );
     sqlx::query_as::<_, AssetFaceWithPersonRow>(&sql)
         .bind(face_id)
@@ -125,17 +173,19 @@ pub async fn create_asset_face(
     pool: &Pool<Postgres>,
     data: &CreateAssetFaceData,
 ) -> Result<Uuid, sqlx::Error> {
-    sqlx::query_scalar(
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col();
+    sqlx::query_scalar(&format!(
         r#"
         INSERT INTO asset_face (
-            "assetId", "personId", "imageWidth", "imageHeight",
+            "assetId", "{face_col}", "imageWidth", "imageHeight",
             "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2",
             "sourceType"
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual')
         RETURNING id
-        "#,
-    )
+        "#
+    ))
     .bind(data.asset_id)
     .bind(data.person_id)
     .bind(data.image_width)
@@ -170,16 +220,18 @@ pub async fn get_random_face_id(
     pool: &Pool<Postgres>,
     person_id: &Uuid,
 ) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+    sqlx::query_scalar(&format!(
         r#"
         SELECT id
         FROM asset_face
-        WHERE "personId" = $1
+        WHERE {face_col} = $1
           AND "deletedAt" IS NULL
           AND "isVisible" = TRUE
         LIMIT 1
-        "#,
-    )
+        "#
+    ))
     .bind(person_id)
     .fetch_optional(pool)
     .await
@@ -189,7 +241,11 @@ pub async fn get_person_face_asset_id(
     pool: &Pool<Postgres>,
     person_id: &Uuid,
 ) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(r#"SELECT "faceAssetId" FROM person WHERE id = $1"#)
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query_scalar(&format!(
+        r#"SELECT "faceAssetId" FROM person WHERE {where_id}"#,
+        where_id = schema.where_person_id("", "$1"),
+    ))
         .bind(person_id)
         .fetch_optional(pool)
         .await
@@ -200,7 +256,11 @@ pub async fn set_person_face_asset_id(
     person_id: &Uuid,
     face_asset_id: Option<Uuid>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"UPDATE person SET "faceAssetId" = $2 WHERE id = $1"#)
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query(&format!(
+        r#"UPDATE person SET "faceAssetId" = $2 WHERE {where_id}"#,
+        where_id = schema.where_person_id("", "$1"),
+    ))
         .bind(person_id)
         .bind(face_asset_id)
         .execute(pool)
@@ -406,17 +466,20 @@ pub async fn refresh_exif_faces(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col();
+
     for face in faces_to_add {
-        sqlx::query(
+        sqlx::query(&format!(
             r#"
             INSERT INTO asset_face (
-                id, "assetId", "personId", "imageWidth", "imageHeight",
+                id, "assetId", "{face_col}", "imageWidth", "imageHeight",
                 "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2",
                 "sourceType"
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'exif')
-            "#,
-        )
+            "#
+        ))
         .bind(face.id)
         .bind(face.asset_id)
         .bind(face.person_id)

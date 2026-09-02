@@ -2,6 +2,8 @@ use serde::Serialize;
 use sqlx::{FromRow, Pool, Postgres, Row};
 use uuid::Uuid;
 
+use super::person_schema::PersonSchema;
+
 #[derive(Debug, Clone, Copy)]
 pub struct BoundingBox {
     pub west: f64,
@@ -39,6 +41,7 @@ pub async fn get_time_buckets(
     pool: &Pool<Postgres>,
     filter: &TimelineFilter,
 ) -> Result<Vec<TimeBucketItem>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let date_expr = if filter.order_by_taken_at {
         r#"date_trunc('MONTH', asset."localDateTime" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"#
     } else {
@@ -54,7 +57,7 @@ pub async fn get_time_buckets(
     ));
 
     query.push(" WHERE 1=1 ");
-    append_asset_filters(&mut query, filter, true);
+    append_asset_filters(&mut query, filter, true, &schema);
 
     query.push(
         r#"
@@ -83,6 +86,7 @@ pub async fn get_time_bucket_json(
     include_exif: bool,
     include_coordinates: bool,
 ) -> Result<String, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
     let date_expr = if filter.order_by_taken_at {
         r#"date_trunc('MONTH', asset."localDateTime" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"#
     } else {
@@ -183,7 +187,7 @@ pub async fn get_time_bucket_json(
     }
 
     query.push(" WHERE 1=1 ");
-    append_asset_filters(&mut query, filter, true);
+    append_asset_filters(&mut query, filter, true, &schema);
 
     query.push(format!(r#" AND {date_expr} = "#));
     query.push_bind(parse_time_bucket(time_bucket));
@@ -287,6 +291,7 @@ fn append_asset_filters(
     query: &mut sqlx::QueryBuilder<'_, Postgres>,
     filter: &TimelineFilter,
     for_bucket: bool,
+    schema: &PersonSchema,
 ) {
     if filter.is_trashed {
         query.push(r#" AND asset."deletedAt" IS NOT NULL "#);
@@ -351,13 +356,16 @@ fn append_asset_filters(
     }
 
     if let Some(person_id) = filter.person_id {
+        let face_col = schema.face_person_col_quoted();
         query.push(
-            r#"
+            format!(
+                r#"
             AND EXISTS (
                 SELECT 1 FROM asset_face
                 WHERE asset_face."assetId" = asset.id
-                  AND asset_face."personId" =
-            "#,
+                  AND asset_face.{face_col} =
+            "#
+            ),
         );
         query.push_bind(person_id);
         query.push(
@@ -539,9 +547,11 @@ pub async fn user_owns_person(
     user_id: &Uuid,
     person_id: &Uuid,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"SELECT EXISTS(SELECT 1 FROM person WHERE id = $1 AND "ownerId" = $2)"#,
-    )
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query_scalar(&format!(
+        r#"SELECT EXISTS(SELECT 1 FROM person WHERE {where_id} AND "ownerId" = $2)"#,
+        where_id = schema.where_person_id("", "$1"),
+    ))
     .bind(person_id)
     .bind(user_id)
     .fetch_one(pool)

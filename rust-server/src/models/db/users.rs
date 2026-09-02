@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
+use super::cluster_group;
+use super::person_schema::PersonSchema;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewUserDb {
@@ -281,6 +284,45 @@ impl UserDb {
     }
 
     pub async fn insert(pool: &Pool<Postgres>, user: &NewUserDb) -> Result<UserDb, sqlx::Error> {
+        let schema = PersonSchema::get(pool).await?;
+        if schema.is_cluster_groups() {
+            let cluster_group_id = cluster_group::create(pool).await?;
+            return sqlx::query_as::<_, UserDb>(
+                r#"
+                INSERT INTO "user" (email, password, name, "isAdmin", "storageLabel", "clusterGroupId")
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING
+                    id,
+                    "createdAt" as "created_at",
+                    "profileImagePath" as "profile_image_path",
+                    "shouldChangePassword" as "should_change_password",
+                    "deletedAt" as "deleted_at",
+                    "oauthId" as "oauth_id",
+                    "updatedAt" as "updated_at",
+                    "storageLabel" as "storage_label",
+                    name,
+                    "quotaSizeInBytes" as "quota_size_in_bytes",
+                    "quotaUsageInBytes" as "quota_usage_in_bytes",
+                    status,
+                    "profileChangedAt" as "profile_changed_at",
+                    "updateId" as "update_id",
+                    "avatarColor" as "avatar_color",
+                    "pinCode" as "pin_code",
+                    email,
+                    password,
+                    "isAdmin" as "is_admin"
+                "#,
+            )
+            .bind(&user.email)
+            .bind(&user.password)
+            .bind(&user.name)
+            .bind(user.is_admin)
+            .bind(&user.storage_label)
+            .bind(cluster_group_id)
+            .fetch_one(pool)
+            .await;
+        }
+
         sqlx::query_as::<_, UserDb>(
             r#"
                 INSERT INTO "user" (email, password, name, "isAdmin", "storageLabel")
@@ -378,6 +420,53 @@ impl UserDb {
         quota_size_in_bytes: Option<i64>,
         should_change_password: bool,
     ) -> Result<UserDb, sqlx::Error> {
+        let schema = PersonSchema::get(pool).await?;
+        if schema.is_cluster_groups() {
+            let cluster_group_id = cluster_group::create(pool).await?;
+            return sqlx::query_as::<_, UserDb>(
+                r#"
+                INSERT INTO "user" (
+                    email, password, name, "isAdmin", "storageLabel",
+                    "avatarColor", "pinCode", "quotaSizeInBytes", "shouldChangePassword",
+                    "clusterGroupId"
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING
+                    id,
+                    "createdAt" as "created_at",
+                    "profileImagePath" as "profile_image_path",
+                    "shouldChangePassword" as "should_change_password",
+                    "deletedAt" as "deleted_at",
+                    "oauthId" as "oauth_id",
+                    "updatedAt" as "updated_at",
+                    "storageLabel" as "storage_label",
+                    name,
+                    "quotaSizeInBytes" as "quota_size_in_bytes",
+                    "quotaUsageInBytes" as "quota_usage_in_bytes",
+                    status,
+                    "profileChangedAt" as "profile_changed_at",
+                    "updateId" as "update_id",
+                    "avatarColor" as "avatar_color",
+                    "pinCode" as "pin_code",
+                    email,
+                    password,
+                    "isAdmin" as "is_admin"
+                "#,
+            )
+            .bind(email)
+            .bind(password)
+            .bind(name)
+            .bind(is_admin)
+            .bind(storage_label)
+            .bind(avatar_color)
+            .bind(pin_code)
+            .bind(quota_size_in_bytes)
+            .bind(should_change_password)
+            .bind(cluster_group_id)
+            .fetch_one(pool)
+            .await;
+        }
+
         sqlx::query_as::<_, UserDb>(
             r#"
                 INSERT INTO "user" (

@@ -25,6 +25,7 @@ pub mod smart_search;
 pub mod memory;
 pub mod notification;
 pub mod person;
+pub mod person_schema;
 pub mod partner;
 pub mod stack;
 pub mod trash;
