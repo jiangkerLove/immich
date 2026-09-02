@@ -124,6 +124,8 @@ pub enum Permission {
     SystemConfigRead,
     SystemConfigUpdate,
 
+    UserConfigRead,
+
     SystemMetadataRead,
     SystemMetadataUpdate,
 
@@ -291,6 +293,7 @@ impl Permission {
 
             Permission::SystemConfigRead => "systemConfig.read",
             Permission::SystemConfigUpdate => "systemConfig.update",
+            Permission::UserConfigRead => "userConfig.read",
 
             Permission::SystemMetadataRead => "systemMetadata.read",
             Permission::SystemMetadataUpdate => "systemMetadata.update",
@@ -459,6 +462,7 @@ impl Permission {
 
             "systemConfig.read" => Some(Permission::SystemConfigRead),
             "systemConfig.update" => Some(Permission::SystemConfigUpdate),
+            "userConfig.read" => Some(Permission::UserConfigRead),
 
             "systemMetadata.read" => Some(Permission::SystemMetadataRead),
             "systemMetadata.update" => Some(Permission::SystemMetadataUpdate),

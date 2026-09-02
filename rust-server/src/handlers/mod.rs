@@ -24,6 +24,7 @@ pub mod search;
 pub mod sync;
 pub mod trash;
 pub mod timeline;
+pub mod config;
 pub mod duplicate;
 pub mod system_config;
 pub mod user;

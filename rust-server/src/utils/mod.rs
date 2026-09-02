@@ -29,6 +29,7 @@ pub mod serde;
 pub mod storage;
 pub mod storage_move;
 pub mod sync;
+pub mod config_visibility;
 pub mod system_config;
 pub mod telemetry;
 pub mod transform;

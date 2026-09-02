@@ -26,6 +26,7 @@ pub mod tag;
 pub mod search;
 pub mod trash;
 pub mod timeline;
+pub mod config;
 pub mod duplicate;
 pub mod system_config;
 pub mod user;
@@ -49,6 +50,7 @@ pub fn public_router() -> Router<AppState> {
         .merge(auth::public_router())
         .merge(oauth::public_router())
         .merge(server::public_router())
+        .merge(config::public_router())
         .merge(maintenance::public_router())
         .merge(database_backup::public_router())
 }
@@ -85,6 +87,7 @@ pub fn protected_router() -> Router<AppState> {
         .merge(user_admin::router())
         .merge(duplicate::router())
         .merge(system_config::router())
+        .merge(config::protected_router())
         .merge(maintenance::protected_router())
         .merge(video_stream::router())
         .merge(job::router())
