@@ -7,6 +7,7 @@ pub mod album;
 pub mod api_key;
 pub mod shared_link;
 pub mod asset;
+pub mod asset_file;
 pub mod asset_media;
 pub mod auth;
 pub mod memory;
@@ -63,6 +64,7 @@ pub fn protected_router() -> Router<AppState> {
         .merge(album::router())
         .merge(tag::router())
         .merge(asset::router())
+        .merge(asset_file::router())
         .merge(shared_link::router())
         .merge(asset_media::router())
         .merge(timeline::router())

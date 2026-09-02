@@ -106,6 +106,8 @@ pub struct MemorySearchFilter {
     pub is_saved: Option<bool>,
     pub memory_type: Option<String>,
     pub size: Option<i64>,
+    pub page: Option<i64>,
+    pub is_upcoming: Option<bool>,
     pub order: Option<String>,
 }
 
@@ -146,14 +148,21 @@ pub async fn search_memories(
     if filter.order.as_deref() == Some("random") {
         query.push(" ORDER BY RANDOM() ");
     } else if filter.order.as_deref() == Some("asc") {
-        query.push(r#" ORDER BY "memoryAt" ASC "#);
+        query.push(r#" ORDER BY "showAt" ASC NULLS LAST, "memoryAt" ASC "#);
     } else {
-        query.push(r#" ORDER BY "memoryAt" DESC "#);
+        query.push(r#" ORDER BY "showAt" DESC NULLS LAST, "memoryAt" DESC "#);
     }
 
     if let Some(size) = filter.size {
         query.push(" LIMIT ");
         query.push_bind(size);
+    }
+
+    if let (Some(page), Some(size)) = (filter.page, filter.size) {
+        if page > 1 {
+            query.push(" OFFSET ");
+            query.push_bind((page - 1) * size);
+        }
     }
 
     query.build_query_as::<MemoryRow>().fetch_all(pool).await
@@ -246,6 +255,14 @@ fn append_search_filters<'a>(
     if let Some(memory_type) = &filter.memory_type {
         query.push(" AND type = ");
         query.push_bind(memory_type.clone());
+    }
+
+    if let Some(is_upcoming) = filter.is_upcoming {
+        if is_upcoming {
+            query.push(r#" AND "showAt" > now() "#);
+        } else {
+            query.push(r#" AND ("showAt" IS NULL OR "showAt" <= now()) "#);
+        }
     }
 
     if filter.is_trashed == Some(true) {

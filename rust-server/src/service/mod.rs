@@ -7,6 +7,7 @@ pub mod api_key;
 pub mod job;
 pub mod shared_link;
 pub mod asset;
+pub mod asset_file;
 pub mod auth;
 pub mod access;
 pub mod asset_media;

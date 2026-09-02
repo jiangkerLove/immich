@@ -673,12 +673,21 @@ pub async fn reassign_faces_by_person(
     pool: &Pool<Postgres>,
     old_person_id: &Uuid,
     new_person_id: &Uuid,
+    owner_id: &Uuid,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        r#"UPDATE asset_face SET "personId" = $2 WHERE "personId" = $1"#,
+        r#"
+        UPDATE asset_face
+        SET "personId" = $2
+        FROM asset
+        WHERE asset_face."assetId" = asset.id
+          AND asset_face."personId" = $1
+          AND asset."ownerId" = $3
+        "#,
     )
     .bind(old_person_id)
     .bind(new_person_id)
+    .bind(owner_id)
     .execute(pool)
     .await?;
     Ok(())

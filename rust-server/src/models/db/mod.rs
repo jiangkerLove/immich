@@ -42,6 +42,7 @@ pub mod migration_job;
 pub mod move_history;
 pub mod ml_job;
 pub mod asset_delete;
+pub mod asset_file;
 pub mod plugin;
 pub mod workflow;
 pub mod video_stream;

@@ -7,6 +7,7 @@ pub mod album;
 pub mod api_key;
 pub mod shared_link;
 pub mod asset;
+pub mod asset_file;
 pub mod asset_media;
 pub mod auth;
 pub mod memory;

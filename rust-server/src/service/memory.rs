@@ -14,6 +14,7 @@ use crate::models::response::memory::{
     MemoryStatisticsResponse,
 };
 use crate::models::response::response::ErrorResp;
+use crate::service::access::require_assets_access;
 use crate::service::album::{BulkIdErrorReason, BulkIdResponse, BulkIdsReq};
 use crate::utils::permission::require_permission;
 use crate::models::db::auth_permission::Permission;
@@ -30,8 +31,10 @@ pub struct MemorySearchQuery {
     pub for_date: Option<String>,
     pub is_trashed: Option<String>,
     pub is_saved: Option<String>,
+    pub is_upcoming: Option<String>,
     pub r#type: Option<String>,
     pub size: Option<i64>,
+    pub page: Option<i64>,
     pub order: Option<String>,
 }
 
@@ -112,7 +115,7 @@ impl MemoryService {
 
         let asset_ids = dto.asset_ids.clone();
         if !asset_ids.is_empty() {
-            require_assets_share_access(&self.pool, auth, &asset_ids).await?;
+            require_assets_access(&self.pool, auth, &asset_ids, Permission::AssetUpdate).await?;
         }
 
         let memory_id = memory::create(
@@ -187,7 +190,7 @@ impl MemoryService {
         let allowed: HashSet<Uuid> = if not_present.is_empty() {
             HashSet::new()
         } else {
-            filter_share_accessible_ids(&self.pool, auth, &not_present)
+            filter_update_accessible_ids(&self.pool, auth, &not_present)
                 .await?
                 .into_iter()
                 .collect()
@@ -305,19 +308,17 @@ async fn require_memory_access(
     Ok(())
 }
 
-async fn require_assets_share_access(
+async fn filter_update_accessible_ids(
     pool: &PgPool,
     auth: &AuthDto,
     asset_ids: &[Uuid],
-) -> Result<(), ErrorResp> {
-    require_permission(auth, Permission::AssetShare)?;
-    let allowed = filter_share_accessible_ids(pool, auth, asset_ids).await?;
-    if allowed.len() != asset_ids.len() {
-        return Err(ErrorResp::BadRequest(
-            "Not found or no asset.share access".to_string(),
-        ));
-    }
-    Ok(())
+) -> Result<Vec<Uuid>, ErrorResp> {
+    require_permission(auth, Permission::AssetUpdate)?;
+    let elevated = auth
+        .session
+        .as_ref()
+        .is_some_and(|session| session.has_elevated_permission);
+    Ok(assets::filter_accessible_ids(pool, &auth.user.id, asset_ids, elevated, true).await?)
 }
 
 async fn filter_share_accessible_ids(
@@ -346,6 +347,8 @@ fn build_filter(query: &MemorySearchQuery) -> Result<MemorySearchFilter, ErrorRe
         is_saved: parse_bool(&query.is_saved),
         memory_type: query.r#type.clone(),
         size: query.size,
+        page: query.page,
+        is_upcoming: parse_bool(&query.is_upcoming),
         order: query.order.clone(),
     })
 }

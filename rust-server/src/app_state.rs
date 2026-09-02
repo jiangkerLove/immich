@@ -8,6 +8,7 @@ use sqlx::{Pool as SqlPool, Postgres};
 use crate::models::dto::env::EnvDto;
 use crate::service::shared_link::SharedLinkService;
 use crate::service::asset::AssetService;
+use crate::service::asset_file::AssetFileService;
 use crate::service::asset_media::AssetMediaService;
 use crate::service::oauth::OAuthService;
 use crate::service::search::SearchService;
@@ -64,6 +65,7 @@ pub struct Services {
     pub album: AlbumService,
     pub tag: TagService,
     pub asset: AssetService,
+    pub asset_file: AssetFileService,
     pub shared_link: SharedLinkService,
     pub asset_media: AssetMediaService,
     pub oauth: OAuthService,
@@ -123,6 +125,7 @@ impl Services {
             album: albums.clone(),
             tag: TagService::new(pool.clone(), jobs.clone()),
             asset: AssetService::new(pool.clone(), jobs.clone(), websocket.clone()),
+            asset_file: AssetFileService::new(pool.clone(), jobs.clone()),
             shared_link: SharedLinkService::new(pool.clone(), albums),
             asset_media: AssetMediaService::new(pool.clone(), storage.clone(), jobs.clone()),
             oauth: OAuthService::new(pool.clone(), websocket.clone()),
