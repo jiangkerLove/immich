@@ -1,13 +1,15 @@
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::map;
 use crate::models::db::metadata_job::{
-    self, UpdateAssetAfterMetadata, UpsertAssetAudio, UpsertAssetExif, UpsertAssetVideo,
+    self, UpdateAssetAfterMetadata, UpsertAssetAudio, UpsertAssetExif, UpsertAssetKeyframe,
+    UpsertAssetVideo,
 };
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::EntityJob;
@@ -15,9 +17,23 @@ use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_string_list};
 use crate::service::media::ffprobe::{self, ProbeResult};
 use crate::service::media::metadata_postprocess;
+use crate::utils::mime_types::{is_heif_image_path, is_possibly_animated_image_path};
 use crate::utils::storage::StoragePaths;
 
 const JOBS_BATCH_SIZE: usize = 1000;
+const EXIF_DATE_TAGS: &[&str] = &[
+    "SubSecDateTimeOriginal",
+    "SubSecCreateDate",
+    "DateTimeOriginal",
+    "CreationDate",
+    "CreateDate",
+    "MediaCreateDate",
+    "DateTimeCreated",
+    "GPSDateTime",
+    "DateTimeUTC",
+    "SonyDateTime2",
+    "SourceImageCreateTime",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataExtractOutcome {
@@ -34,7 +50,11 @@ pub struct MetadataExtractService {
 
 impl MetadataExtractService {
     pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
-        Self { pool, jobs, storage }
+        Self {
+            pool,
+            jobs,
+            storage,
+        }
     }
 
     pub async fn extract_asset_metadata(
@@ -64,6 +84,9 @@ impl MetadataExtractService {
                 }
             }
         }
+        if !should_probe && !is_possibly_animated_image_path(&asset.original_path) {
+            remove_tag(&mut media_tags, "Duration");
+        }
 
         let probe = if should_probe {
             Some(ffprobe::probe(&asset.original_path).await?)
@@ -74,11 +97,19 @@ impl MetadataExtractService {
         if let Some(probe) = probe.as_ref() {
             merge_probe_tags(&mut media_tags, probe);
         }
+        apply_heif_orientation(&mut media_tags, &asset.original_path);
 
         let metadata = tokio::fs::metadata(&asset.original_path)
             .await
             .map_err(|err| err.to_string())?;
         let modify_date = metadata.modified().ok().and_then(system_time_to_utc);
+        let created_date = metadata.created().ok().and_then(system_time_to_utc);
+        let fallback_date = earliest_file_date([
+            asset.file_created_at,
+            created_date,
+            modify_date,
+            asset.file_modified_at,
+        ]);
         let file_size = metadata.len() as i64;
 
         let (width, height) = image_dimensions(&media_tags);
@@ -93,18 +124,31 @@ impl MetadataExtractService {
         let (city, state, country) = self.reverse_geocode(latitude, longitude).await?;
 
         let tags = collect_tags(&media_tags);
+        let raw_exif_date = EXIF_DATE_TAGS
+            .iter()
+            .find_map(|tag| tag_string(&media_tags, tag));
+        let time_zone =
+            resolve_time_zone(&media_tags, raw_exif_date.as_deref(), latitude, longitude);
+        let exif_date = raw_exif_date
+            .as_deref()
+            .and_then(|raw| parse_exif_date(raw, time_zone.as_deref()));
+        let date_time_original = exif_date
+            .as_ref()
+            .map(|date| date.instant)
+            .or(fallback_date);
+        let time_zone =
+            time_zone.or_else(|| exif_date.as_ref().and_then(|date| date.time_zone.clone()));
         let exif = UpsertAssetExif {
             asset_id: asset.id,
-            make: tag_string(&media_tags, "Make").or_else(|| tag_string(&media_tags, "AndroidMake")),
-            model: tag_string(&media_tags, "Model").or_else(|| tag_string(&media_tags, "AndroidModel")),
+            make: camera_make(&media_tags),
+            model: camera_model(&media_tags),
             exif_image_width: width,
             exif_image_height: height,
             file_size_in_byte: Some(file_size),
             orientation,
-            date_time_original: parse_exif_datetime(&media_tags, "DateTimeOriginal")
-                .or_else(|| parse_exif_datetime(&media_tags, "CreateDate")),
+            date_time_original,
             modify_date,
-            lens_model: tag_string(&media_tags, "LensModel"),
+            lens_model: lens_model(&media_tags),
             f_number: tag_f64(&media_tags, "FNumber"),
             focal_length: tag_f64(&media_tags, "FocalLength"),
             iso: tag_i32(&media_tags, "ISO"),
@@ -126,14 +170,15 @@ impl MetadataExtractService {
             exposure_time: tag_string(&media_tags, "ExposureTime"),
             live_photo_cid: tag_string(&media_tags, "ContentIdentifier")
                 .or_else(|| tag_string(&media_tags, "MediaGroupUUID")),
-            time_zone: tag_string(&media_tags, "OffsetTime")
-                .or_else(|| tag_string(&media_tags, "TimeZone")),
-            projection_type: tag_string(&media_tags, "ProjectionType").map(|v| v.to_ascii_uppercase()),
+            time_zone,
+            projection_type: tag_string(&media_tags, "ProjectionType")
+                .map(|v| v.to_ascii_uppercase()),
             profile_description: tag_string(&media_tags, "ProfileDescription"),
             colorspace: tag_string(&media_tags, "ColorSpace"),
-            bits_per_sample: tag_i32(&media_tags, "BitsPerSample"),
+            bits_per_sample: bits_per_sample(&media_tags),
             auto_stack_id: tag_string(&media_tags, "BurstID")
                 .or_else(|| tag_string(&media_tags, "BurstUUID"))
+                .or_else(|| tag_string(&media_tags, "CameraBurstID"))
                 .or_else(|| tag_string(&media_tags, "MediaUniqueID")),
             rating: tag_i32(&media_tags, "Rating").filter(|v| (1..=5).contains(v)),
             tags: if tags.is_empty() { None } else { Some(tags) },
@@ -151,6 +196,9 @@ impl MetadataExtractService {
                 color_primaries: video.color_primaries,
                 color_transfer: video.color_transfer,
                 color_matrix: video.color_matrix,
+                dv_profile: video.dv_profile,
+                dv_level: video.dv_level,
+                dv_bl_signal_compatibility_id: video.dv_bl_signal_compatibility_id,
                 codec_name: video.codec_name.clone(),
                 format_name: probe.format.format_name.clone(),
                 format_long_name: probe.format.format_long_name.clone(),
@@ -158,15 +206,33 @@ impl MetadataExtractService {
             })
         });
 
-        let audio = probe.as_ref().and_then(|p| p.audio.as_ref()).map(|audio| {
-            UpsertAssetAudio {
+        let audio = probe
+            .as_ref()
+            .and_then(|p| p.audio.as_ref())
+            .map(|audio| UpsertAssetAudio {
                 asset_id: asset.id,
                 bitrate: audio.bitrate.clamp(0, i64::from(i32::MAX)) as i32,
                 index: audio.index as i16,
                 profile: audio.profile.map(|v| v as i16),
                 codec_name: audio.codec_name.clone(),
-            }
-        });
+            });
+
+        let keyframe = if let Some(video) = probe.as_ref().and_then(|probe| probe.video.as_ref()) {
+            ffprobe::probe_packets(&asset.original_path, video.index)
+                .await?
+                .filter(|packets| !packets.keyframe_pts.is_empty())
+                .map(|packets| UpsertAssetKeyframe {
+                    asset_id: asset.id,
+                    pts: packets.keyframe_pts,
+                    acc_duration: packets.keyframe_acc_duration,
+                    own_duration: packets.keyframe_own_duration,
+                    total_duration: packets.total_duration,
+                    packet_count: packets.packet_count,
+                    output_frames: packets.output_frames,
+                })
+        } else {
+            None
+        };
 
         let duration_ms = probe
             .as_ref()
@@ -174,10 +240,7 @@ impl MetadataExtractService {
             .map(|seconds| (seconds * 1000.0).round() as i64)
             .or_else(|| tag_f64(&media_tags, "Duration").map(|s| (s * 1000.0).round() as i64));
 
-        let local_date_time = exif
-            .date_time_original
-            .or(asset.file_created_at)
-            .or(asset.file_modified_at);
+        let local_date_time = exif_date.as_ref().map(|date| date.local).or(fallback_date);
 
         let update_dims = (!asset.is_edited || asset.width.is_none() || asset.height.is_none())
             .then_some((asset_width, asset_height));
@@ -187,11 +250,12 @@ impl MetadataExtractService {
             &exif,
             video.as_ref(),
             audio.as_ref(),
+            keyframe.as_ref(),
             &UpdateAssetAfterMetadata {
                 asset_id: asset.id,
                 duration: duration_ms,
                 local_date_time,
-                file_created_at: exif.date_time_original.or(asset.file_created_at),
+                file_created_at: exif.date_time_original.or(fallback_date),
                 file_modified_at: modify_date.or(asset.file_modified_at),
                 width: update_dims.and_then(|(w, _)| w),
                 height: update_dims.and_then(|(_, h)| h),
@@ -299,10 +363,7 @@ impl MetadataExtractService {
                 .map_err(|err| err.to_string())?;
         } else if matches!(job.source.as_deref(), Some("upload") | Some("copy")) {
             self.jobs
-                .queue_asset_generate_thumbnails_with_notify(
-                    &job.id,
-                    job.notify.unwrap_or(false),
-                )
+                .queue_asset_generate_thumbnails_with_notify(&job.id, job.notify.unwrap_or(false))
                 .await
                 .map_err(|err| err.to_string())?;
         }
@@ -312,15 +373,45 @@ impl MetadataExtractService {
 }
 
 fn merge_sidecar_tags(media: &mut Value, sidecar: &Value) {
+    if EXIF_DATE_TAGS
+        .iter()
+        .any(|tag| tag_string(sidecar, tag).is_some())
+    {
+        for tag in EXIF_DATE_TAGS {
+            remove_tag(media, tag);
+        }
+        remove_tag(media, "OffsetTime");
+        remove_tag(media, "TimeZone");
+    }
+
     if let Some(obj) = sidecar.as_object() {
         for (key, value) in obj {
-            if key == "SourceFile" || key == "ExifToolVersion" {
+            if key == "SourceFile" || key == "ExifToolVersion" || key == "Duration" {
                 continue;
             }
             if let Some(map) = media.as_object_mut() {
                 map.insert(key.clone(), value.clone());
             }
         }
+    }
+}
+
+fn apply_heif_orientation(media: &mut Value, path: &str) {
+    if !is_heif_image_path(path) {
+        return;
+    }
+
+    let orientation = tag_i32(media, "Rotation").and_then(|rotation| match rotation {
+        0 => Some(1),
+        1 => Some(8),
+        2 => Some(3),
+        3 => Some(6),
+        _ => None,
+    });
+
+    match orientation {
+        Some(orientation) => set_tag(media, "Orientation", Value::from(orientation)),
+        None => remove_tag(media, "Orientation"),
     }
 }
 
@@ -332,7 +423,11 @@ fn merge_probe_tags(media: &mut Value, probe: &ProbeResult) {
         if video.height > 0 {
             set_tag(media, "ImageHeight", Value::from(video.height));
         }
-        set_tag(media, "Orientation", orientation_from_rotation(video.rotation));
+        set_tag(
+            media,
+            "Orientation",
+            orientation_from_rotation(video.rotation),
+        );
     }
     if let Some(duration) = probe.format.duration {
         set_tag(media, "Duration", Value::from(duration));
@@ -342,6 +437,12 @@ fn merge_probe_tags(media: &mut Value, probe: &ProbeResult) {
 fn set_tag(media: &mut Value, key: &str, value: Value) {
     if let Some(map) = media.as_object_mut() {
         map.insert(key.into(), value);
+    }
+}
+
+fn remove_tag(media: &mut Value, key: &str) {
+    if let Some(map) = media.as_object_mut() {
+        map.remove(key);
     }
 }
 
@@ -356,6 +457,17 @@ fn orientation_from_rotation(rotation: i32) -> Value {
 }
 
 fn image_dimensions(tags: &Value) -> (Option<i32>, Option<i32>) {
+    if let Some(size) = tag_string(tags, "ImageSize") {
+        let mut dimensions = size.split('x').map(str::trim);
+        if let (Some(Ok(width)), Some(Ok(height))) = (
+            dimensions.next().map(str::parse::<i32>),
+            dimensions.next().map(str::parse::<i32>),
+        ) {
+            if width > 0 && height > 0 {
+                return (Some(width), Some(height));
+            }
+        }
+    }
     (
         tag_i32(tags, "ImageWidth").or_else(|| tag_i32(tags, "ExifImageWidth")),
         tag_i32(tags, "ImageHeight").or_else(|| tag_i32(tags, "ExifImageHeight")),
@@ -372,32 +484,372 @@ fn gps_coordinates(tags: &Value) -> (Option<f64>, Option<f64>) {
     }
 }
 
+fn camera_make(tags: &Value) -> Option<String> {
+    tag_string(tags, "Make")
+        .or_else(|| tag_nested_string(tags, "Device", "Manufacturer"))
+        .or_else(|| tag_string(tags, "AndroidMake"))
+        .or_else(|| tag_string(tags, "DeviceManufacturer"))
+}
+
+fn camera_model(tags: &Value) -> Option<String> {
+    tag_string(tags, "Model")
+        .or_else(|| tag_nested_string(tags, "Device", "ModelName"))
+        .or_else(|| tag_string(tags, "AndroidModel"))
+        .or_else(|| tag_string(tags, "DeviceModelName"))
+}
+
+fn lens_model(tags: &Value) -> Option<String> {
+    let lens_model = [
+        tag_string(tags, "LensID"),
+        tag_string(tags, "LensType"),
+        tag_string(tags, "LensSpec"),
+        tag_string(tags, "LensModel"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.is_empty())
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+
+    if lens_model.is_empty() || lens_model == "----" || lens_model.starts_with("Unknown") {
+        None
+    } else {
+        Some(lens_model)
+    }
+}
+
+fn bits_per_sample(tags: &Value) -> Option<i32> {
+    let candidates = [
+        tag_i32(tags, "BitsPerSample"),
+        tag_i32(tags, "ComponentBitDepth"),
+        parse_bit_depth_tag(tags, "ImagePixelDepth"),
+        tag_i32(tags, "BitDepth"),
+        tag_i32(tags, "ColorBitDepth"),
+    ];
+
+    let mut bits_per_sample = candidates.into_iter().flatten().next()?;
+    if bits_per_sample >= 24 && bits_per_sample % 3 == 0 {
+        bits_per_sample /= 3;
+    }
+    Some(bits_per_sample)
+}
+
+fn parse_bit_depth_tag(tags: &Value, name: &str) -> Option<i32> {
+    tag_string(tags, name)
+        .and_then(|value| value.split_whitespace().next()?.parse().ok())
+        .or_else(|| tag_i32(tags, name))
+}
+
+fn tag_nested_string(tags: &Value, object: &str, field: &str) -> Option<String> {
+    tags.get(object)
+        .and_then(|value| value.get(field))
+        .and_then(|value| match value {
+            Value::String(text) if !text.is_empty() => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+}
+
 fn collect_tags(tags: &Value) -> Vec<String> {
     let mut result = tag_string_list(tags, "TagsList");
     if result.is_empty() {
-        result = tag_string_list(tags, "Keywords");
+        result = tag_string_list(tags, "HierarchicalSubject");
+        result = result
+            .into_iter()
+            .map(|tag| {
+                tag.split('|')
+                    .map(|part| part.replace('/', "|"))
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
     }
     if result.is_empty() {
-        result = tag_string_list(tags, "HierarchicalSubject");
+        result = tag_string_list(tags, "Keywords");
     }
     result
 }
 
-fn parse_exif_datetime(tags: &Value, name: &str) -> Option<DateTime<Utc>> {
-    let raw = tag_string(tags, name)?;
-    for format in [
-        "%Y:%m:%d %H:%M:%S%z",
-        "%Y:%m:%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S%.fZ",
-        "%Y-%m-%dT%H:%M:%S%.f%z",
-    ] {
-        if let Ok(dt) = NaiveDateTime::parse_from_str(&raw, format) {
-            return Some(Utc.from_utc_datetime(&dt));
+#[derive(Debug, Clone)]
+struct ExifDate {
+    /// The absolute capture instant.
+    instant: DateTime<Utc>,
+    /// The capture's wall-clock date/time, represented in UTC for the
+    /// timezone-agnostic `asset.localDateTime` database column.
+    local: DateTime<Utc>,
+    time_zone: Option<String>,
+}
+
+fn resolve_time_zone(
+    tags: &Value,
+    raw_date: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> Option<String> {
+    tag_string(tags, "TimeZone")
+        .or_else(|| tag_string(tags, "OffsetTime"))
+        .or_else(|| {
+            raw_date.and_then(|raw| {
+                if raw.ends_with('Z') || raw.ends_with("+00:00") {
+                    Some("UTC+0".to_string())
+                } else {
+                    None
+                }
+            })
+        })
+        .or_else(|| {
+            latitude
+                .zip(longitude)
+                .and_then(|(lat, lon)| crate::utils::geo_tz::find_timezone(lon, lat))
+        })
+}
+
+#[cfg(test)]
+fn extract_exif_date(tags: &Value, resolved_time_zone: Option<&str>) -> Option<ExifDate> {
+    let raw = EXIF_DATE_TAGS
+        .iter()
+        .find_map(|tag| tag_string(tags, tag))?;
+    parse_exif_date(&raw, resolved_time_zone)
+}
+
+fn parse_exif_date(raw: &str, resolved_time_zone: Option<&str>) -> Option<ExifDate> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(raw) {
+        return Some(ExifDate {
+            instant: datetime.with_timezone(&Utc),
+            local: Utc.from_utc_datetime(&datetime.naive_local()),
+            time_zone: Some(offset_label(datetime.offset())),
+        });
+    }
+
+    for format in ["%Y:%m:%d %H:%M:%S%.f%:z", "%Y:%m:%d %H:%M:%S%.f%z"] {
+        if let Ok(datetime) = DateTime::parse_from_str(raw, format) {
+            return Some(ExifDate {
+                instant: datetime.with_timezone(&Utc),
+                local: Utc.from_utc_datetime(&datetime.naive_local()),
+                time_zone: Some(offset_label(datetime.offset())),
+            });
         }
     }
-    DateTime::parse_from_rfc3339(&raw)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+
+    let local = parse_exif_local_datetime(raw)?;
+    if let Some(time_zone) = resolved_time_zone {
+        if let Ok(tz) = time_zone.parse::<Tz>() {
+            let zoned = tz.from_local_datetime(&local).single()?;
+            return Some(ExifDate {
+                instant: zoned.with_timezone(&Utc),
+                local: Utc.from_utc_datetime(&local),
+                time_zone: Some(time_zone.to_string()),
+            });
+        }
+
+        if let Some(offset) = parse_offset(time_zone) {
+            let zoned = offset.from_local_datetime(&local).single()?;
+            return Some(ExifDate {
+                instant: zoned.with_timezone(&Utc),
+                local: Utc.from_utc_datetime(&local),
+                time_zone: Some(offset_label(&offset)),
+            });
+        }
+    }
+
+    Some(ExifDate {
+        instant: Utc.from_utc_datetime(&local),
+        local: Utc.from_utc_datetime(&local),
+        time_zone: resolved_time_zone.map(str::to_string),
+    })
+}
+
+fn parse_exif_local_datetime(raw: &str) -> Option<NaiveDateTime> {
+    [
+        "%Y:%m:%d %H:%M:%S%.f",
+        "%Y:%m:%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+    ]
+    .iter()
+    .find_map(|format| NaiveDateTime::parse_from_str(raw, format).ok())
+}
+
+fn parse_offset(value: &str) -> Option<FixedOffset> {
+    value.parse().ok().or_else(|| {
+        value
+            .strip_prefix("UTC")
+            .and_then(|offset| offset.parse().ok())
+    })
+}
+
+fn offset_label(offset: &FixedOffset) -> String {
+    let offset = offset.to_string();
+    if offset == "+00:00" {
+        "UTC+0".to_string()
+    } else {
+        offset
+    }
+}
+
+fn earliest_file_date<const N: usize>(dates: [Option<DateTime<Utc>>; N]) -> Option<DateTime<Utc>> {
+    dates.into_iter().flatten().min()
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Datelike, TimeZone, Timelike, Utc};
+    use serde_json::json;
+
+    use super::{
+        apply_heif_orientation, bits_per_sample, camera_make, camera_model, earliest_file_date,
+        extract_exif_date, image_dimensions, lens_model, merge_sidecar_tags, parse_exif_date,
+        resolve_time_zone,
+    };
+
+    #[test]
+    fn preserves_exif_offset_and_local_wall_clock_time() {
+        let date = extract_exif_date(
+            &json!({
+                "DateTimeOriginal": "2024:03:04 12:30:15+02:00"
+            }),
+            None,
+        )
+        .expect("EXIF date should parse");
+
+        assert_eq!(date.instant.hour(), 10);
+        assert_eq!(date.instant.minute(), 30);
+        assert_eq!(date.local.hour(), 12);
+        assert_eq!(date.local.minute(), 30);
+        assert_eq!(date.time_zone.as_deref(), Some("+02:00"));
+    }
+
+    #[test]
+    fn applies_separate_offset_time_to_timezone_less_exif_date() {
+        let tags = json!({
+            "DateTimeOriginal": "2024:03:04 12:30:15",
+            "OffsetTime": "-05:00"
+        });
+        let time_zone = resolve_time_zone(&tags, Some("2024:03:04 12:30:15"), None, None);
+        let date = extract_exif_date(&tags, time_zone.as_deref()).expect("EXIF date should parse");
+
+        assert_eq!(date.instant.hour(), 17);
+        assert_eq!(date.local.hour(), 12);
+        assert_eq!(date.time_zone.as_deref(), Some("-05:00"));
+    }
+
+    #[test]
+    fn uses_subsecond_date_time_original_before_fallback_tags() {
+        let tags = json!({
+            "SubSecDateTimeOriginal": "2024:03:04 12:30:15.987+00:00",
+            "CreateDate": "2020:01:01 00:00:00"
+        });
+        let time_zone = resolve_time_zone(&tags, Some("2024:03:04 12:30:15.987+00:00"), None, None);
+        let date = extract_exif_date(&tags, time_zone.as_deref()).expect("EXIF date should parse");
+
+        assert_eq!(date.local.year(), 2024);
+        assert_eq!(date.local.timestamp_subsec_millis(), 987);
+        assert_eq!(date.time_zone.as_deref(), Some("UTC+0"));
+    }
+
+    #[test]
+    fn sidecar_date_replaces_media_date_without_importing_sidecar_duration() {
+        let mut media = json!({
+            "DateTimeOriginal": "2020:01:01 00:00:00",
+            "OffsetTime": "+00:00",
+            "Duration": 1.0
+        });
+        let sidecar = json!({
+            "DateTimeOriginal": "2024:03:04 12:30:15+02:00",
+            "Duration": 999.0,
+            "Description": "from sidecar"
+        });
+
+        merge_sidecar_tags(&mut media, &sidecar);
+
+        let date = extract_exif_date(&media, None).expect("sidecar date should remain");
+        assert_eq!(date.local.year(), 2024);
+        assert!(media.get("Duration").is_some());
+        assert_eq!(media["Description"], "from sidecar");
+    }
+
+    #[test]
+    fn uses_image_size_and_heif_rotation_for_metadata() {
+        let mut tags = json!({
+            "ImageSize": "6000x4000",
+            "ImageWidth": 100,
+            "ImageHeight": 100,
+            "Rotation": 3,
+            "Orientation": 1
+        });
+
+        apply_heif_orientation(&mut tags, "photo.heic");
+        assert_eq!(image_dimensions(&tags), (Some(6000), Some(4000)));
+        assert_eq!(tags["Orientation"], 6);
+    }
+
+    #[test]
+    fn falls_back_to_the_earliest_available_file_timestamp() {
+        let upload_time = Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap();
+        let birth_time = Utc.with_ymd_and_hms(2021, 1, 1, 12, 0, 0).unwrap();
+        let modify_time = Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap();
+
+        assert_eq!(
+            earliest_file_date([Some(upload_time), Some(birth_time), Some(modify_time), None]),
+            Some(modify_time)
+        );
+    }
+
+    #[test]
+    fn reads_camera_make_model_and_lens_metadata() {
+        let tags = json!({
+            "Device": { "Manufacturer": "icc-make", "ModelName": "icc-model" },
+            "LensID": "24-70mm",
+            "BitsPerSample": 24
+        });
+
+        assert_eq!(camera_make(&tags).as_deref(), Some("icc-make"));
+        assert_eq!(camera_model(&tags).as_deref(), Some("icc-model"));
+        assert_eq!(lens_model(&tags).as_deref(), Some("24-70mm"));
+        assert_eq!(bits_per_sample(&tags), Some(8));
+    }
+
+    #[test]
+    fn ignores_unknown_lens_identifiers() {
+        assert!(lens_model(&json!({ "LensID": "----" })).is_none());
+        assert!(lens_model(&json!({ "LensID": "Unknown (0 ff ff)" })).is_none());
+    }
+
+    #[test]
+    fn infers_timezone_from_gps_coordinates_for_naive_exif_date() {
+        let tags = json!({
+            "GPSDateTime": "2023:11:15 04:30:00",
+            "GPSLatitude": 34.0522,
+            "GPSLongitude": -118.2437
+        });
+        let time_zone = resolve_time_zone(
+            &tags,
+            Some("2023:11:15 04:30:00"),
+            Some(34.0522),
+            Some(-118.2437),
+        );
+        let date = parse_exif_date("2023:11:15 04:30:00", time_zone.as_deref())
+            .expect("GPS date should parse");
+
+        assert_eq!(time_zone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(date.instant.hour(), 12);
+        assert_eq!(date.instant.minute(), 30);
+        assert_eq!(date.local.hour(), 4);
+        assert_eq!(date.local.minute(), 30);
+        assert_eq!(date.time_zone.as_deref(), Some("America/Los_Angeles"));
+    }
+
+    #[test]
+    fn treats_explicit_utc_zero_suffix_as_utc_plus_zero() {
+        let time_zone = resolve_time_zone(
+            &json!({}),
+            Some("2024-09-01T00:00:00.000+00:00"),
+            None,
+            None,
+        );
+        assert_eq!(time_zone.as_deref(), Some("UTC+0"));
+    }
 }
 
 fn system_time_to_utc(time: std::time::SystemTime) -> Option<DateTime<Utc>> {

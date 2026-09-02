@@ -607,7 +607,10 @@ pub async fn filter_asset_share_ids(
     .await
 }
 
-pub async fn get_stack(pool: &Pool<Postgres>, stack_id: &Uuid) -> Result<Option<AssetStackRow>, sqlx::Error> {
+pub async fn get_stack(
+    pool: &Pool<Postgres>,
+    stack_id: &Uuid,
+) -> Result<Option<AssetStackRow>, sqlx::Error> {
     sqlx::query_as::<_, AssetStackRow>(
         r#"
             SELECT
@@ -768,7 +771,10 @@ pub async fn get_statistics(
         query.push_bind(is_favorite);
     }
 
-    query.build_query_as::<AssetStatsRow>().fetch_one(pool).await
+    query
+        .build_query_as::<AssetStatsRow>()
+        .fetch_one(pool)
+        .await
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -892,6 +898,7 @@ pub async fn update_all_asset_fields(
 pub struct ExifUpdateFields {
     pub description: Option<String>,
     pub date_time_original: Option<DateTime<Utc>>,
+    pub time_zone: Option<String>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub rating: Option<Option<i32>>,
@@ -901,6 +908,7 @@ impl ExifUpdateFields {
     pub fn has_updates(&self) -> bool {
         self.description.is_some()
             || self.date_time_original.is_some()
+            || self.time_zone.is_some()
             || self.latitude.is_some()
             || self.longitude.is_some()
             || self.rating.is_some()
@@ -1014,6 +1022,10 @@ pub async fn update_exif_fields(
         separated.push(r#""dateTimeOriginal" = "#);
         separated.push_bind(date_time_original);
     }
+    if let Some(time_zone) = &fields.time_zone {
+        separated.push(r#""timeZone" = "#);
+        separated.push_bind(time_zone.clone());
+    }
     if let Some(latitude) = fields.latitude {
         separated.push("latitude = ");
         separated.push_bind(latitude);
@@ -1052,6 +1064,10 @@ pub async fn update_all_exif_fields(
     if let Some(date_time_original) = fields.date_time_original {
         separated.push(r#""dateTimeOriginal" = "#);
         separated.push_bind(date_time_original);
+    }
+    if let Some(time_zone) = &fields.time_zone {
+        separated.push(r#""timeZone" = "#);
+        separated.push_bind(time_zone.clone());
     }
     if let Some(latitude) = fields.latitude {
         separated.push("latitude = ");

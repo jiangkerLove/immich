@@ -204,25 +204,33 @@ impl BackgroundTaskProcessor {
     }
 
     async fn handle_hls_session_cleanup(&self) -> Result<(), String> {
-        let sessions = maintenance::list_expired_hls_sessions(&self.pool)
-            .await
-            .map_err(|err| err.to_string())?;
+        use crate::models::db::advisory_lock::{self, LOCK_HLS_SESSION_CLEANUP};
 
-        for session in sessions {
-            let dir = self
-                .storage
-                .hls_session_folder(&session.owner_id, &session.id);
-            if let Err(err) = tokio::fs::remove_dir_all(&dir).await {
-                if err.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("failed to remove HLS session dir {}: {err}", dir.display());
-                }
-            }
-            maintenance::delete_hls_session(&self.pool, &session.id)
+        let result = advisory_lock::run_with_lock(&self.pool, LOCK_HLS_SESSION_CLEANUP, || async {
+            let sessions = maintenance::list_expired_hls_sessions(&self.pool)
                 .await
                 .map_err(|err| err.to_string())?;
-        }
 
-        Ok(())
+            for session in sessions {
+                let dir = self
+                    .storage
+                    .hls_session_folder(&session.owner_id, &session.id);
+                if let Err(err) = tokio::fs::remove_dir_all(&dir).await {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        eprintln!("failed to remove HLS session dir {}: {err}", dir.display());
+                    }
+                }
+                maintenance::delete_hls_session(&self.pool, &session.id)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            }
+
+            Ok(())
+        })
+        .await
+        .map_err(|err| err.to_string())?;
+
+        result
     }
 
     async fn handle_asset_delete_check(&self) -> Result<(), String> {

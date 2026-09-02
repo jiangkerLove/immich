@@ -28,7 +28,12 @@ pub async fn run_post_processing(
     modify_date: Option<DateTime<Utc>>,
     local_date_time: Option<DateTime<Utc>>,
 ) -> Result<(), String> {
-    if let Some(tags) = exif.tags.as_ref().filter(|tags| !tags.is_empty()) {
+    if !asset
+        .locked_properties
+        .iter()
+        .any(|property| property == "tags")
+        && let Some(tags) = exif.tags.as_ref().filter(|tags| !tags.is_empty())
+    {
         metadata_job::sync_asset_tags_from_exif(pool, &asset.owner_id, &asset.id, tags)
             .await
             .map_err(|err| err.to_string())?;
@@ -231,14 +236,10 @@ async fn apply_motion_photos(
     }
 
     let checksum = sha1_bytes(&video);
-    let motion_asset_id = assets::get_by_checksum(
-        pool,
-        &asset.owner_id,
-        asset.library_id.as_ref(),
-        &checksum,
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    let motion_asset_id =
+        assets::get_by_checksum(pool, &asset.owner_id, asset.library_id.as_ref(), &checksum)
+            .await
+            .map_err(|err| err.to_string())?;
 
     let (motion_asset_id, is_new_motion_asset) = if let Some(existing_id) = motion_asset_id {
         (existing_id, false)
@@ -336,17 +337,16 @@ async fn apply_motion_photos(
         .map_err(|err| err.to_string())?;
 
         if let Some(old_motion_id) = asset.live_photo_video_id {
-            jobs
-                .queue_json_job(
-                    QUEUE_BACKGROUND,
-                    "AssetDelete",
-                    serde_json::json!({
-                        "id": old_motion_id,
-                        "deleteOnDisk": true,
-                    }),
-                )
-                .await
-                .map_err(|err| err.to_string())?;
+            jobs.queue_json_job(
+                QUEUE_BACKGROUND,
+                "AssetDelete",
+                serde_json::json!({
+                    "id": old_motion_id,
+                    "deleteOnDisk": true,
+                }),
+            )
+            .await
+            .map_err(|err| err.to_string())?;
         }
     }
 
@@ -364,12 +364,10 @@ async fn apply_motion_photos(
             .await
             .map_err(|err| err.to_string())?;
 
-        jobs
-            .queue_asset_extract_metadata(&motion_asset_id)
+        jobs.queue_asset_extract_metadata(&motion_asset_id)
             .await
             .map_err(|err| err.to_string())?;
-        jobs
-            .queue_asset_encode_video(&motion_asset_id)
+        jobs.queue_asset_encode_video(&motion_asset_id)
             .await
             .map_err(|err| err.to_string())?;
     }
@@ -463,8 +461,7 @@ async fn apply_tagged_faces(
     }
 
     for person_id in new_person_ids.iter().map(|(id, _)| id) {
-        jobs
-            .queue_person_generate_thumbnail(person_id)
+        jobs.queue_person_generate_thumbnail(person_id)
             .await
             .map_err(|err| err.to_string())?;
     }
@@ -529,7 +526,10 @@ fn orient_region_info(region_info: &Value, orientation: Option<i32>) -> Option<(
     Some((width, height))
 }
 
-fn orient_region_list(region_info: &Value, orientation: Option<i32>) -> Option<Vec<(Option<String>, RegionArea)>> {
+fn orient_region_list(
+    region_info: &Value,
+    orientation: Option<i32>,
+) -> Option<Vec<(Option<String>, RegionArea)>> {
     let regions = region_list(region_info)?;
     let orientation = orientation.unwrap_or(1);
     let is_sideways = matches!(orientation, 5 | 6 | 7 | 8);
@@ -552,22 +552,23 @@ fn orient_region_list(region_info: &Value, orientation: Option<i32>) -> Option<V
                     4 => y = 1.0 - y,
                     5 => {
                         let old_x = x;
-                        x = 1.0 - y;
+                        x = y;
                         y = old_x;
                     }
                     6 => {
                         let old_x = x;
-                        x = y;
-                        y = 1.0 - old_x;
+                        x = 1.0 - y;
+                        y = old_x;
                     }
                     7 => {
-                        x = y;
-                        y = 1.0 - x;
+                        let old_x = x;
+                        x = 1.0 - y;
+                        y = 1.0 - old_x;
                     }
                     8 => {
                         let old_x = x;
-                        x = 1.0 - y;
-                        y = old_x;
+                        x = y;
+                        y = 1.0 - old_x;
                     }
                     _ => {}
                 }
@@ -586,4 +587,33 @@ struct RegionArea {
     y: f64,
     w: f64,
     h: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::orient_region_list;
+
+    #[test]
+    fn orients_mirrored_sideways_exif_face_regions() {
+        let region_info = json!({
+            "AppliedToDimensions": { "W": 100, "H": 200 },
+            "RegionList": [{
+                "Name": "Ada",
+                "Area": { "X": 0.2, "Y": 0.3, "W": 0.1, "H": 0.2 }
+            }]
+        });
+
+        let expected = [(5, 0.3, 0.2), (6, 0.7, 0.2), (7, 0.7, 0.8), (8, 0.3, 0.8)];
+        for (orientation, x, y) in expected {
+            let regions =
+                orient_region_list(&region_info, Some(orientation)).expect("regions should parse");
+            let area = regions[0].1;
+            assert!((area.x - x).abs() < f64::EPSILON);
+            assert!((area.y - y).abs() < f64::EPSILON);
+            assert!((area.w - 0.2).abs() < f64::EPSILON);
+            assert!((area.h - 0.1).abs() < f64::EPSILON);
+        }
+    }
 }

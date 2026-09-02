@@ -70,6 +70,7 @@ pub mod plugin;
 pub mod workflow;
 pub mod admin;
 pub mod bootstrap;
+pub mod storage_bootstrap;
 pub mod plugin_runtime;
 pub mod plugin_host;
 pub mod plugin_import;

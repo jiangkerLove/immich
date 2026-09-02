@@ -510,6 +510,12 @@ impl UserDb {
         .await
     }
 
+    pub async fn count_active(pool: &Pool<Postgres>) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(r#"SELECT COUNT(*)::bigint FROM "user" WHERE "deletedAt" IS NULL"#)
+            .fetch_one(pool)
+            .await
+    }
+
     pub async fn admin_delete(
         pool: &Pool<Postgres>,
         id: &Uuid,

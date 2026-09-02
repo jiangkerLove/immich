@@ -1,7 +1,42 @@
-use std::process::Stdio;
+use std::process::{Output, Stdio};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::process::Command;
+use tokio::sync::{RwLock, Semaphore};
+
+const DEFAULT_CONCURRENCY: usize = 5;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+static EXECUTION_LIMIT: OnceLock<RwLock<Arc<Semaphore>>> = OnceLock::new();
+
+/// Limits concurrent ExifTool invocations across metadata and sidecar workers.
+///
+/// This is deliberately configured from `job.metadataExtraction.concurrency` so
+/// worker restarts cannot create an unbounded number of external processes.
+pub async fn configure_concurrency(max_processes: usize) {
+    let limit =
+        EXECUTION_LIMIT.get_or_init(|| RwLock::new(Arc::new(Semaphore::new(DEFAULT_CONCURRENCY))));
+    *limit.write().await = Arc::new(Semaphore::new(max_processes.max(1)));
+}
+
+async fn run(command: &mut Command) -> Result<Output, String> {
+    let limit = EXECUTION_LIMIT
+        .get_or_init(|| RwLock::new(Arc::new(Semaphore::new(DEFAULT_CONCURRENCY))))
+        .read()
+        .await
+        .clone();
+    let _permit = limit
+        .acquire_owned()
+        .await
+        .map_err(|_| "ExifTool execution limiter is closed".to_string())?;
+
+    tokio::time::timeout(REQUEST_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "ExifTool request timed out after 120 seconds".to_string())?
+        .map_err(|err| format!("failed to run exiftool: {err}"))
+}
 
 pub async fn read_tags(path: &str, extended_video: bool) -> Result<Value, String> {
     let mut command = Command::new("exiftool");
@@ -12,18 +47,15 @@ pub async fn read_tags(path: &str, extended_video: bool) -> Result<Value, String
         .arg("-struct")
         .arg("-n")
         .arg("-charset")
-        .arg("filename=utf8");
+        .arg("filename=utf8")
+        .arg("--ICC_Profile:DeviceManufacturer")
+        .arg("--ICC_Profile:DeviceModelName");
     if extended_video {
         command.arg("-ee");
     }
     command.arg(path);
 
-    let output = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|err| format!("failed to run exiftool: {err}"))?;
+    let output = run(command.stdout(Stdio::piped()).stderr(Stdio::piped())).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -91,19 +123,20 @@ pub fn tag_string_list(tags: &Value, name: &str) -> Vec<String> {
 }
 
 pub async fn extract_binary_tag(path: &str, tag_name: &str) -> Result<Vec<u8>, String> {
-    let output = Command::new("exiftool")
+    let mut command = Command::new("exiftool");
+    command
         .arg("-b")
         .arg(format!("-{tag_name}"))
         .arg(path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|err| format!("failed to run exiftool: {err}"))?;
+        .stderr(Stdio::piped());
+    let output = run(&mut command).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("exiftool binary extract failed for {tag_name}: {stderr}"));
+        return Err(format!(
+            "exiftool binary extract failed for {tag_name}: {stderr}"
+        ));
     }
 
     Ok(output.stdout)
@@ -144,12 +177,7 @@ pub async fn write_tags(path: &str, tags: &[(&str, TagWriteValue)]) -> Result<()
 
     command.arg(path);
 
-    let output = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|err| format!("failed to run exiftool: {err}"))?;
+    let output = run(command.stdout(Stdio::piped()).stderr(Stdio::piped())).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

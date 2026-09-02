@@ -18,6 +18,7 @@ pub struct MetadataExtractionAsset {
     pub file_created_at: Option<DateTime<Utc>>,
     pub file_modified_at: Option<DateTime<Utc>>,
     pub sidecar_path: Option<String>,
+    pub locked_properties: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,9 @@ pub struct UpsertAssetVideo {
     pub color_primaries: i16,
     pub color_transfer: i16,
     pub color_matrix: i16,
+    pub dv_profile: Option<i16>,
+    pub dv_level: Option<i16>,
+    pub dv_bl_signal_compatibility_id: Option<i16>,
     pub codec_name: String,
     pub format_name: String,
     pub format_long_name: String,
@@ -79,6 +83,17 @@ pub struct UpsertAssetAudio {
     pub index: i16,
     pub profile: Option<i16>,
     pub codec_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpsertAssetKeyframe {
+    pub asset_id: Uuid,
+    pub pts: Vec<i32>,
+    pub acc_duration: Vec<i32>,
+    pub own_duration: Vec<i32>,
+    pub total_duration: i32,
+    pub packet_count: i32,
+    pub output_frames: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +127,7 @@ pub async fn get_for_metadata_extraction(
             asset."isEdited" AS is_edited,
             asset."fileCreatedAt" AS file_created_at,
             asset."fileModifiedAt" AS file_modified_at,
+            COALESCE(asset_exif."lockedProperties", ARRAY[]::text[]) AS locked_properties,
             (
                 SELECT af.path
                 FROM asset_file af
@@ -121,6 +137,7 @@ pub async fn get_for_metadata_extraction(
                 LIMIT 1
             ) AS sidecar_path
         FROM asset
+        LEFT JOIN asset_exif ON asset_exif."assetId" = asset.id
         WHERE asset.id = $1
           AND asset."deletedAt" IS NULL
         "#,
@@ -144,6 +161,7 @@ pub async fn get_for_metadata_extraction(
         file_created_at: row.file_created_at,
         file_modified_at: row.file_modified_at,
         sidecar_path: row.sidecar_path,
+        locked_properties: row.locked_properties,
     }))
 }
 
@@ -186,6 +204,7 @@ pub async fn upsert_metadata(
     exif: &UpsertAssetExif,
     video: Option<&UpsertAssetVideo>,
     audio: Option<&UpsertAssetAudio>,
+    keyframe: Option<&UpsertAssetKeyframe>,
     asset_update: &UpdateAssetAfterMetadata,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
@@ -210,29 +229,51 @@ pub async fn upsert_metadata(
             "exifImageHeight" = EXCLUDED."exifImageHeight",
             "fileSizeInByte" = EXCLUDED."fileSizeInByte",
             orientation = EXCLUDED.orientation,
-            "dateTimeOriginal" = EXCLUDED."dateTimeOriginal",
+            "dateTimeOriginal" = CASE
+                WHEN 'dateTimeOriginal' = ANY(asset_exif."lockedProperties")
+                    THEN asset_exif."dateTimeOriginal"
+                ELSE EXCLUDED."dateTimeOriginal"
+            END,
             "modifyDate" = EXCLUDED."modifyDate",
             "lensModel" = EXCLUDED."lensModel",
             "fNumber" = EXCLUDED."fNumber",
             "focalLength" = EXCLUDED."focalLength",
             iso = EXCLUDED.iso,
-            latitude = EXCLUDED.latitude,
-            longitude = EXCLUDED.longitude,
+            latitude = CASE
+                WHEN 'latitude' = ANY(asset_exif."lockedProperties") THEN asset_exif.latitude
+                ELSE EXCLUDED.latitude
+            END,
+            longitude = CASE
+                WHEN 'longitude' = ANY(asset_exif."lockedProperties") THEN asset_exif.longitude
+                ELSE EXCLUDED.longitude
+            END,
             city = EXCLUDED.city,
             state = EXCLUDED.state,
             country = EXCLUDED.country,
-            description = EXCLUDED.description,
+            description = CASE
+                WHEN 'description' = ANY(asset_exif."lockedProperties") THEN asset_exif.description
+                ELSE EXCLUDED.description
+            END,
             fps = EXCLUDED.fps,
             "exposureTime" = EXCLUDED."exposureTime",
             "livePhotoCID" = EXCLUDED."livePhotoCID",
-            "timeZone" = EXCLUDED."timeZone",
+            "timeZone" = CASE
+                WHEN 'timeZone' = ANY(asset_exif."lockedProperties") THEN asset_exif."timeZone"
+                ELSE EXCLUDED."timeZone"
+            END,
             "projectionType" = EXCLUDED."projectionType",
             "profileDescription" = EXCLUDED."profileDescription",
             colorspace = EXCLUDED.colorspace,
             "bitsPerSample" = EXCLUDED."bitsPerSample",
             "autoStackId" = EXCLUDED."autoStackId",
-            rating = EXCLUDED.rating,
-            tags = EXCLUDED.tags,
+            rating = CASE
+                WHEN 'rating' = ANY(asset_exif."lockedProperties") THEN asset_exif.rating
+                ELSE EXCLUDED.rating
+            END,
+            tags = CASE
+                WHEN 'tags' = ANY(asset_exif."lockedProperties") THEN asset_exif.tags
+                ELSE EXCLUDED.tags
+            END,
             "updatedAt" = NOW()
         "#,
     )
@@ -274,10 +315,11 @@ pub async fn upsert_metadata(
             r#"
             INSERT INTO asset_video (
                 "assetId", bitrate, "frameCount", "timeBase", index, profile, level,
-                "colorPrimaries", "colorTransfer", "colorMatrix", "codecName",
+                "colorPrimaries", "colorTransfer", "colorMatrix", "dvProfile", "dvLevel",
+                "dvBlSignalCompatibilityId", "codecName",
                 "formatName", "formatLongName", "pixelFormat"
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             ON CONFLICT ("assetId") DO UPDATE SET
                 bitrate = EXCLUDED.bitrate,
                 "frameCount" = EXCLUDED."frameCount",
@@ -288,6 +330,9 @@ pub async fn upsert_metadata(
                 "colorPrimaries" = EXCLUDED."colorPrimaries",
                 "colorTransfer" = EXCLUDED."colorTransfer",
                 "colorMatrix" = EXCLUDED."colorMatrix",
+                "dvProfile" = EXCLUDED."dvProfile",
+                "dvLevel" = EXCLUDED."dvLevel",
+                "dvBlSignalCompatibilityId" = EXCLUDED."dvBlSignalCompatibilityId",
                 "codecName" = EXCLUDED."codecName",
                 "formatName" = EXCLUDED."formatName",
                 "formatLongName" = EXCLUDED."formatLongName",
@@ -304,6 +349,9 @@ pub async fn upsert_metadata(
         .bind(video.color_primaries)
         .bind(video.color_transfer)
         .bind(video.color_matrix)
+        .bind(video.dv_profile)
+        .bind(video.dv_level)
+        .bind(video.dv_bl_signal_compatibility_id)
         .bind(&video.codec_name)
         .bind(&video.format_name)
         .bind(&video.format_long_name)
@@ -329,6 +377,34 @@ pub async fn upsert_metadata(
         .bind(audio.index)
         .bind(audio.profile)
         .bind(&audio.codec_name)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if let Some(keyframe) = keyframe {
+        sqlx::query(
+            r#"
+            INSERT INTO asset_keyframe (
+                "assetId", pts, "accDuration", "ownDuration", "totalDuration",
+                "packetCount", "outputFrames"
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT ("assetId") DO UPDATE SET
+                pts = EXCLUDED.pts,
+                "accDuration" = EXCLUDED."accDuration",
+                "ownDuration" = EXCLUDED."ownDuration",
+                "totalDuration" = EXCLUDED."totalDuration",
+                "packetCount" = EXCLUDED."packetCount",
+                "outputFrames" = EXCLUDED."outputFrames"
+            "#,
+        )
+        .bind(keyframe.asset_id)
+        .bind(&keyframe.pts)
+        .bind(&keyframe.acc_duration)
+        .bind(&keyframe.own_duration)
+        .bind(keyframe.total_duration)
+        .bind(keyframe.packet_count)
+        .bind(keyframe.output_frames)
         .execute(&mut *tx)
         .await?;
     }
@@ -435,29 +511,30 @@ pub async fn sync_asset_tags_from_exif(
 ) -> Result<(), sqlx::Error> {
     let mut tag_ids = Vec::new();
     for tag_name in tag_names {
-        let parts: Vec<&str> = tag_name.split('/').filter(|part| !part.is_empty()).collect();
+        let parts: Vec<&str> = tag_name
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         let mut parent_id: Option<Uuid> = None;
         let mut last_tag_id: Option<Uuid> = None;
         for part in parts {
             let value = if let Some(parent) = parent_id {
-                let parent_value: String = sqlx::query_scalar(
-                    r#"SELECT value FROM tag WHERE id = $1"#,
-                )
-                .bind(parent)
-                .fetch_one(pool)
-                .await?;
+                let parent_value: String =
+                    sqlx::query_scalar(r#"SELECT value FROM tag WHERE id = $1"#)
+                        .bind(parent)
+                        .fetch_one(pool)
+                        .await?;
                 format!("{parent_value}/{part}")
             } else {
                 part.to_string()
             };
 
-            let tag_id: Uuid = if let Some(existing) = sqlx::query_scalar(
-                r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#,
-            )
-            .bind(owner_id)
-            .bind(&value)
-            .fetch_optional(pool)
-            .await?
+            let tag_id: Uuid = if let Some(existing) =
+                sqlx::query_scalar(r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#)
+                    .bind(owner_id)
+                    .bind(&value)
+                    .fetch_optional(pool)
+                    .await?
             {
                 existing
             } else {
@@ -520,4 +597,5 @@ struct MetadataExtractionQueryRow {
     file_created_at: Option<DateTime<Utc>>,
     file_modified_at: Option<DateTime<Utc>>,
     sidecar_path: Option<String>,
+    locked_properties: Vec<String>,
 }

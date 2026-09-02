@@ -11,11 +11,12 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::asset::map_assets;
 use crate::models::response::response::ErrorResp;
 use crate::models::response::shared_link::{
-    map_shared_link, SharedLinkAlbumResponse, SharedLinkResponse,
+    encode_key, map_shared_link, SharedLinkAlbumResponse, SharedLinkResponse,
 };
 use crate::service::album::AlbumService;
 use crate::utils::crypto::{random_bytes, shared_link_login_token};
 use crate::utils::permission::require_permission;
+use crate::utils::system_config::{get_merged, json_str};
 
 #[derive(Clone)]
 pub struct SharedLinkService {
@@ -358,6 +359,114 @@ impl SharedLinkService {
             .collect())
     }
 
+    pub async fn get_metadata_tags(
+        &self,
+        auth: &AuthDto,
+        default_domain: Option<&str>,
+    ) -> Result<Option<OpenGraphTags>, ErrorResp> {
+        let shared_link = match auth.shared_link.as_ref() {
+            Some(link) if link.password.is_none() => link,
+            _ => return Ok(None),
+        };
+
+        let link_id = Uuid::parse_str(&shared_link.id)
+            .map_err(|_| ErrorResp::ServerError("Invalid shared link".to_string()))?;
+        let row = self.find_or_fail(&auth.user.id, &link_id).await?;
+
+        let config = get_merged(&self.pool).await?;
+        let external_domain = json_str(&config, &["server", "externalDomain"], "");
+        let base = if !external_domain.is_empty() {
+            external_domain
+        } else {
+            default_domain
+                .unwrap_or("https://my.immich.app")
+                .to_string()
+        };
+
+        let (album_name, album_thumbnail_id, album_asset_count) =
+            if let Some(album_id) = row.album_id {
+                let meta: Option<(String, Option<Uuid>, i64)> = sqlx::query_as(
+                    r#"
+                    SELECT
+                        a."albumName",
+                        a."albumThumbnailAssetId",
+                        (
+                            SELECT COUNT(*)::bigint
+                            FROM album_asset aa
+                            INNER JOIN asset asset ON asset.id = aa."assetId"
+                            WHERE aa."albumId" = a.id AND asset."deletedAt" IS NULL
+                        )
+                    FROM album a
+                    WHERE a.id = $1 AND a."deletedAt" IS NULL
+                    "#,
+                )
+                .bind(album_id)
+                .fetch_optional(&self.pool)
+                .await?;
+                match meta {
+                    Some((name, thumb, count)) => (Some(name), thumb, count),
+                    None => (None, None, 0),
+                }
+            } else {
+                (None, None, 0)
+            };
+
+        let link_asset_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM shared_link_asset sla
+            INNER JOIN asset a ON a.id = sla."assetId"
+            WHERE sla."sharedLinkId" = $1 AND a."deletedAt" IS NULL
+            "#,
+        )
+        .bind(row.id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let first_asset_id: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT a.id
+            FROM shared_link_asset sla
+            INNER JOIN asset a ON a.id = sla."assetId"
+            WHERE sla."sharedLinkId" = $1 AND a."deletedAt" IS NULL
+            ORDER BY a."fileCreatedAt" ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(row.id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let asset_count = if link_asset_count > 0 {
+            link_asset_count
+        } else {
+            album_asset_count
+        };
+
+        let asset_id = album_thumbnail_id.or(first_asset_id);
+        let key = encode_key(&row.key);
+        let image_path = match asset_id {
+            Some(id) => format!("/api/assets/{id}/thumbnail?key={key}"),
+            None => "/feature-panel.png".to_string(),
+        };
+
+        let image_url = match url::Url::parse(&base) {
+            Ok(base_url) => base_url
+                .join(&image_path)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| format!("{base}{image_path}")),
+            Err(_) => format!("{base}{image_path}"),
+        };
+
+        Ok(Some(OpenGraphTags {
+            title: album_name.unwrap_or_else(|| "Public Share".to_string()),
+            description: row.description.unwrap_or_else(|| {
+                format!("{asset_count} shared photos & videos")
+            }),
+            image_url: Some(image_url),
+        }))
+    }
+
     async fn find_or_fail(&self, user_id: &Uuid, id: &Uuid) -> Result<SharedLinkRow, ErrorResp> {
         shared_links::get_for_user(&self.pool, user_id, id)
             .await?
@@ -411,6 +520,13 @@ impl SharedLinkService {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenGraphTags {
+    pub title: String,
+    pub description: String,
+    pub image_url: Option<String>,
 }
 
 pub fn merge_shared_link_tokens(existing: &[String], token: &str) -> String {

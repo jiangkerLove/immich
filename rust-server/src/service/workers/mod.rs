@@ -10,10 +10,10 @@ use crate::utils::storage::StoragePaths;
 use crate::utils::system_config::{defaults, get_merged};
 use crate::utils::worker_concurrency::concurrency_for_queue;
 use crate::utils::workers::{
-    enabled_worker_queues, QUEUE_BACKGROUND, QUEUE_BACKUP, QUEUE_DUPLICATE, QUEUE_EDITOR,
-    QUEUE_FACE, QUEUE_FACIAL, QUEUE_INTEGRITY, QUEUE_LIBRARY, QUEUE_METADATA, QUEUE_MIGRATION,
-    QUEUE_NOTIFICATIONS, QUEUE_OCR, QUEUE_SIDECAR, QUEUE_SMART_SEARCH, QUEUE_STORAGE_TEMPLATE,
-    QUEUE_THUMBNAIL, QUEUE_VIDEO, QUEUE_WORKFLOW,
+    QUEUE_BACKGROUND, QUEUE_BACKUP, QUEUE_DUPLICATE, QUEUE_EDITOR, QUEUE_FACE, QUEUE_FACIAL,
+    QUEUE_INTEGRITY, QUEUE_LIBRARY, QUEUE_METADATA, QUEUE_MIGRATION, QUEUE_NOTIFICATIONS,
+    QUEUE_OCR, QUEUE_SIDECAR, QUEUE_SMART_SEARCH, QUEUE_STORAGE_TEMPLATE, QUEUE_THUMBNAIL,
+    QUEUE_VIDEO, QUEUE_WORKFLOW, enabled_worker_queues,
 };
 
 mod background_task;
@@ -23,22 +23,22 @@ mod editor;
 mod face_detection;
 mod facial_recognition;
 mod integrity;
+mod job_handler;
 mod library;
+mod metadata_extraction;
 mod migration;
 mod notifications;
 mod ocr;
-mod thumbnail_generation;
-mod metadata_extraction;
-mod storage_template_migration;
 mod sidecar;
 mod smart_search;
+mod storage_template_migration;
+mod thumbnail_generation;
 mod video_conversion;
 mod workflow;
-mod job_handler;
 
 pub use job_handler::{
-    begin_job, end_job, end_job_with_status, finish_failed, finish_ok, wrap_simple_job,
-    wrap_status_job, worker_error,
+    begin_job, end_job, end_job_with_status, finish_failed, finish_ok, worker_error,
+    wrap_simple_job, wrap_status_job,
 };
 
 static WORKER_CTX: OnceLock<WorkerContext> = OnceLock::new();
@@ -79,9 +79,7 @@ pub fn spawn_all(ctx: WorkerContext) {
     }
 
     tokio::spawn(async move {
-        let config = get_merged(&ctx.pool)
-            .await
-            .unwrap_or_else(|_| defaults());
+        let config = get_merged(&ctx.pool).await.unwrap_or_else(|_| defaults());
         spawn_workers(&ctx, &config).await;
     });
 }
@@ -97,6 +95,13 @@ pub async fn restart_all(config: &Value) {
 }
 
 async fn spawn_workers(ctx: &WorkerContext, config: &Value) {
+    crate::service::media::exiftool::configure_concurrency(concurrency_for_queue(
+        config,
+        QUEUE_METADATA,
+        5,
+    ))
+    .await;
+
     for queue in enabled_worker_queues(&ctx.env) {
         match queue {
             QUEUE_NOTIFICATIONS => notifications::spawn(

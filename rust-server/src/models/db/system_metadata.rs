@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Pool, Postgres};
@@ -379,4 +381,56 @@ pub async fn get_custom_css(pool: &Pool<Postgres>) -> Result<String, sqlx::Error
         .and_then(|value| serde_json::from_value::<SystemConfigRoot>(value).ok())
         .map(|cfg| cfg.theme.custom_css)
         .unwrap_or_default())
+}
+
+const SYSTEM_FLAGS_KEY: &str = "system-flags";
+const MEDIA_LOCATION_KEY: &str = "MediaLocation";
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemFlags {
+    #[serde(default)]
+    pub mount_checks: HashMap<String, bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaLocationMeta {
+    pub location: String,
+}
+
+pub async fn get_system_flags(pool: &Pool<Postgres>) -> Result<Option<SystemFlags>, sqlx::Error> {
+    let value = get_json(pool, SYSTEM_FLAGS_KEY).await?;
+    Ok(value.and_then(|json| serde_json::from_value::<SystemFlags>(json).ok()))
+}
+
+pub async fn set_system_flags(
+    pool: &Pool<Postgres>,
+    flags: &SystemFlags,
+) -> Result<(), sqlx::Error> {
+    set_json(
+        pool,
+        SYSTEM_FLAGS_KEY,
+        &serde_json::to_value(flags).unwrap_or_default(),
+    )
+    .await
+}
+
+pub async fn get_media_location(
+    pool: &Pool<Postgres>,
+) -> Result<Option<MediaLocationMeta>, sqlx::Error> {
+    let value = get_json(pool, MEDIA_LOCATION_KEY).await?;
+    Ok(value.and_then(|json| serde_json::from_value::<MediaLocationMeta>(json).ok()))
+}
+
+pub async fn set_media_location(
+    pool: &Pool<Postgres>,
+    meta: &MediaLocationMeta,
+) -> Result<(), sqlx::Error> {
+    set_json(
+        pool,
+        MEDIA_LOCATION_KEY,
+        &serde_json::to_value(meta).unwrap_or_default(),
+    )
+    .await
 }

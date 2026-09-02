@@ -6,6 +6,8 @@ use handlebars::Handlebars;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::models::db::advisory_lock::{self, LOCK_STORAGE_TEMPLATE_MIGRATION};
+use crate::models::db::album;
 use crate::models::db::assets;
 use crate::models::db::move_history;
 use crate::models::db::storage_template_job::{self, StorageTemplateAsset};
@@ -13,10 +15,11 @@ use crate::models::db::system_metadata::get_json;
 use crate::models::db::users::UserDb;
 use crate::service::job::{EntityJob, JobService};
 use crate::utils::storage::StoragePaths;
-use crate::utils::storage_move::{move_file, MoveFileOptions, MoveFileOutcome};
+use crate::utils::storage_move::{MoveFileOptions, MoveFileOutcome, move_file};
 
 const LUXON_TOKENS: &[&str] = &[
-    "s", "ss", "SSS", "m", "mm", "d", "dd", "W", "WW", "h", "hh", "H", "HH", "y", "yy", "M", "MM", "MMM", "MMMM",
+    "s", "ss", "SSS", "m", "mm", "d", "dd", "W", "WW", "h", "hh", "H", "HH", "y", "yy", "M", "MM",
+    "MMM", "MMMM",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,9 +73,10 @@ impl StorageTemplateService {
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
 
-        let Some(asset) = storage_template_job::get_for_storage_template_job(&self.pool, asset_id, false)
-            .await
-            .map_err(|err| err.to_string())?
+        let Some(asset) =
+            storage_template_job::get_for_storage_template_job(&self.pool, asset_id, false)
+                .await
+                .map_err(|err| err.to_string())?
         else {
             return Ok(StorageTemplateOutcome::Failed);
         };
@@ -106,7 +110,8 @@ impl StorageTemplateService {
             else {
                 return Ok(StorageTemplateOutcome::Failed);
             };
-            let motion_filename = live_photo_motion_filename(&filename, &motion_asset.original_path);
+            let motion_filename =
+                live_photo_motion_filename(&filename, &motion_asset.original_path);
             self.move_asset(
                 &motion_asset,
                 storage_label.as_deref(),
@@ -183,10 +188,11 @@ impl StorageTemplateService {
             .await?;
 
             if let Some(motion_id) = asset.live_photo_video_id {
-                let Some(motion_asset) =
-                    storage_template_job::get_for_storage_template_job(&self.pool, &motion_id, true)
-                        .await
-                        .map_err(|err| err.to_string())?
+                let Some(motion_asset) = storage_template_job::get_for_storage_template_job(
+                    &self.pool, &motion_id, true,
+                )
+                .await
+                .map_err(|err| err.to_string())?
                 else {
                     continue;
                 };
@@ -204,8 +210,7 @@ impl StorageTemplateService {
             }
         }
 
-        StoragePaths::remove_empty_dirs(&self.storage.library_base(), false)
-            .await?;
+        StoragePaths::remove_empty_dirs(&self.storage.library_base(), false).await?;
 
         Ok(StorageTemplateOutcome::Success)
     }
@@ -249,46 +254,53 @@ impl StorageTemplateService {
         };
 
         let old_path = asset.original_path.clone();
-        let new_path = self
-            .get_template_path(asset, storage_label, filename, still_photo, template)
-            .await?;
+        let result =
+            advisory_lock::run_with_lock(&self.pool, LOCK_STORAGE_TEMPLATE_MIGRATION, || async {
+                let new_path = self
+                    .get_template_path(asset, storage_label, filename, still_photo, template)
+                    .await?;
 
-        if old_path == new_path {
-            return Ok(());
-        }
-
-        self.move_original_file(asset, &old_path, &new_path, file_size, hash_verification)
-            .await?;
-
-        if let Some(sidecar_path) = assets::get_asset_file_path(&self.pool, &asset.id, "sidecar")
-            .await
-            .map_err(|err| err.to_string())?
-        {
-            let sidecar_new = format!("{new_path}.xmp");
-            if sidecar_path != sidecar_new {
-                let outcome = move_file(
-                    &self.pool,
-                    MoveFileOptions {
-                        entity_id: asset.id,
-                        path_type: "sidecar".to_string(),
-                        old_path: Some(sidecar_path.clone()),
-                        new_path: sidecar_new.clone(),
-                        expected_size: None,
-                        expected_checksum: None,
-                        hash_verification: false,
-                    },
-                )
-                .await?;
-
-                if outcome == MoveFileOutcome::Completed {
-                    assets::upsert_sidecar_file(&self.pool, &asset.id, &sidecar_new)
-                        .await
-                        .map_err(|err| err.to_string())?;
+                if old_path == new_path {
+                    return Ok(());
                 }
-            }
-        }
 
-        Ok(())
+                self.move_original_file(asset, &old_path, &new_path, file_size, hash_verification)
+                    .await?;
+
+                if let Some(sidecar_path) =
+                    assets::get_asset_file_path(&self.pool, &asset.id, "sidecar")
+                        .await
+                        .map_err(|err| err.to_string())?
+                {
+                    let sidecar_new = format!("{new_path}.xmp");
+                    if sidecar_path != sidecar_new {
+                        let outcome = move_file(
+                            &self.pool,
+                            MoveFileOptions {
+                                entity_id: asset.id,
+                                path_type: "sidecar".to_string(),
+                                old_path: Some(sidecar_path.clone()),
+                                new_path: sidecar_new.clone(),
+                                expected_size: None,
+                                expected_checksum: None,
+                                hash_verification: false,
+                            },
+                        )
+                        .await?;
+
+                        if outcome == MoveFileOutcome::Completed {
+                            assets::upsert_sidecar_file(&self.pool, &asset.id, &sidecar_new)
+                                .await
+                                .map_err(|err| err.to_string())?;
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|err| err.to_string())?;
+
+        result
     }
 
     async fn move_original_file(
@@ -353,14 +365,17 @@ impl StorageTemplateService {
             .unwrap_or(filename);
         let sanitized = sanitize_filename(filename_without_extension);
 
-        let root_path = self
-            .storage
-            .library_folder(&asset.owner_id, storage_label);
+        let root_path = self.storage.library_folder(&asset.owner_id, storage_label);
         let root_path_str = normalize_path_string(&root_path);
 
         let asset_for_metadata = still_photo.unwrap_or(asset);
-        let album_name = if template.contains("album") {
-            get_album_name(&self.pool, &asset_for_metadata.owner_id, &asset_for_metadata.id).await?
+        let album_metadata = if template.contains("album") {
+            get_album_metadata(
+                &self.pool,
+                &asset_for_metadata.owner_id,
+                &asset_for_metadata.id,
+            )
+            .await?
         } else {
             None
         };
@@ -370,9 +385,15 @@ impl StorageTemplateService {
             asset_for_metadata,
             &sanitized,
             &extension,
-            album_name.as_deref(),
-            None,
-            None,
+            album_metadata
+                .as_ref()
+                .map(|metadata| metadata.name.as_str()),
+            album_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.start_date),
+            album_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.end_date),
         )?;
 
         let full_path = join_library_path(&root_path, &rendered);
@@ -523,14 +544,20 @@ fn render_template(
     Ok(rendered.replace("//", "/"))
 }
 
-async fn get_album_name(
+struct AlbumMetadata {
+    name: String,
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
+}
+
+async fn get_album_metadata(
     pool: &PgPool,
     owner_id: &Uuid,
     asset_id: &Uuid,
-) -> Result<Option<String>, String> {
-    sqlx::query_scalar(
+) -> Result<Option<AlbumMetadata>, String> {
+    let album: Option<(Uuid, String)> = sqlx::query_as(
         r#"
-        SELECT album."albumName"
+        SELECT album.id, album."albumName"
         FROM album
         INNER JOIN album_asset ON album.id = album_asset."albumId"
         WHERE album_asset."assetId" = $1
@@ -542,7 +569,22 @@ async fn get_album_name(
     .bind(owner_id)
     .fetch_optional(pool)
     .await
-    .map_err(|err| err.to_string())
+    .map_err(|err| err.to_string())?;
+
+    let Some((id, name)) = album else {
+        return Ok(None);
+    };
+    let metadata = album::get_metadata_for_ids(pool, &[id])
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .next();
+
+    Ok(Some(AlbumMetadata {
+        name,
+        start_date: metadata.as_ref().and_then(|metadata| metadata.start_date),
+        end_date: metadata.and_then(|metadata| metadata.end_date),
+    }))
 }
 
 async fn path_exists(path: &str) -> bool {
@@ -600,7 +642,9 @@ fn normalize_path_string(path: &Path) -> String {
 }
 
 fn join_library_path(root: &Path, rendered: &str) -> PathBuf {
-    let relative = rendered.trim_matches('/').replace('/', std::path::MAIN_SEPARATOR_STR);
+    let relative = rendered
+        .trim_matches('/')
+        .replace('/', std::path::MAIN_SEPARATOR_STR);
     root.join(relative)
 }
 

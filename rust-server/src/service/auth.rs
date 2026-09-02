@@ -109,6 +109,7 @@ impl AuthService {
             ErrorResp::from(err)
         })?;
 
+        crate::utils::telemetry::add_users_total(1);
         Ok(map_user_admin_with_license(&self.db_pool, user).await?)
     }
 
@@ -378,7 +379,7 @@ impl AuthService {
         })
     }
 
-    async fn validate_shared_link_key(
+    pub async fn validate_shared_link_key(
         &self,
         key: &str,
         path: &str,
@@ -398,7 +399,7 @@ impl AuthService {
         })
     }
 
-    async fn validate_shared_link_slug(
+    pub async fn validate_shared_link_slug(
         &self,
         slug: &str,
         path: &str,
