@@ -53,6 +53,7 @@ pub async fn search(
     id: Option<Uuid>,
     trigger: Option<&str>,
     enabled: Option<bool>,
+    logging: Option<bool>,
 ) -> Result<Vec<WorkflowRow>, sqlx::Error> {
     let mut query = String::from(WORKFLOW_SELECT);
     query.push_str(r#" WHERE workflow."ownerId" = $1"#);
@@ -68,6 +69,10 @@ pub async fn search(
     }
     if enabled.is_some() {
         query.push_str(&format!(" AND workflow.enabled = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if logging.is_some() {
+        query.push_str(&format!(" AND workflow.logging = ${bind_idx}"));
         let _ = bind_idx;
     }
     query.push_str(r#" ORDER BY workflow."createdAt" DESC"#);
@@ -82,10 +87,16 @@ pub async fn search(
     if let Some(enabled) = enabled {
         q = q.bind(enabled);
     }
+    if let Some(logging) = logging {
+        q = q.bind(logging);
+    }
     q.fetch_all(pool).await
 }
 
-pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<WorkflowRow>, sqlx::Error> {
+pub async fn get_by_id(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<WorkflowRow>, sqlx::Error> {
     let query = format!("{WORKFLOW_SELECT} WHERE workflow.id = $1");
     sqlx::query_as::<_, WorkflowRow>(&query)
         .bind(id)
@@ -123,9 +134,7 @@ pub async fn create(
     replace_steps(&mut tx, &id, steps).await?;
     tx.commit().await?;
 
-    get_by_id(pool, &id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    get_by_id(pool, &id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
@@ -148,7 +157,11 @@ pub async fn update(
             .await?;
     }
 
-    if trigger.is_some() || name.is_some() || description.is_some() || enabled.is_some() || logging.is_some()
+    if trigger.is_some()
+        || name.is_some()
+        || description.is_some()
+        || enabled.is_some()
+        || logging.is_some()
     {
         let next_name = match name {
             None => current.name.as_deref(),
@@ -187,9 +200,7 @@ pub async fn update(
 
     tx.commit().await?;
 
-    get_by_id(pool, id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    get_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
@@ -328,6 +339,19 @@ pub async fn get_for_asset_v1(
             'isFavorite', a."isFavorite",
             'isExternal', a."isExternal",
             'isEdited', a."isEdited",
+            'tags', COALESCE((
+                SELECT json_agg(json_build_object(
+                    'id', t.id,
+                    'value', t.value,
+                    'createdAt', t."createdAt",
+                    'updatedAt', t."updatedAt",
+                    'color', t.color,
+                    'parentId', t."parentId"
+                ))
+                FROM tag t
+                INNER JOIN tag_asset ta ON ta."tagId" = t.id
+                WHERE ta."assetId" = a.id
+            ), '[]'::json),
             'exifInfo', (
                 SELECT json_build_object(
                     'make', e.make,

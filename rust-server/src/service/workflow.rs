@@ -24,6 +24,7 @@ pub struct WorkflowSearchQuery {
     pub name: Option<String>,
     pub description: Option<String>,
     pub enabled: Option<bool>,
+    pub logging: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +142,7 @@ impl WorkflowService {
             query.id,
             query.trigger.as_deref(),
             query.enabled,
+            query.logging,
         )
         .await
         .map_err(ErrorResp::from)?;
@@ -258,12 +260,20 @@ impl WorkflowService {
         permission: Permission,
     ) -> Result<(), ErrorResp> {
         require_permission(auth, permission)?;
-        if auth.user.is_admin {
-            return Ok(());
-        }
-        let row = self.find_or_fail(id).await?;
+        let Some(row) = workflow::get_by_id(&self.pool, id)
+            .await
+            .map_err(ErrorResp::from)?
+        else {
+            return Err(ErrorResp::BadRequest(format!(
+                "Not found or no {} access",
+                permission.as_str()
+            )));
+        };
         if row.owner_id != auth.user.id {
-            return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+            return Err(ErrorResp::BadRequest(format!(
+                "Not found or no {} access",
+                permission.as_str()
+            )));
         }
         Ok(())
     }
@@ -384,6 +394,12 @@ mod tests {
     fn update_req_omitted_logging_is_none() {
         let dto: WorkflowUpdateReq = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
         assert_eq!(dto.logging, None);
+    }
+
+    #[test]
+    fn search_query_deserializes_logging() {
+        let query: WorkflowSearchQuery = serde_json::from_str(r#"{"logging":true}"#).unwrap();
+        assert_eq!(query.logging, Some(true));
     }
 
     #[test]

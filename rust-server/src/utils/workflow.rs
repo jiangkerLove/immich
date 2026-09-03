@@ -1,5 +1,6 @@
 pub const TRIGGER_ASSET_CREATE: &str = "AssetCreate";
 pub const TRIGGER_ASSET_METADATA: &str = "AssetMetadataExtraction";
+pub const TRIGGER_ASSET_TAGGED: &str = "AssetTagged";
 pub const TYPE_ASSET_V1: &str = "AssetV1";
 
 pub const WORKFLOW_RESULT_COMPLETED: &str = "completed";
@@ -62,6 +63,10 @@ pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
             trigger: TRIGGER_ASSET_METADATA.to_string(),
             types: vec![TYPE_ASSET_V1.to_string()],
         },
+        WorkflowTriggerResponse {
+            trigger: TRIGGER_ASSET_TAGGED.to_string(),
+            types: vec![TYPE_ASSET_V1.to_string()],
+        },
     ]
 }
 
@@ -74,7 +79,9 @@ pub struct WorkflowTriggerResponse {
 
 pub fn is_method_compatible(method_types: &[String], trigger: &str) -> bool {
     let valid_types = match trigger {
-        TRIGGER_ASSET_CREATE | TRIGGER_ASSET_METADATA => &[TYPE_ASSET_V1][..],
+        TRIGGER_ASSET_CREATE | TRIGGER_ASSET_METADATA | TRIGGER_ASSET_TAGGED => {
+            &[TYPE_ASSET_V1][..]
+        }
         _ => return false,
     };
 
@@ -155,6 +162,24 @@ mod tests {
                 include_step_id: true,
             }
         );
+    }
+
+    #[test]
+    fn asset_tagged_is_a_supported_trigger() {
+        let triggers = get_workflow_triggers();
+        assert!(
+            triggers
+                .iter()
+                .any(|item| item.trigger == TRIGGER_ASSET_TAGGED)
+        );
+        assert!(is_method_compatible(
+            &[TYPE_ASSET_V1.to_string()],
+            TRIGGER_ASSET_TAGGED
+        ));
+        assert!(!is_method_compatible(
+            &[TYPE_ASSET_V1.to_string()],
+            "UnknownTrigger"
+        ));
     }
 
     #[test]
