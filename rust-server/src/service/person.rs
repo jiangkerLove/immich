@@ -4,23 +4,23 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::asset_edit;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::face::{self, CreateAssetFaceData};
 use crate::models::db::person::{self, PersonListFilter};
 use crate::models::db::user_metadata::UserMetadataPO;
 use crate::models::dto::auth::AuthDto;
+use crate::models::response::face::{AssetFaceResponse, map_asset_face_with_edits};
 use crate::models::response::response::ErrorResp;
-use crate::models::response::search::{map_person, PersonResponse};
-use crate::models::response::face::{map_asset_face_with_edits, AssetFaceResponse};
+use crate::models::response::search::{PersonResponse, map_person};
 use crate::service::access::require_assets_access;
 use crate::service::album::{BulkIdErrorReason, BulkIdResponse};
 use crate::service::job::JobService;
 use crate::service::media::visibility::asset_dimensions_from_exif;
-use crate::utils::file_response::{file_response, guess_mime, FileResponse};
+use crate::utils::file_response::{FileResponse, file_response, guess_mime};
 use crate::utils::permission::require_permission;
 use crate::utils::preferences::resolve_preferences;
 use crate::utils::query::parse_query_bool;
-use crate::utils::transform::{transform_points, ImageDimensions, Point};
-use crate::models::db::auth_permission::Permission;
+use crate::utils::transform::{ImageDimensions, Point, transform_points};
 
 #[derive(Clone)]
 pub struct PersonService {
@@ -165,7 +165,11 @@ impl PersonService {
         query: &PersonSearchQuery,
     ) -> Result<PeopleResponse, ErrorResp> {
         require_permission(auth, Permission::PersonRead)?;
-        let with_hidden = query.with_hidden.as_deref().and_then(parse_query_bool).unwrap_or(false);
+        let with_hidden = query
+            .with_hidden
+            .as_deref()
+            .and_then(parse_query_bool)
+            .unwrap_or(false);
         let page = query.page.max(1);
         let size = query.size.clamp(1, 1000);
         let offset = (page - 1) * size;
@@ -316,7 +320,9 @@ impl PersonService {
         .await?;
 
         if update_face_asset_id.is_some() {
-            self.jobs.queue_person_generate_thumbnail(id).await?;
+            self.jobs
+                .queue_person_generate_thumbnail(&auth.user.id, id)
+                .await?;
         }
 
         Ok(map_person(&row))
@@ -357,7 +363,8 @@ impl PersonService {
     pub async fn delete_all(&self, auth: &AuthDto, dto: &BulkIdsReq) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::PersonDelete)?;
         self.require_person_owner(auth, &dto.ids).await?;
-        self.unlink_people_thumbnails(&auth.user.id, &dto.ids).await?;
+        self.unlink_people_thumbnails(&auth.user.id, &dto.ids)
+            .await?;
         person::delete_for_owner(&self.pool, &auth.user.id, &dto.ids).await?;
         Ok(())
     }
@@ -393,7 +400,8 @@ impl PersonService {
         change_feature_photo.sort_unstable();
         change_feature_photo.dedup();
         if !change_feature_photo.is_empty() {
-            self.create_new_feature_photo(&change_feature_photo).await?;
+            self.create_new_feature_photo(&auth.user.id, &change_feature_photo)
+                .await?;
         }
 
         Ok(vec![self.find_or_fail(auth, target_id).await?])
@@ -464,7 +472,8 @@ impl PersonService {
                 .await?;
             }
 
-            person::reassign_faces_by_person(&self.pool, merge_id, target_id, &auth.user.id).await?;
+            person::reassign_faces_by_person(&self.pool, merge_id, target_id, &auth.user.id)
+                .await?;
             if !merge_person.thumbnail_path.is_empty() {
                 let _ = tokio::fs::remove_file(&merge_person.thumbnail_path).await;
             }
@@ -485,7 +494,11 @@ impl PersonService {
         Ok(results)
     }
 
-    pub async fn create_face(&self, auth: &AuthDto, dto: &AssetFaceCreateReq) -> Result<(), ErrorResp> {
+    pub async fn create_face(
+        &self,
+        auth: &AuthDto,
+        dto: &AssetFaceCreateReq,
+    ) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::FaceCreate)?;
         require_assets_access(&self.pool, auth, &[dto.asset_id], Permission::AssetUpdate).await?;
         self.require_person_owner(auth, &[dto.person_id]).await?;
@@ -500,14 +513,12 @@ impl PersonService {
         let edits = asset_edit::list_by_asset(&self.pool, &dto.asset_id).await?;
 
         if !edits.is_empty() {
-            let (asset_width, _asset_height, exif_width, exif_height) = face::get_asset_scale_for_face(
-                &self.pool,
-                &dto.asset_id,
-            )
-            .await?
-            .ok_or_else(|| {
-                ErrorResp::BadRequest("Asset does not have valid dimensions".to_string())
-            })?;
+            let (asset_width, _asset_height, exif_width, exif_height) =
+                face::get_asset_scale_for_face(&self.pool, &dto.asset_id)
+                    .await?
+                    .ok_or_else(|| {
+                        ErrorResp::BadRequest("Asset does not have valid dimensions".to_string())
+                    })?;
 
             if dto.image_width <= 0 {
                 return Err(ErrorResp::BadRequest(
@@ -562,7 +573,8 @@ impl PersonService {
             .await?
             .is_none()
         {
-            self.create_new_feature_photo(&[dto.person_id]).await?;
+            self.create_new_feature_photo(&auth.user.id, &[dto.person_id])
+                .await?;
         }
 
         Ok(())
@@ -599,9 +611,7 @@ impl PersonService {
 
         Ok(rows
             .iter()
-            .map(|row| {
-                map_asset_face_with_edits(row, &auth.user.id, &edits, image_dimensions)
-            })
+            .map(|row| map_asset_face_with_edits(row, &auth.user.id, &edits, image_dimensions))
             .collect())
     }
 
@@ -624,15 +634,14 @@ impl PersonService {
 
         let target_face_asset_id = face::get_person_face_asset_id(&self.pool, person_id).await?;
         if target_face_asset_id.is_none() {
-            self.create_new_feature_photo(&[*person_id]).await?;
+            self.create_new_feature_photo(&auth.user.id, &[*person_id])
+                .await?;
         }
 
         if let Some(old_person_id) = face_row.person_id {
-            if face::get_person_face_asset_id(&self.pool, &old_person_id)
-                .await?
-                == Some(*face_id)
-            {
-                self.create_new_feature_photo(&[old_person_id]).await?;
+            if face::get_person_face_asset_id(&self.pool, &old_person_id).await? == Some(*face_id) {
+                self.create_new_feature_photo(&auth.user.id, &[old_person_id])
+                    .await?;
             }
         }
 
@@ -665,11 +674,17 @@ impl PersonService {
         Ok(())
     }
 
-    async fn create_new_feature_photo(&self, person_ids: &[Uuid]) -> Result<(), ErrorResp> {
+    async fn create_new_feature_photo(
+        &self,
+        owner_id: &Uuid,
+        person_ids: &[Uuid],
+    ) -> Result<(), ErrorResp> {
         for person_id in person_ids {
             if let Some(face_id) = face::get_random_face_id(&self.pool, person_id).await? {
                 face::set_person_face_asset_id(&self.pool, person_id, Some(face_id)).await?;
-                self.jobs.queue_person_generate_thumbnail(person_id).await?;
+                self.jobs
+                    .queue_person_generate_thumbnail(owner_id, person_id)
+                    .await?;
             }
         }
         Ok(())
@@ -688,7 +703,11 @@ impl PersonService {
             .unwrap_or(3))
     }
 
-    async fn unlink_people_thumbnails(&self, owner_id: &Uuid, ids: &[Uuid]) -> Result<(), ErrorResp> {
+    async fn unlink_people_thumbnails(
+        &self,
+        owner_id: &Uuid,
+        ids: &[Uuid],
+    ) -> Result<(), ErrorResp> {
         let paths = person::get_thumbnail_paths_for_owner(&self.pool, owner_id, ids)
             .await
             .map_err(ErrorResp::from)?;

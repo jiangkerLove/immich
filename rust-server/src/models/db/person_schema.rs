@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use sqlx::{Pool, Postgres};
 
-use super::schema_check::{detect_person_schema_variant, PersonSchemaVariant};
+use super::schema_check::{PersonSchemaVariant, detect_person_schema_variant};
 
 static CACHED_VARIANT: OnceLock<PersonSchemaVariant> = OnceLock::new();
 
@@ -65,9 +65,9 @@ impl PersonSchema {
             PersonSchemaVariant::Legacy => {
                 format!(r#"{person_alias}.id = {face_alias}."personId""#)
             }
-            PersonSchemaVariant::ClusterGroups => format!(
-                r#"{person_alias}."personGroupId" = {face_alias}."personGroupId""#
-            ),
+            PersonSchemaVariant::ClusterGroups => {
+                format!(r#"{person_alias}."personGroupId" = {face_alias}."personGroupId""#)
+            }
         }
     }
 
@@ -80,9 +80,7 @@ impl PersonSchema {
     ) -> String {
         let base = self.join_person_to_face(person_alias, face_alias);
         if self.is_cluster_groups() {
-            format!(
-                r#"{base} AND {person_alias}."ownerId" = {asset_alias}."ownerId""#
-            )
+            format!(r#"{base} AND {person_alias}."ownerId" = {asset_alias}."ownerId""#)
         } else {
             base
         }
@@ -91,6 +89,19 @@ impl PersonSchema {
     /// WHERE clause matching API person id against the `person` table.
     pub fn where_person_id(&self, prefix: &str, param: &str) -> String {
         format!("{} = {param}", self.person_id_expr(prefix))
+    }
+
+    /// Match a person by owner and API id (`id` or `personGroupId`).
+    pub fn where_owner_and_id(&self, prefix: &str, owner_param: &str, id_param: &str) -> String {
+        let owner = if prefix.is_empty() {
+            r#""ownerId""#.to_string()
+        } else {
+            format!(r#"{prefix}"ownerId""#)
+        };
+        format!(
+            "{owner} = {owner_param} AND {}",
+            self.where_person_id(prefix, id_param)
+        )
     }
 
     /// Sync payload column: audit table person reference exposed as `personId`.
@@ -184,8 +195,14 @@ mod tests {
     #[test]
     fn cluster_groups_person_id_expr() {
         let schema = PersonSchema::for_variant(PersonSchemaVariant::ClusterGroups);
-        assert_eq!(schema.person_id_expr("person."), r#"person."personGroupId""#);
-        assert_eq!(schema.person_id_as_id("person."), r#"person."personGroupId" AS id"#);
+        assert_eq!(
+            schema.person_id_expr("person."),
+            r#"person."personGroupId""#
+        );
+        assert_eq!(
+            schema.person_id_as_id("person."),
+            r#"person."personGroupId" AS id"#
+        );
         assert_eq!(schema.face_person_col(), "personGroupId");
     }
 
@@ -194,5 +211,19 @@ mod tests {
         let schema = PersonSchema::for_variant(PersonSchemaVariant::ClusterGroups);
         let join = schema.join_person_to_face_with_owner("p", "af", "a");
         assert!(join.contains(r#"p."ownerId" = a."ownerId""#));
+    }
+
+    #[test]
+    fn where_owner_and_id_matches_schema() {
+        let legacy = PersonSchema::for_variant(PersonSchemaVariant::Legacy);
+        assert_eq!(
+            legacy.where_owner_and_id("person.", "$1", "$2"),
+            r#"person."ownerId" = $1 AND person.id = $2"#
+        );
+        let groups = PersonSchema::for_variant(PersonSchemaVariant::ClusterGroups);
+        assert_eq!(
+            groups.where_owner_and_id("person.", "$1", "$2"),
+            r#"person."ownerId" = $1 AND person."personGroupId" = $2"#
+        );
     }
 }

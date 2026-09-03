@@ -42,6 +42,13 @@ pub struct EntityJob {
     pub notify: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonJob {
+    pub owner_id: Uuid,
+    pub person_group_id: Uuid,
+}
+
 #[derive(Serialize, Deserialize)]
 struct FileDeleteJob {
     files: Vec<String>,
@@ -186,14 +193,17 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_person_generate_thumbnail(&self, person_id: &Uuid) -> Result<(), ErrorResp> {
+    pub async fn queue_person_generate_thumbnail(
+        &self,
+        owner_id: &Uuid,
+        person_group_id: &Uuid,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_THUMBNAIL,
             "PersonGenerateThumbnail",
-            EntityJob {
-                id: *person_id,
-                source: None,
-                notify: None,
+            PersonJob {
+                owner_id: *owner_id,
+                person_group_id: *person_group_id,
             },
         )
         .await
@@ -418,14 +428,17 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_person_file_migration(&self, person_id: &Uuid) -> Result<(), ErrorResp> {
+    pub async fn queue_person_file_migration(
+        &self,
+        owner_id: &Uuid,
+        person_group_id: &Uuid,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_MIGRATION,
             "PersonFileMigration",
-            EntityJob {
-                id: *person_id,
-                source: None,
-                notify: None,
+            PersonJob {
+                owner_id: *owner_id,
+                person_group_id: *person_group_id,
             },
         )
         .await
@@ -1025,7 +1038,7 @@ impl JobService {
 
 #[cfg(test)]
 mod tests {
-    use super::EntityJob;
+    use super::{EntityJob, PersonJob};
     use serde_json::json;
     use uuid::Uuid;
 
@@ -1060,5 +1073,29 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(job.source.as_deref(), Some("upload"));
+    }
+
+    #[test]
+    fn person_job_serializes_camel_case() {
+        let owner = Uuid::from_u128(1);
+        let group = Uuid::from_u128(2);
+        let value = serde_json::to_value(PersonJob {
+            owner_id: owner,
+            person_group_id: group,
+        })
+        .unwrap();
+        assert_eq!(value["ownerId"], json!(owner.to_string()));
+        assert_eq!(value["personGroupId"], json!(group.to_string()));
+    }
+
+    #[test]
+    fn person_job_deserializes_camel_case() {
+        let job: PersonJob = serde_json::from_value(json!({
+            "ownerId": "00000000-0000-0000-0000-000000000001",
+            "personGroupId": "00000000-0000-0000-0000-000000000002"
+        }))
+        .unwrap();
+        assert_eq!(job.owner_id, Uuid::from_u128(1));
+        assert_eq!(job.person_group_id, Uuid::from_u128(2));
     }
 }
