@@ -14,8 +14,10 @@ use crate::models::db::library::{self, LibraryAssetSyncRow, LibraryRow};
 use crate::service::job::JobService;
 use crate::utils::checksum::sha1_bytes;
 use crate::utils::file_walk::walk_file_batches;
+use crate::utils::fs_access::has_read_access;
 use crate::utils::glob::path_matches_exclusion;
 use crate::utils::mime_types::{is_video_path, supported_file_extensions};
+use crate::utils::path_normalize::normalize_path;
 use crate::utils::storage::StoragePaths;
 
 const BULL_PREFIX: &str = "immich_bull";
@@ -139,11 +141,8 @@ impl LibraryProcessor {
             .await
             .map_err(|err| err.to_string())?;
 
-        for library_row in &libraries {
-            if library_row.deleted_at.is_some() {
-                continue;
-            }
-            let data = serde_json::json!({ "id": library_row.id });
+        for library_id in library_ids_for_scan_queue(&libraries) {
+            let data = serde_json::json!({ "id": library_id });
             self.jobs
                 .queue_json_job(QUEUE_LIBRARY, "LibrarySyncFilesQueueAll", data.clone())
                 .await
@@ -554,7 +553,7 @@ impl LibraryProcessor {
         for import_path in &library.import_paths {
             if self.storage.is_immich_path(import_path) {
                 eprintln!(
-                    "Skipping invalid import path {import_path}: cannot use media upload folder"
+                    "Skipping invalid import path {import_path}: Cannot use media upload folder for external libraries"
                 );
                 continue;
             }
@@ -565,7 +564,13 @@ impl LibraryProcessor {
             let path = PathBuf::from(import_path);
             match tokio::fs::metadata(&path).await {
                 Ok(meta) if meta.is_dir() => {
-                    valid.push(path.to_string_lossy().into_owned());
+                    if !has_read_access(&path) {
+                        eprintln!(
+                            "Skipping invalid import path {import_path}: Lacking read permission for folder"
+                        );
+                        continue;
+                    }
+                    valid.push(normalize_path(import_path));
                 }
                 Ok(_) => eprintln!("Skipping invalid import path {import_path}: not a directory"),
                 Err(err) => {
@@ -582,7 +587,7 @@ impl LibraryProcessor {
         owner_id: &Uuid,
         library_id: &Uuid,
     ) -> Result<Option<Uuid>, String> {
-        let normalized = Path::new(file_path).to_string_lossy().into_owned();
+        let normalized = normalize_path(file_path);
         let metadata = tokio::fs::metadata(&normalized)
             .await
             .map_err(|err| err.to_string())?;
@@ -835,4 +840,34 @@ mod tests {
         assert_eq!(queue_sync_assets_status(false), JobWorkerStatus::Skipped);
         assert_eq!(queue_sync_assets_status(true), JobWorkerStatus::Success);
     }
+
+    #[test]
+    fn scan_queue_includes_soft_deleted_libraries() {
+        let active = Uuid::from_u128(1);
+        let deleted = Uuid::from_u128(2);
+        let ids = library_ids_for_scan_queue(&[
+            scan_queue_library_row(active, None),
+            scan_queue_library_row(deleted, Some(Utc::now())),
+        ]);
+        assert_eq!(ids, vec![active, deleted]);
+    }
+}
+
+fn scan_queue_library_row(id: Uuid, deleted_at: Option<DateTime<Utc>>) -> LibraryRow {
+    LibraryRow {
+        id,
+        name: "test".to_string(),
+        owner_id: Uuid::from_u128(0),
+        import_paths: vec![],
+        exclusion_patterns: vec![],
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        refreshed_at: None,
+        deleted_at,
+        asset_count: 0,
+    }
+}
+
+fn library_ids_for_scan_queue(libraries: &[LibraryRow]) -> Vec<Uuid> {
+    libraries.iter().map(|library| library.id).collect()
 }
