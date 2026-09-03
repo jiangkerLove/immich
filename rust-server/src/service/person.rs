@@ -179,7 +179,7 @@ impl PersonService {
             let person = person::get_by_id_for_owner(&self.pool, &auth.user.id, &closest_person_id)
                 .await?
                 .ok_or_else(|| ErrorResp::NotFound("Person not found".to_string()))?;
-            let face_id = person::get_face_asset_id(&self.pool, &person.id)
+            let face_id = person::get_face_asset_id(&self.pool, &auth.user.id, &person.id)
                 .await?
                 .ok_or_else(|| ErrorResp::NotFound("Person not found".to_string()))?;
             closest_face_id = Some(face_id);
@@ -380,7 +380,7 @@ impl PersonService {
         require_permission(auth, Permission::PersonReassign)?;
         self.require_person_owner(auth, &[*target_id]).await?;
 
-        let target_face_asset_id = person::get_face_asset_id(&self.pool, target_id).await?;
+        let target_face_asset_id = person::get_face_asset_id(&self.pool, &auth.user.id, target_id).await?;
         let mut change_feature_photo = Vec::new();
         if target_face_asset_id.is_none() {
             change_feature_photo.push(*target_id);
@@ -391,7 +391,7 @@ impl PersonService {
             if let Some(face_id) =
                 person::get_face_id_for_asset(&self.pool, &item.person_id, &item.asset_id).await?
             {
-                if person::get_face_asset_id(&self.pool, &item.person_id).await? == Some(face_id) {
+                if person::get_face_asset_id(&self.pool, &auth.user.id, &item.person_id).await? == Some(face_id) {
                     change_feature_photo.push(item.person_id);
                 }
                 person::reassign_face(&self.pool, &face_id, target_id).await?;
@@ -570,7 +570,7 @@ impl PersonService {
         )
         .await?;
 
-        if face::get_person_face_asset_id(&self.pool, &dto.person_id)
+        if face::get_person_face_asset_id(&self.pool, &auth.user.id, &dto.person_id)
             .await?
             .is_none()
         {
@@ -633,14 +633,14 @@ impl PersonService {
 
         person::reassign_face(&self.pool, face_id, person_id).await?;
 
-        let target_face_asset_id = face::get_person_face_asset_id(&self.pool, person_id).await?;
+        let target_face_asset_id = face::get_person_face_asset_id(&self.pool, &auth.user.id, person_id).await?;
         if target_face_asset_id.is_none() {
             self.create_new_feature_photo(&auth.user.id, &[*person_id])
                 .await?;
         }
 
         if let Some(old_person_id) = face_row.person_id {
-            if face::get_person_face_asset_id(&self.pool, &old_person_id).await? == Some(*face_id) {
+            if face::get_person_face_asset_id(&self.pool, &auth.user.id, &old_person_id).await? == Some(*face_id) {
                 self.create_new_feature_photo(&auth.user.id, &[old_person_id])
                     .await?;
             }
@@ -682,7 +682,7 @@ impl PersonService {
     ) -> Result<(), ErrorResp> {
         for person_id in person_ids {
             if let Some(face_id) = face::get_random_face_id(&self.pool, person_id).await? {
-                face::set_person_face_asset_id(&self.pool, person_id, Some(face_id)).await?;
+                face::set_person_face_asset_id(&self.pool, owner_id, person_id, Some(face_id)).await?;
                 self.jobs
                     .queue_person_generate_thumbnail(owner_id, person_id)
                     .await?;
