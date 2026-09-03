@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::models::dto::env::EnvDto;
 use crate::service::job::JobService;
 use crate::service::media::duplicate_detection::{
-    DuplicateDetectionOutcome, DuplicateDetectionService,
+    DuplicateDetectionOutcome, DuplicateDetectionQueueAllOutcome, DuplicateDetectionService,
 };
 
 const BULL_PREFIX: &str = "immich_bull";
@@ -51,8 +51,10 @@ impl DuplicateDetectionProcessor {
             "AssetDetectDuplicatesQueueAll" => {
                 let job: QueueAllJobData =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.service.queue_all(job.force.unwrap_or(false)).await?;
-                Ok(JobWorkerStatus::Success)
+                match self.service.queue_all(job.force.unwrap_or(false)).await? {
+                    DuplicateDetectionQueueAllOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+                    DuplicateDetectionQueueAllOutcome::Success => Ok(JobWorkerStatus::Success),
+                }
             }
             other => {
                 eprintln!(

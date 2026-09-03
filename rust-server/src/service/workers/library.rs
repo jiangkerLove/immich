@@ -148,7 +148,7 @@ impl LibraryProcessor {
                 .await
                 .map_err(|err| err.to_string())?;
             self.jobs
-                .queue_json_job(QUEUE_LIBRARY, "LibraryScanAssetsQueueAll", data)
+                .queue_json_job(QUEUE_LIBRARY, "LibrarySyncAssetsQueueAll", data)
                 .await
                 .map_err(|err| err.to_string())?;
         }

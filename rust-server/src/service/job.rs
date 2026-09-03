@@ -392,6 +392,15 @@ impl JobService {
         })
     }
 
+    pub async fn get_queue_active_count(&self, queue_name: &str) -> Result<u64, ErrorResp> {
+        let queue = self.json_queue(queue_name).await?;
+        queue.get_active_count().await.map_err(|err| {
+            ErrorResp::ServerError(format!(
+                "Failed to read active count for '{queue_name}': {err}"
+            ))
+        })
+    }
+
     pub async fn queue_workflow_asset_trigger(
         &self,
         workflow_id: &Uuid,
@@ -782,7 +791,7 @@ impl JobService {
         let data = serde_json::json!({ "id": library_id });
         self.queue_json_job(QUEUE_LIBRARY, "LibrarySyncFilesQueueAll", data.clone())
             .await?;
-        self.queue_json_job(QUEUE_LIBRARY, "LibraryScanAssetsQueueAll", data)
+        self.queue_json_job(QUEUE_LIBRARY, "LibrarySyncAssetsQueueAll", data)
             .await
     }
 

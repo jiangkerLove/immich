@@ -19,6 +19,12 @@ pub enum OcrOutcome {
     Success,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OcrQueueAllOutcome {
+    Skipped,
+    Success,
+}
+
 #[derive(Clone)]
 pub struct OcrService {
     pool: PgPool,
@@ -30,12 +36,12 @@ impl OcrService {
         Self { pool, jobs }
     }
 
-    pub async fn queue_all(&self, force: bool) -> Result<(), String> {
+    pub async fn queue_all(&self, force: bool) -> Result<OcrQueueAllOutcome, String> {
         let config = get_machine_learning_config(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         if !is_ocr_enabled(&config) {
-            return Ok(());
+            return Ok(OcrQueueAllOutcome::Skipped);
         }
 
         if force {
@@ -57,7 +63,7 @@ impl OcrService {
             }
         }
 
-        Ok(())
+        Ok(OcrQueueAllOutcome::Success)
     }
 
     pub async fn process_asset(&self, asset_id: &Uuid) -> Result<OcrOutcome, String> {

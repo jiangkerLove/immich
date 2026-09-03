@@ -39,6 +39,7 @@ const EXIF_DATE_TAGS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataExtractOutcome {
     Success,
+    NotFound,
     Failed,
 }
 
@@ -74,7 +75,7 @@ impl MetadataExtractService {
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Ok(MetadataExtractOutcome::Failed);
+            return Ok(MetadataExtractOutcome::NotFound);
         };
 
         if !Path::new(&asset.original_path).exists() {

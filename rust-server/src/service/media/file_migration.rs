@@ -11,6 +11,7 @@ use crate::utils::storage::StoragePaths;
 use crate::utils::storage_move::{MoveFileOptions, MoveFileOutcome, move_file};
 
 const JOBS_BATCH_SIZE: usize = 1000;
+const QUEUE_MIGRATION: &str = "migration";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileMigrationOutcome {
@@ -53,8 +54,20 @@ impl FileMigrationService {
     }
 
     pub async fn queue_all(&self) -> Result<(), String> {
-        StoragePaths::remove_empty_dirs(&self.storage.thumbs_base(), false).await?;
-        StoragePaths::remove_empty_dirs(&self.storage.encoded_video_base(), false).await?;
+        let active = self
+            .jobs
+            .get_queue_active_count(QUEUE_MIGRATION)
+            .await
+            .map_err(|err| err.to_string())?;
+        let waiting = self
+            .jobs
+            .get_queue_waiting_count(QUEUE_MIGRATION)
+            .await
+            .map_err(|err| err.to_string())?;
+        if active == 1 && waiting == 0 {
+            StoragePaths::remove_empty_dirs(&self.storage.thumbs_base(), false).await?;
+            StoragePaths::remove_empty_dirs(&self.storage.encoded_video_base(), false).await?;
+        }
 
         let asset_ids = migration_job::stream_for_migration(&self.pool)
             .await

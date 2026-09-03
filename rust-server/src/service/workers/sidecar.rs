@@ -47,7 +47,7 @@ impl SidecarProcessor {
                     .check_sidecar(&job.id, job.source.as_deref())
                     .await?
                 {
-                    SidecarCheckOutcome::NotFound => Ok(JobWorkerStatus::Skipped),
+                    SidecarCheckOutcome::NotFound => Ok(JobWorkerStatus::Success),
                     SidecarCheckOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
                     SidecarCheckOutcome::Success => Ok(JobWorkerStatus::Success),
                 }

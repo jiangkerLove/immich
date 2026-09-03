@@ -1,6 +1,6 @@
 use chrono::Utc;
 use reqwest::Url;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::Deserialize;
 use sqlx::PgPool;
 
@@ -222,11 +222,19 @@ fn is_newer_release(current: &str, release: &str, include_prerelease: bool) -> b
         return false;
     }
 
-    if !include_prerelease && !release_v.pre.is_empty() {
+    if include_prerelease {
+        return true;
+    }
+
+    if !release_v.pre.is_empty() {
         return false;
     }
 
-    true
+    let Ok(req) = VersionReq::parse(&format!(">{current_v}")) else {
+        return false;
+    };
+
+    req.matches(&release_v)
 }
 
 fn parse_server_version(value: &str) -> crate::service::server::ServerVersionResponse {
@@ -298,5 +306,13 @@ mod tests {
             release_version: None,
         };
         assert!(build_release_event("stable", &metadata).is_none());
+    }
+
+    #[test]
+    fn newer_release_uses_version_requirement() {
+        assert!(is_newer_release("1.0.0", "1.1.0", false));
+        assert!(!is_newer_release("1.0.0", "1.0.0", false));
+        assert!(!is_newer_release("1.0.0", "1.1.0-rc.1", false));
+        assert!(is_newer_release("1.0.0", "1.1.0-rc.1", true));
     }
 }

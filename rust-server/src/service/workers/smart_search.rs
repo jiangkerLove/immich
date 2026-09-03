@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use crate::models::dto::env::EnvDto;
 use crate::service::job::JobService;
-use crate::service::media::smart_search::{SmartSearchOutcome, SmartSearchService};
+use crate::service::media::smart_search::{
+    SmartSearchOutcome, SmartSearchQueueAllOutcome, SmartSearchService,
+};
 
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_SMART_SEARCH: &str = "smartSearch";
@@ -56,11 +58,15 @@ impl SmartSearchProcessor {
             "SmartSearchQueueAll" => {
                 let job: QueueAllJobData =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.service.queue_all(job.force.unwrap_or(false)).await?;
-                Ok(JobWorkerStatus::Success)
+                match self.service.queue_all(job.force.unwrap_or(false)).await? {
+                    SmartSearchQueueAllOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+                    SmartSearchQueueAllOutcome::Success => Ok(JobWorkerStatus::Success),
+                }
             }
             other => {
-                eprintln!("smartSearch job {other} is not implemented in rust-server yet; skipping");
+                eprintln!(
+                    "smartSearch job {other} is not implemented in rust-server yet; skipping"
+                );
                 Ok(JobWorkerStatus::Skipped)
             }
         }
@@ -100,12 +106,16 @@ pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto, concurrency: usize) 
                 let processor = processor.clone();
                 async move {
                     let job_name = job.name.clone();
-                    crate::service::workers::wrap_status_job(QUEUE_SMART_SEARCH, &job_name, || async {
-                        processor
-                            .process(&job_name, &job.data)
-                            .await
-                            .map(|status| status.as_str())
-                    })
+                    crate::service::workers::wrap_status_job(
+                        QUEUE_SMART_SEARCH,
+                        &job_name,
+                        || async {
+                            processor
+                                .process(&job_name, &job.data)
+                                .await
+                                .map(|status| status.as_str())
+                        },
+                    )
                     .await
                 }
             })
