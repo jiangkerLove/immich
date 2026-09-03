@@ -10,6 +10,7 @@ use crate::models::db::assets;
 use crate::models::db::sidecar_job::{self, SidecarWriteAsset};
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, TagWriteValue};
+use crate::utils::fs_access::has_read_access;
 
 const JOBS_BATCH_SIZE: usize = 1000;
 
@@ -67,13 +68,8 @@ impl SidecarService {
             return Ok(SidecarCheckOutcome::NotFound);
         };
 
-        let mut sidecar_path = None;
-        for candidate in sidecar_candidates(&asset.original_path, asset.sidecar_path.as_deref()) {
-            if tokio::fs::metadata(&candidate).await.is_ok() {
-                sidecar_path = Some(candidate);
-                break;
-            }
-        }
+        let sidecar_path =
+            first_readable_sidecar(&asset.original_path, asset.sidecar_path.as_deref());
 
         let is_changed = sidecar_path.as_deref() != asset.sidecar_path.as_deref();
         if !is_changed {
@@ -159,6 +155,12 @@ impl SidecarService {
             .await
             .map_err(|err| err.to_string())
     }
+}
+
+fn first_readable_sidecar(original_path: &str, existing_sidecar: Option<&str>) -> Option<String> {
+    sidecar_candidates(original_path, existing_sidecar)
+        .into_iter()
+        .find(|candidate| has_read_access(candidate))
 }
 
 fn sidecar_candidates(original_path: &str, existing_sidecar: Option<&str>) -> Vec<String> {
@@ -268,4 +270,63 @@ fn merge_time_zone(
             .and_then(|value| value.parse().ok())
     })?;
     Some(date_time.with_timezone(&offset).to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_candidates_match_typescript_order() {
+        let candidates = sidecar_candidates("/photos/IMG_123.jpg", Some("/custom/photo.xmp"));
+        assert_eq!(
+            candidates,
+            vec![
+                "/custom/photo.xmp".to_string(),
+                "/photos/IMG_123.jpg.xmp".to_string(),
+                "/photos/IMG_123.xmp".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn first_readable_sidecar_requires_read_access() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let original = dir.path().join("IMG_123.jpg");
+        let alongside = dir.path().join("IMG_123.jpg.xmp");
+        std::fs::write(&original, b"jpg").expect("write original");
+        std::fs::write(&alongside, b"xmp").expect("write sidecar");
+
+        let found = first_readable_sidecar(original.to_str().unwrap(), None);
+        assert_eq!(found.as_deref(), alongside.to_str());
+
+        let missing = first_readable_sidecar(dir.path().join("none.jpg").to_str().unwrap(), None);
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn skips_unreadable_sidecar_candidates_when_not_root() {
+        if unsafe { libc::geteuid() == 0 } {
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let original = dir.path().join("IMG_123.jpg");
+        let existing = dir.path().join("secret.xmp");
+        let alongside = dir.path().join("IMG_123.jpg.xmp");
+        std::fs::write(&original, b"jpg").expect("write original");
+        std::fs::write(&existing, b"old").expect("write existing sidecar");
+        std::fs::write(&alongside, b"new").expect("write alongside sidecar");
+
+        let mut permissions = std::fs::metadata(&existing)
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o000);
+        std::fs::set_permissions(&existing, permissions).expect("chmod");
+
+        let found = first_readable_sidecar(original.to_str().unwrap(), existing.to_str());
+        assert_eq!(found.as_deref(), alongside.to_str());
+    }
 }

@@ -11,6 +11,7 @@ pub mod disk;
 pub mod duplicate;
 pub mod file_response;
 pub mod file_walk;
+pub mod fs_access;
 pub mod geo_tz;
 pub mod geodata_paths;
 pub mod glob;
