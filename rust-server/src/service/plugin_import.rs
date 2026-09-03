@@ -1,12 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 
-use crate::models::db::plugin::{
-    self, PluginMethodUpsertInput, PluginUpsertInput,
-};
+use crate::models::db::plugin::{self, PluginMethodUpsertInput, PluginUpsertInput};
 use crate::models::dto::env::{EnvDto, ImmichEnvironment};
 use crate::utils::crypto::hash_sha256;
 
@@ -40,6 +38,8 @@ struct PluginManifestMethod {
     schema: Option<Value>,
     #[serde(default)]
     ui_hints: Vec<String>,
+    #[serde(default)]
+    allowed_hosts: Vec<String>,
 }
 
 pub async fn sync_plugins(pool: &PgPool, env: &EnvDto) -> Result<(), String> {
@@ -96,9 +96,12 @@ fn resolve_core_plugin_path(env: &EnvDto) -> Option<PathBuf> {
 }
 
 async fn import_folders(pool: &PgPool, install_folder: &Path) -> Result<(), String> {
-    let mut entries = tokio::fs::read_dir(install_folder)
-        .await
-        .map_err(|err| format!("Failed to read plugins folder {}: {err}", install_folder.display()))?;
+    let mut entries = tokio::fs::read_dir(install_folder).await.map_err(|err| {
+        format!(
+            "Failed to read plugins folder {}: {err}",
+            install_folder.display()
+        )
+    })?;
 
     while let Some(entry) = entries.next_entry().await.map_err(|err| err.to_string())? {
         let file_type = entry.file_type().await.map_err(|err| err.to_string())?;
@@ -144,7 +147,10 @@ async fn import_folder(pool: &PgPool, folder: &Path, force: bool) -> Result<(), 
     };
 
     if manifest.name.is_empty() || manifest.version.is_empty() {
-        return Err(format!("Invalid plugin manifest at {}", manifest_path.display()));
+        return Err(format!(
+            "Invalid plugin manifest at {}",
+            manifest_path.display()
+        ));
     }
 
     let wasm_path = folder.join(&manifest.wasm_path);
@@ -161,8 +167,11 @@ async fn import_folder(pool: &PgPool, folder: &Path, force: bool) -> Result<(), 
             description: method.description,
             types: method.types,
             host_functions: method.host_functions,
-            schema: method.schema.filter(|schema| !schema.is_null() && schema != &json!({})),
+            schema: method
+                .schema
+                .filter(|schema| !schema.is_null() && schema != &json!({})),
             ui_hints: method.ui_hints,
+            allowed_hosts: method.allowed_hosts,
         })
         .collect();
 

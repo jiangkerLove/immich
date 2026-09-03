@@ -53,6 +53,16 @@ pub fn plugin_result_should_continue(result: &serde_json::Value) -> bool {
         .unwrap_or(true)
 }
 
+/// Matches TypeScript `new RegExp(pattern.replaceAll('.', '\\.').replaceAll('*', '.*'))`.
+pub fn hostname_matches_allowed_hosts(hostname: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|pattern| {
+        let escaped = pattern.replace('.', r"\.").replace('*', ".*");
+        regex::Regex::new(&escaped)
+            .map(|re| re.is_match(hostname))
+            .unwrap_or(false)
+    })
+}
+
 pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
     vec![
         WorkflowTriggerResponse {
@@ -115,6 +125,39 @@ pub fn parse_method_string(method: &str) -> Option<ParsedMethod> {
         plugin_name,
         method_name: method_name.to_string(),
     })
+}
+
+/// Last `/`-separated segment, matching TypeScript `entity.value.split('/').at(-1)`.
+pub fn tag_name_from_value(value: &str) -> &str {
+    value.rsplit('/').next().unwrap_or(value)
+}
+
+/// Shape AssetV1 JSON to match TypeScript plugin payloads:
+/// Node `Buffer` checksum and `TagResponseDto.name`.
+pub fn shape_asset_v1_payload(mut asset: serde_json::Value) -> serde_json::Value {
+    if let Some(encoded) = asset.get("checksum").and_then(|value| value.as_str())
+        && let Ok(bytes) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+    {
+        asset["checksum"] = serde_json::json!({
+            "type": "Buffer",
+            "data": bytes,
+        });
+    }
+
+    if let Some(tags) = asset.get_mut("tags").and_then(|value| value.as_array_mut()) {
+        for tag in tags {
+            let Some(value) = tag.get("value").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let name = tag_name_from_value(value).to_string();
+            if let Some(obj) = tag.as_object_mut() {
+                obj.insert("name".to_string(), serde_json::Value::String(name));
+            }
+        }
+    }
+
+    asset
 }
 
 #[cfg(test)]
@@ -192,5 +235,46 @@ mod tests {
         assert!(!plugin_result_should_continue(
             &json!({ "workflow": { "continue": false } })
         ));
+    }
+
+    #[test]
+    fn hostname_allowlist_matches_typescript_glob_rules() {
+        let star = vec!["*".to_string()];
+        assert!(hostname_matches_allowed_hosts("api.example.com", &star));
+
+        let exact = vec!["api.example.com".to_string()];
+        assert!(hostname_matches_allowed_hosts("api.example.com", &exact));
+        assert!(!hostname_matches_allowed_hosts("evil.com", &exact));
+
+        let wildcard = vec!["*.example.com".to_string()];
+        assert!(hostname_matches_allowed_hosts("foo.example.com", &wildcard));
+        assert!(!hostname_matches_allowed_hosts("example.org", &wildcard));
+
+        assert!(!hostname_matches_allowed_hosts("api.example.com", &[]));
+    }
+
+    #[test]
+    fn tag_name_uses_last_path_segment() {
+        assert_eq!(tag_name_from_value("family/mom"), "mom");
+        assert_eq!(tag_name_from_value("vacation"), "vacation");
+    }
+
+    #[test]
+    fn asset_v1_checksum_matches_node_buffer_json() {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let shaped = shape_asset_v1_payload(json!({ "checksum": encoded, "tags": [] }));
+        assert_eq!(
+            shaped["checksum"],
+            json!({ "type": "Buffer", "data": [1, 2, 3] })
+        );
+    }
+
+    #[test]
+    fn asset_v1_tags_include_name() {
+        let shaped = shape_asset_v1_payload(json!({
+            "tags": [{ "id": "1", "value": "family/mom" }]
+        }));
+        assert_eq!(shaped["tags"][0]["name"], "mom");
     }
 }

@@ -14,7 +14,7 @@ use crate::models::db::asset_job::{self, ThumbnailAssetJob, UpsertAssetFile};
 use crate::models::db::asset_ocr;
 use crate::models::db::face;
 use crate::models::db::system_metadata::get_json;
-use crate::service::job::{EntityJob, JobService};
+use crate::service::job::{EntityJob, JobService, PersonJob};
 use crate::service::media::edits::{
     apply_edits, apply_exif_orientation, face_crop_from_bbox, output_dimensions, parse_crop,
 };
@@ -234,13 +234,14 @@ impl ThumbnailService {
 
     pub async fn generate_person_thumbnail(
         &self,
+        owner_id: &Uuid,
         person_id: &Uuid,
     ) -> Result<ThumbnailJobOutcome, String> {
         if !self.is_person_thumbnail_enabled().await? {
             return Ok(ThumbnailJobOutcome::Skipped);
         }
 
-        let Some(data) = asset_job::get_person_thumbnail_job_data(&self.pool, person_id)
+        let Some(data) = asset_job::get_person_thumbnail_job_data(&self.pool, owner_id, person_id)
             .await
             .map_err(|err| err.to_string())?
         else {
@@ -329,6 +330,7 @@ impl ThumbnailService {
 
         asset_job::update_person_thumbnail_path(
             &self.pool,
+            owner_id,
             person_id,
             &thumbnail_path.to_string_lossy(),
         )
@@ -377,35 +379,36 @@ impl ThumbnailService {
         let people = asset_job::stream_people_for_thumbnail_job(&self.pool, force)
             .await
             .map_err(|err| err.to_string())?;
-        batch.clear();
+        let mut person_batch: Vec<PersonJob> = Vec::new();
         for person in people {
             if person.face_asset_id.is_none() {
                 if let Some(face_id) = asset_job::get_random_face_id(&self.pool, &person.id)
                     .await
                     .map_err(|err| err.to_string())?
                 {
-                    asset_job::update_person_face_asset_id(&self.pool, &person.id, &face_id)
-                        .await
-                        .map_err(|err| err.to_string())?;
+                    asset_job::update_person_face_asset_id(
+                        &self.pool,
+                        &person.owner_id,
+                        &person.id,
+                        &face_id,
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
                 } else {
                     continue;
                 }
             }
 
-            batch.push((
-                "PersonGenerateThumbnail".into(),
-                EntityJob {
-                    id: person.id,
-                    source: None,
-                    notify: None,
-                },
-            ));
-            if batch.len() >= JOBS_BATCH_SIZE {
-                self.flush_person_queue_batch(&batch).await?;
-                batch.clear();
+            person_batch.push(PersonJob {
+                owner_id: person.owner_id,
+                person_group_id: person.id,
+            });
+            if person_batch.len() >= JOBS_BATCH_SIZE {
+                self.flush_person_queue_batch(&person_batch).await?;
+                person_batch.clear();
             }
         }
-        self.flush_person_queue_batch(&batch).await?;
+        self.flush_person_queue_batch(&person_batch).await?;
 
         Ok(())
     }
@@ -434,10 +437,10 @@ impl ThumbnailService {
         Ok(())
     }
 
-    async fn flush_person_queue_batch(&self, batch: &[(String, EntityJob)]) -> Result<(), String> {
-        for (_, job) in batch {
+    async fn flush_person_queue_batch(&self, batch: &[PersonJob]) -> Result<(), String> {
+        for job in batch {
             self.jobs
-                .queue_person_generate_thumbnail(&job.id)
+                .queue_person_generate_thumbnail(&job.owner_id, &job.person_group_id)
                 .await
                 .map_err(|err| err.to_string())?;
         }

@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
-use bullmq_rs::JobOptions;
 use crate::models::response::response::ErrorResp;
+use bullmq_rs::JobOptions;
 
 const BULL_PREFIX: &str = "immich_bull";
 
@@ -40,6 +40,13 @@ pub struct EntityJob {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notify: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonJob {
+    pub owner_id: Uuid,
+    pub person_group_id: Uuid,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,11 +140,14 @@ impl JobService {
     }
 
     pub async fn queue_asset_extract_metadata(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
-        self.queue_asset_extract_metadata_with_source(asset_id, "upload")
+        self.queue_asset_extract_metadata_optional_source(asset_id, None)
             .await
     }
 
-    pub async fn queue_asset_extract_metadata_all(&self, asset_ids: &[Uuid]) -> Result<(), ErrorResp> {
+    pub async fn queue_asset_extract_metadata_all(
+        &self,
+        asset_ids: &[Uuid],
+    ) -> Result<(), ErrorResp> {
         for asset_id in asset_ids {
             self.queue_asset_extract_metadata(asset_id).await?;
         }
@@ -149,12 +159,21 @@ impl JobService {
         asset_id: &Uuid,
         source: &str,
     ) -> Result<(), ErrorResp> {
+        self.queue_asset_extract_metadata_optional_source(asset_id, Some(source))
+            .await
+    }
+
+    async fn queue_asset_extract_metadata_optional_source(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_METADATA,
             "AssetExtractMetadata",
             EntityJob {
                 id: *asset_id,
-                source: Some(source.to_string()),
+                source: source.map(str::to_string),
                 notify: None,
             },
         )
@@ -174,14 +193,17 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_person_generate_thumbnail(&self, person_id: &Uuid) -> Result<(), ErrorResp> {
+    pub async fn queue_person_generate_thumbnail(
+        &self,
+        owner_id: &Uuid,
+        person_group_id: &Uuid,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_THUMBNAIL,
             "PersonGenerateThumbnail",
-            EntityJob {
-                id: *person_id,
-                source: None,
-                notify: None,
+            PersonJob {
+                owner_id: *owner_id,
+                person_group_id: *person_group_id,
             },
         )
         .await
@@ -406,14 +428,17 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_person_file_migration(&self, person_id: &Uuid) -> Result<(), ErrorResp> {
+    pub async fn queue_person_file_migration(
+        &self,
+        owner_id: &Uuid,
+        person_group_id: &Uuid,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_MIGRATION,
             "PersonFileMigration",
-            EntityJob {
-                id: *person_id,
-                source: None,
-                notify: None,
+            PersonJob {
+                owner_id: *owner_id,
+                person_group_id: *person_group_id,
             },
         )
         .await
@@ -485,12 +510,20 @@ impl JobService {
     }
 
     pub async fn queue_sidecar_check(&self, asset_id: &Uuid) -> Result<(), ErrorResp> {
+        self.queue_sidecar_check_with_source(asset_id, None).await
+    }
+
+    pub async fn queue_sidecar_check_with_source(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_SIDECAR,
             "SidecarCheck",
             EntityJob {
                 id: *asset_id,
-                source: None,
+                source: source.map(str::to_string),
                 notify: None,
             },
         )
@@ -585,7 +618,9 @@ impl JobService {
             .connection(bullmq_rs::RedisConnection::new(self.redis_url.clone()))
             .build::<serde_json::Value>()
             .await
-            .map_err(|err| ErrorResp::ServerError(format!("Failed to init notification queue: {err}")))?;
+            .map_err(|err| {
+                ErrorResp::ServerError(format!("Failed to init notification queue: {err}"))
+            })?;
 
         if queue.get_job(job_id).await.ok().flatten().is_some() {
             queue.remove(job_id).await.map_err(|err| {
@@ -609,12 +644,16 @@ impl JobService {
         queue_name: &str,
         job_name: &str,
     ) -> Result<(), ErrorResp> {
-        self.add_job(queue_name, job_name, serde_json::json!({})).await
+        self.add_job(queue_name, job_name, serde_json::json!({}))
+            .await
     }
 
     pub async fn create_manual_job(&self, name: &str) -> Result<(), ErrorResp> {
         match name {
-            "tag-cleanup" => self.queue_json_job_empty(QUEUE_BACKGROUND, "TagCleanup").await,
+            "tag-cleanup" => {
+                self.queue_json_job_empty(QUEUE_BACKGROUND, "TagCleanup")
+                    .await
+            }
             "person-cleanup" => {
                 self.queue_json_job_empty(QUEUE_BACKGROUND, "PersonCleanup")
                     .await
@@ -820,12 +859,8 @@ impl JobService {
                 .await
             }
             "metadataExtraction" => {
-                self.queue_json_job(
-                    QUEUE_METADATA,
-                    "AssetExtractMetadataQueueAll",
-                    force_value,
-                )
-                .await
+                self.queue_json_job(QUEUE_METADATA, "AssetExtractMetadataQueueAll", force_value)
+                    .await
             }
             "sidecar" => {
                 self.queue_json_job(QUEUE_SIDECAR, "SidecarQueueAll", force_value)
@@ -844,12 +879,8 @@ impl JobService {
                     .await
             }
             "facialRecognition" => {
-                self.queue_json_job(
-                    QUEUE_FACIAL,
-                    "FacialRecognitionQueueAll",
-                    force_value,
-                )
-                .await
+                self.queue_json_job(QUEUE_FACIAL, "FacialRecognitionQueueAll", force_value)
+                    .await
             }
             "library" => {
                 self.queue_json_job(QUEUE_LIBRARY, "LibraryScanQueueAll", force_value)
@@ -860,9 +891,12 @@ impl JobService {
                     .await
             }
             "ocr" => {
-                self.queue_json_job(QUEUE_OCR, "OcrQueueAll", force_value).await
+                self.queue_json_job(QUEUE_OCR, "OcrQueueAll", force_value)
+                    .await
             }
-            _ => Err(ErrorResp::BadRequest(format!("Invalid job name: {queue_name}"))),
+            _ => Err(ErrorResp::BadRequest(format!(
+                "Invalid job name: {queue_name}"
+            ))),
         }
     }
 
@@ -908,12 +942,7 @@ impl JobService {
         Ok(())
     }
 
-    async fn add_job<T>(
-        &self,
-        queue_name: &str,
-        job_name: &str,
-        data: T,
-    ) -> Result<(), ErrorResp>
+    async fn add_job<T>(&self, queue_name: &str, job_name: &str, data: T) -> Result<(), ErrorResp>
     where
         T: Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
     {
@@ -1004,5 +1033,69 @@ impl JobService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EntityJob, PersonJob};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn entity_job_omits_source_when_none() {
+        let job = EntityJob {
+            id: Uuid::nil(),
+            source: None,
+            notify: None,
+        };
+        let value = serde_json::to_value(&job).unwrap();
+        assert_eq!(value.get("source"), None);
+        assert_eq!(value["id"], json!(Uuid::nil().to_string()));
+    }
+
+    #[test]
+    fn entity_job_serializes_upload_source() {
+        let job = EntityJob {
+            id: Uuid::nil(),
+            source: Some("upload".to_string()),
+            notify: None,
+        };
+        let value = serde_json::to_value(&job).unwrap();
+        assert_eq!(value["source"], json!("upload"));
+    }
+
+    #[test]
+    fn entity_job_deserializes_source() {
+        let job: EntityJob = serde_json::from_value(json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "source": "upload"
+        }))
+        .unwrap();
+        assert_eq!(job.source.as_deref(), Some("upload"));
+    }
+
+    #[test]
+    fn person_job_serializes_camel_case() {
+        let owner = Uuid::from_u128(1);
+        let group = Uuid::from_u128(2);
+        let value = serde_json::to_value(PersonJob {
+            owner_id: owner,
+            person_group_id: group,
+        })
+        .unwrap();
+        assert_eq!(value["ownerId"], json!(owner.to_string()));
+        assert_eq!(value["personGroupId"], json!(group.to_string()));
+    }
+
+    #[test]
+    fn person_job_deserializes_camel_case() {
+        let job: PersonJob = serde_json::from_value(json!({
+            "ownerId": "00000000-0000-0000-0000-000000000001",
+            "personGroupId": "00000000-0000-0000-0000-000000000002"
+        }))
+        .unwrap();
+        assert_eq!(job.owner_id, Uuid::from_u128(1));
+        assert_eq!(job.person_group_id, Uuid::from_u128(2));
     }
 }

@@ -15,8 +15,8 @@ use crate::service::job::JobService;
 use crate::service::plugin_runtime::{self, PluginRuntime};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::workflow::{
-    TYPE_ASSET_V1, WorkflowRunEnd, plugin_result_should_continue, should_write_workflow_log,
-    workflow_run_log,
+    TYPE_ASSET_V1, WorkflowRunEnd, plugin_result_should_continue, shape_asset_v1_payload,
+    should_write_workflow_log, workflow_run_log,
 };
 
 const WORKFLOW_TYPE_ASSET_V1: &str = TYPE_ASSET_V1;
@@ -163,9 +163,12 @@ impl WorkflowExecutionService {
         });
 
         let plugin_key = plugin_runtime::plugin_key(&step.plugin_id, step.host_functions);
-        let result = self
-            .runtime
-            .call_method(&plugin_key, &step.method_name, &payload)?;
+        let result = self.runtime.call_method(
+            &plugin_key,
+            &step.method_name,
+            &payload,
+            &step.allowed_hosts,
+        )?;
 
         if result.get("changes").is_some() {
             apply_asset_v1_changes(&self.asset_service, owner_id, asset_id, &result).await?;
@@ -217,10 +220,11 @@ impl WorkflowExecutionService {
     }
 
     async fn read_asset_v1(&self, asset_id: &Uuid) -> Result<Value, String> {
-        workflow::get_for_asset_v1(&self.pool, asset_id)
+        let asset = workflow::get_for_asset_v1(&self.pool, asset_id)
             .await
             .map_err(|err| err.to_string())?
-            .ok_or_else(|| "Asset not found".to_string())
+            .ok_or_else(|| "Asset not found".to_string())?;
+        Ok(shape_asset_v1_payload(asset))
     }
 }
 

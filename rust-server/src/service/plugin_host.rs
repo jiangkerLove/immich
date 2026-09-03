@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use extism::{CurrentPlugin, Error, Function, UserData, Val, ValType};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -15,6 +16,8 @@ use crate::service::album::{
     AlbumService, AlbumsAddAssetsReq, BulkIdsReq, CreateAlbumReq, GetAlbumsQuery,
 };
 use crate::service::job::JobService;
+use crate::service::tag::{TagBulkAssetsReq, TagService};
+use crate::utils::workflow::hostname_matches_allowed_hosts;
 
 const HOST_NAMESPACE: &str = "extism:host/user";
 
@@ -23,6 +26,11 @@ pub struct HostContext {
     pub pool: PgPool,
     pub jobs: JobService,
     pub jwt_secret: String,
+}
+
+#[derive(Clone, Default)]
+pub struct CallHostContext {
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +46,13 @@ struct WorkflowAuthClaims {
     userId: String,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct HttpRequestOptions {
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+}
+
 struct HostFnState {
     context: Arc<HostContext>,
     name: &'static str,
@@ -46,11 +61,13 @@ struct HostFnState {
 
 impl HostContext {
     pub fn host_functions(context: Arc<Self>, stubs: bool) -> Vec<Function> {
-        const NAMES: [&str; 4] = [
+        const NAMES: [&str; 6] = [
             "searchAlbums",
             "createAlbum",
             "addAssetsToAlbum",
             "addAssetsToAlbums",
+            "httpRequest",
+            "bulkTagAssets",
         ];
 
         NAMES
@@ -113,12 +130,14 @@ impl HostContext {
         })
     }
 
-    async fn dispatch(&self, name: &str, input: HostCallInput) -> Value {
+    async fn dispatch(&self, name: &str, input: HostCallInput, allowed_hosts: &[String]) -> Value {
         match name {
             "searchAlbums" => self.handle_search_albums(input).await,
             "createAlbum" => self.handle_create_album(input).await,
             "addAssetsToAlbum" => self.handle_add_assets_to_album(input).await,
             "addAssetsToAlbums" => self.handle_add_assets_to_albums(input).await,
+            "httpRequest" => self.handle_http_request(input, allowed_hosts).await,
+            "bulkTagAssets" => self.handle_bulk_tag_assets(input).await,
             other => host_error(400, format!("Unknown host function: {other}")),
         }
     }
@@ -169,7 +188,11 @@ impl HostContext {
             Err(value) => return value,
         };
 
-        match self.album_service().add_assets(&auth, &album_id, &dto).await {
+        match self
+            .album_service()
+            .add_assets(&auth, &album_id, &dto)
+            .await
+        {
             Ok(results) => host_success(json!(results)),
             Err(err) => map_error(err),
         }
@@ -188,6 +211,77 @@ impl HostContext {
         match self.album_service().add_assets_to_albums(&auth, &dto).await {
             Ok(result) => host_success(json!(result)),
             Err(err) => map_error(err),
+        }
+    }
+
+    async fn handle_bulk_tag_assets(&self, input: HostCallInput) -> Value {
+        let auth = match self.auth_from_token(&input.authToken).await {
+            Ok(auth) => auth,
+            Err(message) => return host_error(401, message),
+        };
+        let dto: TagBulkAssetsReq = match parse_args(input.args, 0) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
+
+        match TagService::new(self.pool.clone(), self.jobs.clone())
+            .bulk_tag_assets(&auth, &dto)
+            .await
+        {
+            Ok(result) => host_success(json!(result)),
+            Err(err) => map_error(err),
+        }
+    }
+
+    async fn handle_http_request(&self, input: HostCallInput, allowed_hosts: &[String]) -> Value {
+        let url: String = match parse_args(input.args.clone(), 0) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
+        let parsed_url = match url::Url::parse(&url) {
+            Ok(value) => value,
+            Err(err) => return host_error(500, err.to_string()),
+        };
+        let hostname = parsed_url.host_str().unwrap_or_default();
+        if !hostname_matches_allowed_hosts(hostname, allowed_hosts) {
+            return host_error(
+                500,
+                "Hostname did not match any listed in methods[].allowedHosts in the plugin manifest",
+            );
+        }
+
+        let options: HttpRequestOptions = match input.args.get(1) {
+            None | Some(Value::Null) => HttpRequestOptions::default(),
+            Some(value) => match serde_json::from_value(value.clone()) {
+                Ok(options) => options,
+                Err(err) => return host_error(400, err.to_string()),
+            },
+        };
+
+        let method = options.method.as_deref().unwrap_or("GET");
+        let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+        let mut request = reqwest::Client::new().request(method, parsed_url);
+        if let Some(headers) = options.headers {
+            for (key, value) in headers {
+                request = request.header(key, value);
+            }
+        }
+        if let Some(body) = options.body {
+            request = request.body(body);
+        }
+
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let ok = response.status().is_success();
+                let body = response.text().await.unwrap_or_default();
+                host_success(json!({
+                    "ok": ok,
+                    "status": status,
+                    "body": body,
+                }))
+            }
+            Err(err) => host_error(500, err.to_string()),
         }
     }
 }
@@ -219,9 +313,17 @@ fn host_function(
         let input: String = plugin.memory_get(handle)?;
         let parsed: HostCallInput = serde_json::from_str(&input)
             .map_err(|err| Error::msg(format!("Invalid host function input: {err}")))?;
+        let allowed_hosts = plugin
+            .host_context::<CallHostContext>()
+            .map(|ctx| ctx.allowed_hosts.clone())
+            .unwrap_or_default();
 
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(context.dispatch(name, parsed))
+            tokio::runtime::Handle::current().block_on(context.dispatch(
+                name,
+                parsed,
+                &allowed_hosts,
+            ))
         })
     };
 

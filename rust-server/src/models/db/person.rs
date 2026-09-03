@@ -273,13 +273,15 @@ pub async fn count_for_user(
 
 pub async fn get_face_asset_id(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     sqlx::query_scalar(&format!(
         r#"SELECT "faceAssetId" FROM person WHERE {where_id}"#,
-        where_id = schema.where_person_id("", "$1"),
+        where_id = schema.where_owner_and_id("", "$1", "$2"),
     ))
+    .bind(owner_id)
     .bind(person_id)
     .fetch_optional(pool)
     .await
@@ -321,7 +323,7 @@ pub async fn list_without_faces(pool: &Pool<Postgres>) -> Result<Vec<(Uuid, Stri
             LEFT JOIN asset_face af ON {join}
                 AND af."deletedAt" IS NULL
                 AND af."isVisible" = TRUE
-            GROUP BY {group_id}, person."thumbnailPath"
+            GROUP BY {group_id}, person."ownerId", person."thumbnailPath"
             HAVING COUNT(af.id) = 0
         "#,
         group_id = schema.person_id_expr("person."),
@@ -343,6 +345,42 @@ pub async fn delete_by_ids(pool: &Pool<Postgres>, ids: &[Uuid]) -> Result<(), sq
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn delete_empty_groups(pool: &Pool<Postgres>) -> Result<u64, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    if !schema.is_cluster_groups() {
+        return Ok(0);
+    }
+    let result = sqlx::query(
+        r#"
+        DELETE FROM person_group
+        WHERE NOT EXISTS (
+            SELECT 1 FROM person WHERE person."personGroupId" = person_group.id
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn delete_orphaned_cluster_groups(pool: &Pool<Postgres>) -> Result<u64, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    if !schema.is_cluster_groups() {
+        return Ok(0);
+    }
+    let result = sqlx::query(
+        r#"
+        DELETE FROM cluster_group
+        WHERE NOT EXISTS (
+            SELECT 1 FROM "user" WHERE "user"."clusterGroupId" = cluster_group.id
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 #[derive(Debug, FromRow)]
@@ -476,16 +514,18 @@ pub async fn get_distinct_names(
 
 pub async fn set_face_asset_id(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
     face_asset_id: &Uuid,
 ) -> Result<(), sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     sqlx::query(&format!(
-        r#"UPDATE person SET "faceAssetId" = $2 WHERE {where_id}"#,
-        where_id = schema.where_person_id("", "$1"),
+        r#"UPDATE person SET "faceAssetId" = $1 WHERE {where_id}"#,
+        where_id = schema.where_owner_and_id("", "$2", "$3"),
     ))
-    .bind(person_id)
     .bind(face_asset_id)
+    .bind(owner_id)
+    .bind(person_id)
     .execute(pool)
     .await?;
     Ok(())

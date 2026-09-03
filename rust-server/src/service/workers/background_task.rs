@@ -136,9 +136,6 @@ impl BackgroundTaskProcessor {
         let people = crate::models::db::person::list_without_faces(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        if people.is_empty() {
-            return Ok(());
-        }
 
         for (_, thumbnail_path) in &people {
             if !thumbnail_path.is_empty() {
@@ -146,11 +143,26 @@ impl BackgroundTaskProcessor {
             }
         }
 
-        let ids: Vec<Uuid> = people.into_iter().map(|(id, _)| id).collect();
-        crate::models::db::person::delete_by_ids(&self.pool, &ids)
+        if !people.is_empty() {
+            let ids: Vec<Uuid> = people.into_iter().map(|(id, _)| id).collect();
+            let deleted = ids.len();
+            crate::models::db::person::delete_by_ids(&self.pool, &ids)
+                .await
+                .map_err(|err| err.to_string())?;
+            println!("deleted {deleted} people without faces");
+        }
+
+        let person_groups = crate::models::db::person::delete_empty_groups(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        println!("deleted {} people without faces", ids.len());
+        let cluster_groups = crate::models::db::person::delete_orphaned_cluster_groups(&self.pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        if person_groups > 0 || cluster_groups > 0 {
+            println!(
+                "Deleted {person_groups} empty person groups and {cluster_groups} orphaned cluster groups"
+            );
+        }
         Ok(())
     }
 

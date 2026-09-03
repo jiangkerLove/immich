@@ -475,13 +475,13 @@ async fn apply_tagged_faces(
     }
 
     for person_id in new_person_ids.iter().map(|(id, _)| id) {
-        jobs.queue_person_generate_thumbnail(person_id)
+        jobs.queue_person_generate_thumbnail(&asset.owner_id, person_id)
             .await
             .map_err(|err| err.to_string())?;
     }
 
     for (person_id, face_id) in new_person_faces {
-        person::set_face_asset_id(pool, &person_id, &face_id)
+        person::set_face_asset_id(pool, &asset.owner_id, &person_id, &face_id)
             .await
             .map_err(|err| err.to_string())?;
     }

@@ -230,13 +230,10 @@ struct ThumbnailAssetQueryRow {
 
 impl ThumbnailAssetQueryRow {
     fn into_job(self) -> Result<ThumbnailAssetJob, sqlx::Error> {
-        let files: Vec<AssetFileJobRow> =
-            serde_json::from_value(self.files_json).map_err(|err| {
-                sqlx::Error::Decode(Box::new(err))
-            })?;
-        let edits: Vec<AssetEditRow> = serde_json::from_value(self.edits_json).map_err(|err| {
-            sqlx::Error::Decode(Box::new(err))
-        })?;
+        let files: Vec<AssetFileJobRow> = serde_json::from_value(self.files_json)
+            .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
+        let edits: Vec<AssetEditRow> = serde_json::from_value(self.edits_json)
+            .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
         Ok(ThumbnailAssetJob {
             id: self.id,
             owner_id: self.owner_id,
@@ -365,6 +362,7 @@ pub struct PersonThumbnailJobData {
 
 pub async fn get_person_thumbnail_job_data(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
 ) -> Result<Option<PersonThumbnailJobData>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
@@ -396,8 +394,9 @@ pub async fn get_person_thumbnail_job_data(
         WHERE {where_id}
           AND asset_face."deletedAt" IS NULL
         "#,
-        where_id = schema.where_person_id("person.", "$1"),
+        where_id = schema.where_owner_and_id("person.", "$1", "$2"),
     ))
+    .bind(owner_id)
     .bind(person_id)
     .fetch_optional(pool)
     .await
@@ -405,18 +404,20 @@ pub async fn get_person_thumbnail_job_data(
 
 pub async fn update_person_thumbnail_path(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
     thumbnail_path: &str,
 ) -> Result<(), sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     sqlx::query(&format!(
         r#"UPDATE person SET "thumbnailPath" = $1 WHERE {where_id}"#,
-        where_id = schema.where_person_id("", "$2"),
+        where_id = schema.where_owner_and_id("", "$2", "$3"),
     ))
-        .bind(thumbnail_path)
-        .bind(person_id)
-        .execute(pool)
-        .await?;
+    .bind(thumbnail_path)
+    .bind(owner_id)
+    .bind(person_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -443,18 +444,20 @@ pub async fn get_random_face_id(
 
 pub async fn update_person_face_asset_id(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
     face_id: &Uuid,
 ) -> Result<(), sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     sqlx::query(&format!(
         r#"UPDATE person SET "faceAssetId" = $1 WHERE {where_id}"#,
-        where_id = schema.where_person_id("", "$2"),
+        where_id = schema.where_owner_and_id("", "$2", "$3"),
     ))
-        .bind(face_id)
-        .bind(person_id)
-        .execute(pool)
-        .await?;
+    .bind(face_id)
+    .bind(owner_id)
+    .bind(person_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -467,7 +470,7 @@ pub async fn stream_people_for_thumbnail_job(
     if force {
         sqlx::query_as::<_, PersonThumbnailQueueRow>(&format!(
             r#"
-            SELECT {person_id}, "faceAssetId" AS face_asset_id
+            SELECT {person_id}, "ownerId" AS owner_id, "faceAssetId" AS face_asset_id
             FROM person
             ORDER BY {order_id}
             "#,
@@ -478,7 +481,7 @@ pub async fn stream_people_for_thumbnail_job(
     } else {
         sqlx::query_as::<_, PersonThumbnailQueueRow>(&format!(
             r#"
-            SELECT {person_id}, "faceAssetId" AS face_asset_id
+            SELECT {person_id}, "ownerId" AS owner_id, "faceAssetId" AS face_asset_id
             FROM person
             WHERE "thumbnailPath" = ''
             ORDER BY {order_id}
@@ -493,6 +496,7 @@ pub async fn stream_people_for_thumbnail_job(
 #[derive(Debug, Clone, FromRow)]
 pub struct PersonThumbnailQueueRow {
     pub id: Uuid,
+    pub owner_id: Uuid,
     pub face_asset_id: Option<Uuid>,
 }
 
@@ -659,10 +663,8 @@ struct VideoConversionQueryRow {
 
 impl VideoConversionQueryRow {
     fn into_job(self) -> Result<VideoConversionJob, sqlx::Error> {
-        let files: Vec<VideoConversionFileRow> =
-            serde_json::from_value(self.files_json).map_err(|err| {
-                sqlx::Error::Decode(Box::new(err))
-            })?;
+        let files: Vec<VideoConversionFileRow> = serde_json::from_value(self.files_json)
+            .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
         Ok(VideoConversionJob {
             id: self.id,
             owner_id: self.owner_id,

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use extism::{Manifest, Plugin, Wasm};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::models::db::plugin::{PluginLoadMethodJson, PluginLoadRow};
 use crate::service::job::JobService;
-use crate::service::plugin_host::HostContext;
+use crate::service::plugin_host::{CallHostContext, HostContext};
 use crate::utils::crypto::random_bytes_as_text;
 
 pub struct PluginRuntime {
@@ -91,6 +91,7 @@ impl PluginRuntime {
         plugin_key: &str,
         method_name: &str,
         input: &Value,
+        allowed_hosts: &[String],
     ) -> Result<Value, String> {
         let input_str = serde_json::to_string(input).map_err(|err| err.to_string())?;
         let mut plugins = self.plugins.lock().map_err(|err| err.to_string())?;
@@ -98,7 +99,13 @@ impl PluginRuntime {
             .get_mut(plugin_key)
             .ok_or_else(|| format!("No loaded plugin found for {plugin_key}"))?;
         let output: String = plugin
-            .call(method_name, input_str.as_str())
+            .call_with_host_context(
+                method_name,
+                input_str.as_str(),
+                CallHostContext {
+                    allowed_hosts: allowed_hosts.to_vec(),
+                },
+            )
             .map_err(|err| err.to_string())?;
         if output.is_empty() {
             return Ok(Value::Null);

@@ -50,8 +50,16 @@ pub struct WorkflowCreateReq {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowUpdateReq {
     pub trigger: Option<String>,
-    pub name: Option<String>,
-    pub description: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
+    pub name: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
+    pub description: Option<Option<String>>,
     pub enabled: Option<bool>,
     pub logging: Option<bool>,
     pub steps: Option<Vec<WorkflowStepReq>>,
@@ -211,8 +219,8 @@ impl WorkflowService {
             &self.pool,
             id,
             dto.trigger.as_deref(),
-            dto.name.as_ref().map(|name| Some(name.as_str())),
-            dto.description.as_ref().map(|desc| Some(desc.as_str())),
+            dto.name.as_ref().map(|name| name.as_deref()),
+            dto.description.as_ref().map(|desc| desc.as_deref()),
             dto.enabled,
             dto.logging,
             steps.as_deref(),
@@ -260,12 +268,8 @@ impl WorkflowService {
         permission: Permission,
     ) -> Result<(), ErrorResp> {
         require_permission(auth, permission.clone())?;
-        let denied = || {
-            ErrorResp::BadRequest(format!(
-                "Not found or no {} access",
-                permission.as_str()
-            ))
-        };
+        let denied =
+            || ErrorResp::BadRequest(format!("Not found or no {} access", permission.as_str()));
         let Some(row) = workflow::get_by_id(&self.pool, id)
             .await
             .map_err(ErrorResp::from)?
@@ -394,6 +398,23 @@ mod tests {
     fn update_req_omitted_logging_is_none() {
         let dto: WorkflowUpdateReq = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
         assert_eq!(dto.logging, None);
+        assert_eq!(dto.name, None);
+        assert_eq!(dto.description, None);
+    }
+
+    #[test]
+    fn update_req_null_name_and_description_clear() {
+        let dto: WorkflowUpdateReq =
+            serde_json::from_str(r#"{"name":null,"description":null}"#).unwrap();
+        assert_eq!(dto.name, Some(None));
+        assert_eq!(dto.description, Some(None));
+    }
+
+    #[test]
+    fn update_req_name_value_is_some_some() {
+        let dto: WorkflowUpdateReq = serde_json::from_str(r#"{"name":"nightly"}"#).unwrap();
+        assert_eq!(dto.name, Some(Some("nightly".to_string())));
+        assert_eq!(dto.description, None);
     }
 
     #[test]
