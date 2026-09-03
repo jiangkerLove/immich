@@ -8,12 +8,15 @@ use crate::models::db::plugin;
 use crate::models::db::sessions::AuthSession;
 use crate::models::db::users::AuthUserDb;
 use crate::models::db::workflow::{self, WorkflowRunRow, WorkflowRunStep};
+use crate::models::db::workflow_log;
 use crate::models::dto::auth::AuthDto;
 use crate::service::asset::{AssetService, UpdateAssetReq};
 use crate::service::job::JobService;
 use crate::service::plugin_runtime::{self, PluginRuntime};
 use crate::service::websocket::WebSocketHub;
-use crate::utils::workflow::TYPE_ASSET_V1;
+use crate::utils::workflow::{
+    TYPE_ASSET_V1, WORKFLOW_RESULT_COMPLETED, WORKFLOW_RESULT_ERROR, WORKFLOW_RESULT_HALTED,
+};
 
 const WORKFLOW_TYPE_ASSET_V1: &str = TYPE_ASSET_V1;
 
@@ -86,53 +89,131 @@ impl WorkflowExecutionService {
     ) -> Result<WorkflowExecutionOutcome, String> {
         let mut asset_data = self.read_asset_v1(asset_id).await?;
         let owner_id = parse_owner_id(&asset_data)?;
+        let run_id = Uuid::new_v4();
 
         for step in steps {
             if step.method_name.starts_with("noop") {
                 continue;
             }
 
-            let payload = json!({
-                "trigger": workflow.trigger,
-                "type": WORKFLOW_TYPE_ASSET_V1,
-                "config": step.config.clone().unwrap_or_else(|| json!({})),
-                "workflow": {
-                    "id": workflow.id,
-                    "authToken": self.runtime.sign_auth_token(&owner_id)?,
-                    "stepId": step.id,
-                },
-                "data": {
-                    "asset": asset_data,
-                },
-            });
-
-            let plugin_key = plugin_runtime::plugin_key(&step.plugin_id, step.host_functions);
-            let result = self
-                .runtime
-                .call_method(&plugin_key, &step.method_name, &payload)?;
-
-            if result.get("changes").is_some() {
-                apply_asset_v1_changes(&self.asset_service, &owner_id, asset_id, &result).await?;
-                asset_data = self.read_asset_v1(asset_id).await?;
-            }
-
-            if let Some(config) = result.get("config") {
-                workflow::update_step_config(&self.pool, &step.id, config)
-                    .await
-                    .map_err(|err| err.to_string())?;
-            }
-
-            let should_continue = result
-                .get("workflow")
-                .and_then(|value| value.get("continue"))
-                .and_then(|value| value.as_bool())
-                .unwrap_or(true);
-            if !should_continue {
-                break;
+            match self
+                .execute_asset_v1_step(workflow, step, asset_id, &owner_id, &mut asset_data)
+                .await
+            {
+                Ok(StepOutcome::Continue) => {}
+                Ok(StepOutcome::Halted) => {
+                    self.log_run(
+                        workflow,
+                        WORKFLOW_RESULT_HALTED,
+                        Some(&step.id),
+                        Some(asset_id),
+                        &run_id,
+                    )
+                    .await?;
+                    return Ok(WorkflowExecutionOutcome::Success);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Error executing workflow {} run {}: {err}",
+                        workflow.id, run_id
+                    );
+                    self.log_run(
+                        workflow,
+                        WORKFLOW_RESULT_ERROR,
+                        Some(&step.id),
+                        Some(asset_id),
+                        &run_id,
+                    )
+                    .await?;
+                    return Ok(WorkflowExecutionOutcome::Failed);
+                }
             }
         }
 
+        self.log_run(
+            workflow,
+            WORKFLOW_RESULT_COMPLETED,
+            None,
+            Some(asset_id),
+            &run_id,
+        )
+        .await?;
         Ok(WorkflowExecutionOutcome::Success)
+    }
+
+    async fn execute_asset_v1_step(
+        &self,
+        workflow: &WorkflowRunRow,
+        step: &WorkflowRunStep,
+        asset_id: &Uuid,
+        owner_id: &Uuid,
+        asset_data: &mut Value,
+    ) -> Result<StepOutcome, String> {
+        let payload = json!({
+            "trigger": workflow.trigger,
+            "type": WORKFLOW_TYPE_ASSET_V1,
+            "config": step.config.clone().unwrap_or_else(|| json!({})),
+            "workflow": {
+                "id": workflow.id,
+                "authToken": self.runtime.sign_auth_token(owner_id)?,
+                "stepId": step.id,
+            },
+            "data": {
+                "asset": asset_data,
+            },
+        });
+
+        let plugin_key = plugin_runtime::plugin_key(&step.plugin_id, step.host_functions);
+        let result = self
+            .runtime
+            .call_method(&plugin_key, &step.method_name, &payload)?;
+
+        if result.get("changes").is_some() {
+            apply_asset_v1_changes(&self.asset_service, owner_id, asset_id, &result).await?;
+            *asset_data = self.read_asset_v1(asset_id).await?;
+        }
+
+        if let Some(config) = result.get("config") {
+            workflow::update_step_config(&self.pool, &step.id, config)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+
+        let should_continue = result
+            .get("workflow")
+            .and_then(|value| value.get("continue"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+
+        if should_continue {
+            Ok(StepOutcome::Continue)
+        } else {
+            Ok(StepOutcome::Halted)
+        }
+    }
+
+    async fn log_run(
+        &self,
+        workflow: &WorkflowRunRow,
+        result: &str,
+        workflow_step_id: Option<&Uuid>,
+        trigger_data_id: Option<&Uuid>,
+        run_id: &Uuid,
+    ) -> Result<(), String> {
+        if !workflow.logging {
+            return Ok(());
+        }
+
+        workflow_log::insert_log(
+            &self.pool,
+            &workflow.id,
+            result,
+            workflow_step_id,
+            trigger_data_id,
+            run_id,
+        )
+        .await
+        .map_err(|err| err.to_string())
     }
 
     async fn read_asset_v1(&self, asset_id: &Uuid) -> Result<Value, String> {
@@ -141,6 +222,12 @@ impl WorkflowExecutionService {
             .map_err(|err| err.to_string())?
             .ok_or_else(|| "Asset not found".to_string())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepOutcome {
+    Continue,
+    Halted,
 }
 
 fn infer_workflow_type(steps: &[WorkflowRunStep]) -> Option<&'static str> {

@@ -39,6 +39,7 @@ pub struct WorkflowCreateReq {
     pub name: Option<String>,
     pub description: Option<String>,
     pub enabled: Option<bool>,
+    pub logging: Option<bool>,
     pub steps: Option<Vec<WorkflowStepReq>>,
 }
 
@@ -49,6 +50,7 @@ pub struct WorkflowUpdateReq {
     pub name: Option<String>,
     pub description: Option<String>,
     pub enabled: Option<bool>,
+    pub logging: Option<bool>,
     pub steps: Option<Vec<WorkflowStepReq>>,
 }
 
@@ -71,6 +73,7 @@ pub struct WorkflowResponse {
     pub created_at: String,
     pub updated_at: String,
     pub enabled: bool,
+    pub logging: bool,
     pub steps: Vec<WorkflowStepResponse>,
 }
 
@@ -172,6 +175,7 @@ impl WorkflowService {
             dto.name.as_deref(),
             dto.description.as_deref(),
             dto.enabled.unwrap_or(true),
+            dto.logging.unwrap_or(false),
             &steps,
         )
         .await
@@ -202,6 +206,7 @@ impl WorkflowService {
             dto.name.as_ref().map(|name| Some(name.as_str())),
             dto.description.as_ref().map(|desc| Some(desc.as_str())),
             dto.enabled,
+            dto.logging,
             steps.as_deref(),
         )
         .await
@@ -302,6 +307,7 @@ fn map_workflow(row: WorkflowRow) -> WorkflowResponse {
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         enabled: row.enabled,
+        logging: row.logging,
         steps: map_steps(row.steps, false),
     }
 }

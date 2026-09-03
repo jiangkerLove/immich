@@ -2,6 +2,10 @@ pub const TRIGGER_ASSET_CREATE: &str = "AssetCreate";
 pub const TRIGGER_ASSET_METADATA: &str = "AssetMetadataExtraction";
 pub const TYPE_ASSET_V1: &str = "AssetV1";
 
+pub const WORKFLOW_RESULT_COMPLETED: &str = "completed";
+pub const WORKFLOW_RESULT_HALTED: &str = "halted";
+pub const WORKFLOW_RESULT_ERROR: &str = "error";
+
 pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
     vec![
         WorkflowTriggerResponse {

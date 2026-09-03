@@ -57,3 +57,27 @@ pub async fn get_logs(
 
     query.build_query_as().fetch_all(pool).await
 }
+
+pub async fn insert_log(
+    pool: &Pool<Postgres>,
+    workflow_id: &Uuid,
+    result: &str,
+    workflow_step_id: Option<&Uuid>,
+    trigger_data_id: Option<&Uuid>,
+    run_id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO workflow_log ("workflowId", result, "workflowStepId", "triggerDataId", "runId")
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind(workflow_id)
+    .bind(result)
+    .bind(workflow_step_id)
+    .bind(trigger_data_id)
+    .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

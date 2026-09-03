@@ -12,6 +12,7 @@ pub struct WorkflowRow {
     pub description: Option<String>,
     pub trigger: String,
     pub enabled: bool,
+    pub logging: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub steps: Value,
@@ -25,6 +26,7 @@ const WORKFLOW_SELECT: &str = r#"
         workflow.description,
         workflow.trigger,
         workflow.enabled,
+        workflow.logging,
         workflow."createdAt" as created_at,
         workflow."updatedAt" as updated_at,
         (
@@ -98,13 +100,14 @@ pub async fn create(
     name: Option<&str>,
     description: Option<&str>,
     enabled: bool,
+    logging: bool,
     steps: &[(Uuid, bool, Option<Value>)],
 ) -> Result<WorkflowRow, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let id: Uuid = sqlx::query_scalar(
         r#"
-        INSERT INTO workflow ("ownerId", trigger, name, description, enabled)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO workflow ("ownerId", trigger, name, description, enabled, logging)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         "#,
     )
@@ -113,6 +116,7 @@ pub async fn create(
     .bind(name)
     .bind(description)
     .bind(enabled)
+    .bind(logging)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -131,12 +135,21 @@ pub async fn update(
     name: Option<Option<&str>>,
     description: Option<Option<&str>>,
     enabled: Option<bool>,
+    logging: Option<bool>,
     steps: Option<&[(Uuid, bool, Option<Value>)]>,
 ) -> Result<WorkflowRow, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let current = get_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)?;
 
-    if trigger.is_some() || name.is_some() || description.is_some() || enabled.is_some() {
+    if logging == Some(false) {
+        sqlx::query(r#"DELETE FROM workflow_log WHERE "workflowId" = $1"#)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    if trigger.is_some() || name.is_some() || description.is_some() || enabled.is_some() || logging.is_some()
+    {
         let next_name = match name {
             None => current.name.as_deref(),
             Some(value) => value,
@@ -153,6 +166,7 @@ pub async fn update(
                 name = $3,
                 description = $4,
                 enabled = $5,
+                logging = $6,
                 "updatedAt" = NOW()
             WHERE id = $1
             "#,
@@ -162,6 +176,7 @@ pub async fn update(
         .bind(next_name)
         .bind(next_description)
         .bind(enabled.unwrap_or(current.enabled))
+        .bind(logging.unwrap_or(current.logging))
         .execute(&mut *tx)
         .await?;
     }
@@ -230,6 +245,7 @@ pub struct WorkflowRunRow {
     pub id: Uuid,
     pub name: Option<String>,
     pub trigger: String,
+    pub logging: bool,
     pub steps: Value,
 }
 
@@ -254,6 +270,7 @@ pub async fn get_for_workflow_run(
             workflow.id,
             workflow.name,
             workflow.trigger,
+            workflow.logging,
             (
                 SELECT COALESCE(json_agg(step ORDER BY workflow_step."order"), '[]'::json)
                 FROM (
