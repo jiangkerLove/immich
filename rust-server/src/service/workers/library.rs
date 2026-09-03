@@ -13,7 +13,7 @@ use crate::models::db::assets::{self, NewLibraryAsset};
 use crate::models::db::library::{self, LibraryAssetSyncRow, LibraryRow};
 use crate::service::job::JobService;
 use crate::utils::checksum::sha1_bytes;
-use crate::utils::file_walk::walk_file_batches;
+use crate::utils::file_walk::{is_hidden_path, walk_file_batches};
 use crate::utils::fs_access::has_read_access;
 use crate::utils::glob::path_matches_exclusion;
 use crate::utils::mime_types::{is_video_path, supported_file_extensions};
@@ -248,7 +248,7 @@ impl LibraryProcessor {
         for path_batch in batches {
             let filtered: Vec<String> = path_batch
                 .into_iter()
-                .filter(|path| !is_hidden_path(path))
+                .filter(|path| !is_hidden_path(Path::new(path)))
                 .filter(|path| !path_matches_exclusion(path, &library_row.exclusion_patterns))
                 .collect();
 
@@ -677,13 +677,6 @@ fn queue_sync_assets_status(library_found: bool) -> JobWorkerStatus {
     } else {
         JobWorkerStatus::Skipped
     }
-}
-
-fn is_hidden_path(path: &str) -> bool {
-    Path::new(path)
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .any(|part| part.starts_with('.'))
 }
 
 fn import_progress_suffix(progress_counter: Option<u64>, total_assets: Option<u64>) -> String {

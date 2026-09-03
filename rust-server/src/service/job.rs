@@ -127,7 +127,7 @@ impl JobService {
     }
 
     pub async fn queue_version_check(&self) -> Result<(), ErrorResp> {
-        self.queue_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
+        self.queue_deduplicated_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
             .await
     }
 
@@ -347,12 +347,16 @@ impl JobService {
         force: bool,
         cluster_group_id: Option<Uuid>,
     ) -> Result<(), ErrorResp> {
-        self.add_job(
+        self.add_job_with_options(
             QUEUE_FACIAL,
             "FacialRecognitionQueueAll",
             serde_json::json!({
                 "force": force,
                 "clusterGroupId": cluster_group_id,
+            }),
+            Some(bullmq_rs::JobOptions {
+                job_id: Some("FacialRecognitionQueueAll".to_string()),
+                ..Default::default()
             }),
         )
         .await
@@ -657,6 +661,41 @@ impl JobService {
             .await
     }
 
+    pub async fn queue_deduplicated_json_job_empty(
+        &self,
+        queue_name: &str,
+        job_name: &str,
+    ) -> Result<(), ErrorResp> {
+        self.add_job_with_options(
+            queue_name,
+            job_name,
+            serde_json::json!({}),
+            Some(bullmq_rs::JobOptions {
+                job_id: Some(job_name.to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+    }
+
+    pub async fn queue_deduplicated_json_job(
+        &self,
+        queue_name: &str,
+        job_name: &str,
+        data: serde_json::Value,
+    ) -> Result<(), ErrorResp> {
+        self.add_job_with_options(
+            queue_name,
+            job_name,
+            data,
+            Some(bullmq_rs::JobOptions {
+                job_id: Some(job_name.to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+    }
+
     pub async fn create_manual_job(&self, name: &str) -> Result<(), ErrorResp> {
         match name {
             "tag-cleanup" => {
@@ -680,8 +719,12 @@ impl JobService {
                     .await
             }
             "backup-database" => {
-                self.queue_json_job(QUEUE_BACKUP, "DatabaseBackup", serde_json::json!({}))
-                    .await
+                self.queue_deduplicated_json_job(
+                    QUEUE_BACKUP,
+                    "DatabaseBackup",
+                    serde_json::json!({}),
+                )
+                .await
             }
             "integrity-missing-files" => {
                 self.queue_json_job(

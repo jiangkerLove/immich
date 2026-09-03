@@ -39,9 +39,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                 }
             };
 
-            let Some(database) = config
-                .get("backup")
-                .and_then(|value| value.get("database"))
+            let Some(database) = config.get("backup").and_then(|value| value.get("database"))
             else {
                 continue;
             };
@@ -72,7 +70,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
             }
 
             if let Err(err) = jobs
-                .queue_json_job(QUEUE_BACKUP, "DatabaseBackup", serde_json::json!({}))
+                .queue_deduplicated_json_job(QUEUE_BACKUP, "DatabaseBackup", serde_json::json!({}))
                 .await
             {
                 eprintln!("backup scheduler: failed to queue DatabaseBackup: {err}");

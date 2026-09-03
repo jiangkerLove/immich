@@ -121,6 +121,12 @@ rustfmt +stable --edition 2024 <edited-files...>
 
 优先做**小而可验证**的 TS ↔ rust 行为对齐切片。
 
+### PR 合并节奏
+
+- 可在同一 `cursor/*` 分支上**连续积累多批**迁移改动，不必每做一小点就合并
+- 合并前确保 `cargo +stable test --offline --lib` 通过
+- 合并到 `dev-rust` 后删除该功能分支
+
 ---
 
 ## 上游同步（main → dev-rust）

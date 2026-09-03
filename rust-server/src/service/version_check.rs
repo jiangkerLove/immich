@@ -18,6 +18,7 @@ const MIN_CHECK_INTERVAL_SECS: i64 = 50;
 pub enum VersionCheckOutcome {
     Success,
     Skipped,
+    Failed,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,19 +131,28 @@ pub async fn run_version_check(
         return Ok(VersionCheckOutcome::Skipped);
     }
 
-    let release = fetch_latest_release(env, channel).await?;
+    let release = match fetch_latest_release(env, channel).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Unable to run version check: {err}");
+            return Ok(VersionCheckOutcome::Failed);
+        }
+    };
     let checked_at = Utc::now().to_rfc3339();
     let metadata = VersionCheckState {
         checked_at: Some(checked_at.clone()),
         release_version: Some(release.version.clone()),
     };
-    system_metadata::set_json(
+    if let Err(err) = system_metadata::set_json(
         pool,
         "version-check-state",
         &serde_json::to_value(&metadata).unwrap_or_default(),
     )
     .await
-    .map_err(|err| err.to_string())?;
+    {
+        eprintln!("Unable to run version check: {err}");
+        return Ok(VersionCheckOutcome::Failed);
+    }
 
     if is_newer_release(SERVER_VERSION, &release.version, include_prerelease) {
         println!(

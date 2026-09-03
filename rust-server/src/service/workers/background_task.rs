@@ -232,10 +232,15 @@ impl BackgroundTaskProcessor {
             &self.websocket,
             self.env.immich_env.as_ref(),
         )
-        .await?
+        .await
         {
-            version_check::VersionCheckOutcome::Success => Ok(JobWorkerStatus::Success),
-            version_check::VersionCheckOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+            Ok(version_check::VersionCheckOutcome::Success) => Ok(JobWorkerStatus::Success),
+            Ok(version_check::VersionCheckOutcome::Skipped) => Ok(JobWorkerStatus::Skipped),
+            Ok(version_check::VersionCheckOutcome::Failed) => Ok(JobWorkerStatus::Failed),
+            Err(err) => {
+                eprintln!("Unable to run version check: {err}");
+                Ok(JobWorkerStatus::Failed)
+            }
         }
     }
 

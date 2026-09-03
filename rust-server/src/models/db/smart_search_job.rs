@@ -6,6 +6,7 @@ pub struct ClipEncodingAsset {
     pub id: Uuid,
     pub visibility: String,
     pub preview_path: Option<String>,
+    pub preview_file_count: i64,
 }
 
 pub async fn get_for_clip_encoding(
@@ -24,7 +25,14 @@ pub async fn get_for_clip_encoding(
                   AND af.type = 'preview'
                   AND af."isEdited" = false
                 LIMIT 1
-            ) AS preview_path
+            ) AS preview_path,
+            (
+                SELECT COUNT(*)::bigint
+                FROM asset_file af
+                WHERE af."assetId" = asset.id
+                  AND af.type = 'preview'
+                  AND af."isEdited" = false
+            ) AS preview_file_count
         FROM asset
         WHERE asset.id = $1
         LIMIT 1

@@ -106,6 +106,10 @@ impl FaceDetectionService {
             return Ok(FaceDetectionOutcome::Failed);
         };
 
+        if asset.preview_file_count != 1 {
+            return Ok(FaceDetectionOutcome::Failed);
+        }
+
         let Some(preview_path) = asset.preview_path else {
             return Ok(FaceDetectionOutcome::Failed);
         };

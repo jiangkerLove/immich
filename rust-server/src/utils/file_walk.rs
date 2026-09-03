@@ -30,7 +30,7 @@ pub fn walk_file_batches(
     batches
 }
 
-fn is_hidden_path(path: &Path) -> bool {
+pub fn is_hidden_path(path: &Path) -> bool {
     path.components()
         .filter_map(|component| component.as_os_str().to_str())
         .any(|part| part.starts_with('.'))

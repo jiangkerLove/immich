@@ -93,6 +93,10 @@ impl SmartSearchService {
             return Ok(SmartSearchOutcome::Failed);
         };
 
+        if asset.preview_file_count != 1 {
+            return Ok(SmartSearchOutcome::Failed);
+        }
+
         let Some(preview_path) = asset.preview_path else {
             return Ok(SmartSearchOutcome::Failed);
         };

@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::models::db::library::{self, LibraryRow};
 use crate::service::job::JobService;
+use crate::utils::file_walk::is_hidden_path;
 use crate::utils::glob::path_matches_exclusion;
 use crate::utils::mime_types::is_supported_media_path;
 use crate::utils::system_config::{get_merged, json_bool};
@@ -276,6 +277,10 @@ async fn handle_watch_event(context: &WatchContext, event: Event) {
         }
 
         if path_matches_exclusion(&path_str, &context.exclusion_patterns) {
+            continue;
+        }
+
+        if is_hidden_path(Path::new(&path_str)) {
             continue;
         }
 
