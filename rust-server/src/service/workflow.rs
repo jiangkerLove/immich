@@ -12,7 +12,9 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::plugin::find_validation_method;
 use crate::utils::permission::require_permission;
-use crate::utils::workflow::{as_plugin_key, get_workflow_triggers, is_method_compatible, WorkflowTriggerResponse};
+use crate::utils::workflow::{
+    WorkflowTriggerResponse, as_plugin_key, get_workflow_triggers, is_method_compatible,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,7 +154,11 @@ impl WorkflowService {
         Ok(map_workflow(row))
     }
 
-    pub async fn share(&self, auth: &AuthDto, id: &Uuid) -> Result<WorkflowShareResponse, ErrorResp> {
+    pub async fn share(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+    ) -> Result<WorkflowShareResponse, ErrorResp> {
         self.require_workflow_access(auth, id, Permission::WorkflowRead)
             .await?;
         let row = self.find_or_fail(id).await?;
@@ -231,15 +237,10 @@ impl WorkflowService {
         self.require_workflow_access(auth, id, Permission::WorkflowLogs)
             .await?;
         let limit = query.limit.unwrap_or(50).clamp(1, 250);
-        let rows = workflow_log::get_logs(
-            &self.pool,
-            id,
-            query.result.as_deref(),
-            query.before,
-            limit,
-        )
-        .await
-        .map_err(ErrorResp::from)?;
+        let rows =
+            workflow_log::get_logs(&self.pool, id, query.result.as_deref(), query.before, limit)
+                .await
+                .map_err(ErrorResp::from)?;
         Ok(rows.into_iter().map(map_workflow_log).collect())
     }
 
@@ -278,9 +279,8 @@ impl WorkflowService {
         let mut resolved = Vec::with_capacity(steps.len());
 
         for step in steps {
-            let plugin_method = find_validation_method(&methods, &step.method).ok_or_else(|| {
-                ErrorResp::BadRequest(format!("Unknown method {}", step.method))
-            })?;
+            let plugin_method = find_validation_method(&methods, &step.method)
+                .ok_or_else(|| ErrorResp::BadRequest(format!("Unknown method {}", step.method)))?;
             if !is_method_compatible(&plugin_method.types, trigger) {
                 return Err(ErrorResp::BadRequest(format!(
                     "Method \"{}\" is incompatible with workflow trigger: \"{trigger}\"",
@@ -357,5 +357,90 @@ fn map_workflow_log(row: workflow_log::WorkflowLogRow) -> WorkflowLogEntryRespon
         result: row.result,
         trigger_data_id: row.trigger_data_id,
         last_step,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::workflow::WORKFLOW_RESULT_COMPLETED;
+
+    #[test]
+    fn create_req_deserializes_logging() {
+        let dto: WorkflowCreateReq =
+            serde_json::from_str(r#"{"trigger":"AssetCreate","name":"nightly","logging":true}"#)
+                .unwrap();
+        assert_eq!(dto.logging, Some(true));
+        assert_eq!(dto.trigger, "AssetCreate");
+    }
+
+    #[test]
+    fn update_req_deserializes_logging_false() {
+        let dto: WorkflowUpdateReq = serde_json::from_str(r#"{"logging":false}"#).unwrap();
+        assert_eq!(dto.logging, Some(false));
+    }
+
+    #[test]
+    fn update_req_omitted_logging_is_none() {
+        let dto: WorkflowUpdateReq = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert_eq!(dto.logging, None);
+    }
+
+    #[test]
+    fn workflow_response_serializes_logging() {
+        let json = serde_json::to_value(WorkflowResponse {
+            id: Uuid::nil(),
+            trigger: "AssetCreate".to_string(),
+            name: Some("test".to_string()),
+            description: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            enabled: true,
+            logging: true,
+            steps: vec![],
+        })
+        .unwrap();
+        assert_eq!(json["logging"], true);
+        assert_eq!(json["createdAt"], "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn log_entry_includes_last_step_for_halted_or_error() {
+        let plugin_id = Uuid::from_u128(1);
+        let row = workflow_log::WorkflowLogRow {
+            id: Uuid::from_u128(2),
+            created_at: "2026-09-03T01:00:00Z".parse().unwrap(),
+            result: "halted".to_string(),
+            workflow_id: Uuid::from_u128(3),
+            workflow_step_id: Some(Uuid::from_u128(4)),
+            trigger_data_id: Some(Uuid::from_u128(5)),
+            step_order: Some(0),
+            plugin_id: Some(plugin_id),
+            method_name: Some("filter".to_string()),
+        };
+        let entry = map_workflow_log(row);
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["result"], "halted");
+        assert_eq!(json["lastStep"]["index"], 0);
+        assert_eq!(json["lastStep"]["method"], format!("{plugin_id}#filter"));
+        assert_eq!(json["triggerDataId"], Uuid::from_u128(5).to_string());
+    }
+
+    #[test]
+    fn completed_log_omits_last_step() {
+        let row = workflow_log::WorkflowLogRow {
+            id: Uuid::from_u128(2),
+            created_at: "2026-09-03T01:00:00Z".parse().unwrap(),
+            result: WORKFLOW_RESULT_COMPLETED.to_string(),
+            workflow_id: Uuid::from_u128(3),
+            workflow_step_id: None,
+            trigger_data_id: Some(Uuid::from_u128(5)),
+            step_order: None,
+            plugin_id: None,
+            method_name: None,
+        };
+        let json = serde_json::to_value(map_workflow_log(row)).unwrap();
+        assert_eq!(json["result"], "completed");
+        assert!(json.get("lastStep").is_none());
     }
 }

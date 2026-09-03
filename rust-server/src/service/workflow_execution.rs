@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -15,7 +15,8 @@ use crate::service::job::JobService;
 use crate::service::plugin_runtime::{self, PluginRuntime};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::workflow::{
-    TYPE_ASSET_V1, WORKFLOW_RESULT_COMPLETED, WORKFLOW_RESULT_ERROR, WORKFLOW_RESULT_HALTED,
+    TYPE_ASSET_V1, WorkflowRunEnd, plugin_result_should_continue, should_write_workflow_log,
+    workflow_run_log,
 };
 
 const WORKFLOW_TYPE_ASSET_V1: &str = TYPE_ASSET_V1;
@@ -74,9 +75,7 @@ impl WorkflowExecutionService {
         };
 
         match workflow_type {
-            WORKFLOW_TYPE_ASSET_V1 => {
-                self.execute_asset_v1(&workflow, &steps, asset_id).await
-            }
+            WORKFLOW_TYPE_ASSET_V1 => self.execute_asset_v1(&workflow, &steps, asset_id).await,
             _ => Ok(WorkflowExecutionOutcome::Skipped),
         }
     }
@@ -104,7 +103,7 @@ impl WorkflowExecutionService {
                 Ok(StepOutcome::Halted) => {
                     self.log_run(
                         workflow,
-                        WORKFLOW_RESULT_HALTED,
+                        WorkflowRunEnd::Halted,
                         Some(&step.id),
                         Some(asset_id),
                         &run_id,
@@ -119,7 +118,7 @@ impl WorkflowExecutionService {
                     );
                     self.log_run(
                         workflow,
-                        WORKFLOW_RESULT_ERROR,
+                        WorkflowRunEnd::Error,
                         Some(&step.id),
                         Some(asset_id),
                         &run_id,
@@ -132,7 +131,7 @@ impl WorkflowExecutionService {
 
         self.log_run(
             workflow,
-            WORKFLOW_RESULT_COMPLETED,
+            WorkflowRunEnd::Completed,
             None,
             Some(asset_id),
             &run_id,
@@ -179,13 +178,7 @@ impl WorkflowExecutionService {
                 .map_err(|err| err.to_string())?;
         }
 
-        let should_continue = result
-            .get("workflow")
-            .and_then(|value| value.get("continue"))
-            .and_then(|value| value.as_bool())
-            .unwrap_or(true);
-
-        if should_continue {
+        if plugin_result_should_continue(&result) {
             Ok(StepOutcome::Continue)
         } else {
             Ok(StepOutcome::Halted)
@@ -195,20 +188,27 @@ impl WorkflowExecutionService {
     async fn log_run(
         &self,
         workflow: &WorkflowRunRow,
-        result: &str,
+        end: WorkflowRunEnd,
         workflow_step_id: Option<&Uuid>,
         trigger_data_id: Option<&Uuid>,
         run_id: &Uuid,
     ) -> Result<(), String> {
-        if !workflow.logging {
+        if !should_write_workflow_log(workflow.logging) {
             return Ok(());
         }
+
+        let log = workflow_run_log(end);
+        let step_id = if log.include_step_id {
+            workflow_step_id
+        } else {
+            None
+        };
 
         workflow_log::insert_log(
             &self.pool,
             &workflow.id,
-            result,
-            workflow_step_id,
+            log.result,
+            step_id,
             trigger_data_id,
             run_id,
         )
@@ -295,11 +295,15 @@ async fn apply_asset_v1_changes(
             .and_then(|value| value.get("dateTimeOriginal"))
             .and_then(|value| value.as_str())
             .map(str::to_string),
-        latitude: exif.and_then(|value| value.get("latitude")).and_then(|v| v.as_f64()),
+        latitude: exif
+            .and_then(|value| value.get("latitude"))
+            .and_then(|v| v.as_f64()),
         longitude: exif
             .and_then(|value| value.get("longitude"))
             .and_then(|v| v.as_f64()),
-        rating: exif.and_then(|value| value.get("rating")).and_then(parse_rating),
+        rating: exif
+            .and_then(|value| value.get("rating"))
+            .and_then(parse_rating),
         description: exif
             .and_then(|value| value.get("description"))
             .and_then(|value| value.as_str())
