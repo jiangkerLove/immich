@@ -1,0 +1,41 @@
+---
+description: rust-server 迁移开发流程、测试与 PR 约定
+alwaysApply: true
+---
+
+# Rust 迁移工作流
+
+## 开发流程
+
+1. `git fetch origin dev-rust && git checkout -b cursor/<name>-4063 origin/dev-rust`
+2. 实现一小块 **TS `server/` ↔ `rust-server/`** 行为对齐（可在一分支上连续积累多批再合并）
+3. 测试：`cd rust-server && cargo +stable test --offline --lib`
+4. 推送并开 PR → **`dev-rust`**，合并后删除 `cursor/*` 分支
+
+## 代码约定
+
+- **只 rustfmt 编辑过的文件**：`rustfmt +stable --edition 2024 <files...>`；不要 `cargo fmt` 全库
+- **不要提交 `Cargo.lock`**
+- 最小化 diff，匹配周围代码风格
+- 对齐时先读 TS 对应 service/worker，再改 Rust
+
+## 迁移切片原则
+
+- 优先：job 状态（Success/Skipped/Failed）、websocket 事件、错误消息、缺失检查
+- 对比文件：`server/src/services/*.ts` ↔ `rust-server/src/service/`
+- 对比 worker：`server/src/enum.ts` JobName ↔ `rust-server/src/service/workers/`
+
+## 暂缓（不要塞进普通 PR）
+
+- ML/OCR/face/duplicate **算法**重写（保留调 ML 容器即可）
+- Search v3 / sync **协议级**重写
+- Public plugin `allowedHosts` API
+- EXIF → AssetTagged、AssetV1 write-null、PersonRecognized（上游也弱/无）
+
+## 上游同步
+
+`main` 更新后 → PR `main` → `dev-rust`，解决 `rust-server/` 与 `server/` 冲突。
+
+## CI
+
+Fork PR 的 **Docs Destroy** 常因 GHCR/基础设施失败，通常与 rust 代码无关。以 `cargo test` 为准。

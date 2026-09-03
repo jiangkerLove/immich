@@ -1,0 +1,29 @@
+---
+description: 阅读上游 TypeScript server 作为 rust 迁移参考
+globs: server/**
+alwaysApply: false
+---
+
+# TypeScript server（迁移参考源）
+
+`server/` 是行为对齐的**权威参考**，不要在这里做 rust 迁移改动（rust 工作在 `rust-server/`）。
+
+## 常用入口
+
+| 关注点 | 路径 |
+|--------|------|
+| 任务名 / 队列名 | `server/src/enum.ts` |
+| 业务逻辑 | `server/src/services/*.service.ts` |
+| HTTP | `server/src/controllers/` |
+| WebSocket 事件 | `server/src/repositories/websocket.repository.ts` |
+| 权限 | `server/src/repositories/access.repository.ts` |
+| 内部事件 | `server/src/repositories/event.repository.ts` |
+
+## 对齐检查点
+
+- `@OnJob` 返回值：`JobStatus.Success` / `Skipped` / `Failed`
+- 早退 `return`（无状态）≈ Rust 静默 `Success`
+- `job.service.ts` `onDone` 是否在 Success/Skipped 后排队后续任务
+- WebSocket `clientSend` / `clientBroadcast` 调用点
+
+迁移清单与 rust 侧文件索引：`.cursor/docs/migration-checklist.md`

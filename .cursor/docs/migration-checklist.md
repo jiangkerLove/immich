@@ -5,7 +5,8 @@
 > 集成主线：`dev-rust`（你说的 rust-dev）  
 > 上游同步：`main`
 
-最后更新：`dev-rust` @ PR #18 合并后（2026-09）
+最后更新：`dev-rust` @ PR #18 合并后（2026-09）  
+Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ---
 

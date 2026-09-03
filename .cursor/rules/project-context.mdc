@@ -1,0 +1,53 @@
+---
+description: Immich fork 项目背景与 rust-server 迁移总览
+alwaysApply: true
+---
+
+# 项目背景（jiangkerLove/immich）
+
+本仓库是 **Immich 的 fork**，正在将上游 TypeScript `server/` 迁移到 **`rust-server/`**（Rust/Axum）。
+目标：尽可能对齐上游行为，后期**自行维护可正常使用的版本**。**不要**向上游 Immich 提 PR。
+
+## 分支（仅两条长期分支）
+
+| 分支 | 用途 |
+|------|------|
+| `main` | 同步上游 Immich |
+| `dev-rust` | Rust 开发主线（用户说的 rust-dev） |
+
+所有 rust 迁移 PR 的 base 必须是 **`dev-rust`**。临时分支：`cursor/<kebab-name>-4063`，合并后删除。
+
+## 代码地图
+
+```
+server/src/          → 上游 TS 参考实现（对齐行为时先读这里）
+rust-server/src/
+  routes/            → HTTP 路由（≈ server/controllers）
+  handlers/          → 请求处理
+  service/           → 业务逻辑（≈ server/services）
+  service/workers/   → BullMQ 消费者（≈ @OnJob）
+  service/media/     → 媒体流水线
+  models/db/         → SQL（≈ repositories）
+```
+
+## 迁移进度（摘要）
+
+| 维度 | 状态 |
+|------|------|
+| HTTP API（~191 端点） | ✅ 已完成 |
+| 66 个 JobName / 18 个队列 worker | ✅ 已完成（`search` 队列无 worker） |
+| 媒体 / 库 / 同步 / 搜索 API | ✅ 主体完成 |
+| WebSocket 客户端事件 | ⚠️ 缺 `on_album_update` |
+| 工作流执行 | ⚠️ 仅 AssetV1 |
+| 单机可部署使用 | ✅ |
+
+## 优先待办（P0）
+
+1. **伙伴资产媒体访问**：`require_asset_access()` 只认 owner → 应支持伙伴/相册共享（`service/access.rs`）
+2. **`on_album_update` websocket** 未实现
+
+## 详细文档
+
+规划、已完成模块、差距清单、路线图见：**`.cursor/docs/migration-checklist.md`**
+
+新会话做迁移/规划时，应先阅读该文件。

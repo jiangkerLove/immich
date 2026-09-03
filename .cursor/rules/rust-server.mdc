@@ -1,0 +1,42 @@
+---
+description: 编辑 rust-server 时的 Rust 约定与 TS 对照方式
+globs: rust-server/**
+alwaysApply: false
+---
+
+# rust-server 开发约定
+
+## 架构
+
+- HTTP：`routes/` + `handlers/`
+- 业务：`service/`
+- 后台任务：`service/workers/`（BullMQ，`service/job.rs` 入队）
+- 数据库：`models/db/`（sqlx，无独立 repository 层）
+
+## 行为对齐
+
+改 worker / service 时，**必须**对照 TypeScript：
+
+| Rust | TypeScript |
+|------|------------|
+| `service/workers/*.rs` | `@OnJob` in `server/src/services/` |
+| `service/job.rs` | `server/src/repositories/job.repository.ts` |
+| `service/websocket.rs` | `server/src/repositories/websocket.repository.ts` |
+| `service/access.rs` | `server/src/repositories/access.repository.ts` |
+
+Job 状态应使用 `wrap_status_job` 返回 `success` / `skipped` / `failed`（与 TS `JobStatus` 一致）。
+
+## 测试与格式
+
+```bash
+cd rust-server && cargo +stable test --offline --lib
+rustfmt +stable --edition 2024 path/to/edited.rs
+```
+
+## 已知陷阱
+
+- `database_migrations.rs` 仍调用 Node Kysely（需 `IMMICH_SERVER_PATH`）
+- `search` 队列在 `queue.rs` 列出但无 worker
+- 多进程部署时 HLS 用进程内 `PendingEvents`，与 TS Socket 事件不同
+
+完整差距见 `.cursor/docs/migration-checklist.md` §3。
