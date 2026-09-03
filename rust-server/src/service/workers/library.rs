@@ -74,14 +74,22 @@ impl LibraryProcessor {
         }
     }
 
-    pub async fn process(&self, name: &str, data: &Value) -> Result<(), String> {
+    async fn process(&self, name: &str, data: &Value) -> Result<JobWorkerStatus, String> {
         match name {
-            "LibraryScanQueueAll" => self.handle_scan_queue_all().await,
-            "LibraryDeleteCheck" => self.handle_delete_check().await,
+            "LibraryScanQueueAll" => self
+                .handle_scan_queue_all()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "LibraryDeleteCheck" => self
+                .handle_delete_check()
+                .await
+                .map(|_| JobWorkerStatus::Success),
             "LibraryDelete" => {
                 let job: LibraryIdJob =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.handle_delete(job.id).await
+                self.handle_delete(job.id)
+                    .await
+                    .map(|_| JobWorkerStatus::Success)
             }
             "LibrarySyncFilesQueueAll" => {
                 let job: LibraryIdJob =
@@ -101,16 +109,20 @@ impl LibraryProcessor {
             "LibrarySyncAssets" => {
                 let job: LibrarySyncAssetsJob =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.handle_sync_assets(job).await
+                self.handle_sync_assets(job)
+                    .await
+                    .map(|_| JobWorkerStatus::Success)
             }
             "LibraryRemoveAsset" => {
                 let job: LibraryRemoveAssetJob =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.handle_remove_asset(job).await
+                self.handle_remove_asset(job)
+                    .await
+                    .map(|_| JobWorkerStatus::Success)
             }
             other => {
                 eprintln!("library job {other} is not implemented in rust-server yet; skipping");
-                Ok(())
+                Ok(JobWorkerStatus::Skipped)
             }
         }
     }
@@ -146,6 +158,7 @@ impl LibraryProcessor {
     }
 
     async fn handle_delete_check(&self) -> Result<(), String> {
+        println!("Checking for any libraries pending deletion...");
         let pending = library::list_deleted(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
@@ -203,19 +216,22 @@ impl LibraryProcessor {
         Ok(())
     }
 
-    async fn handle_sync_files_queue_all(&self, library_id: Uuid) -> Result<(), String> {
+    async fn handle_sync_files_queue_all(
+        &self,
+        library_id: Uuid,
+    ) -> Result<JobWorkerStatus, String> {
         let Some(library_row) = library::get_by_id(&self.pool, &library_id)
             .await
             .map_err(|err| err.to_string())?
         else {
             println!("Library {library_id} not found, skipping refresh");
-            return Ok(());
+            return Ok(queue_sync_files_status(false, 1));
         };
 
         let valid_paths = self.validate_import_paths(&library_row).await?;
         if valid_paths.is_empty() {
             println!("No valid import paths found for library {library_id}");
-            return Ok(());
+            return Ok(queue_sync_files_status(true, 0));
         }
 
         let extensions = supported_file_extensions();
@@ -272,16 +288,16 @@ impl LibraryProcessor {
         library::update_refreshed_at(&self.pool, &library_id)
             .await
             .map_err(|err| err.to_string())?;
-        Ok(())
+        Ok(JobWorkerStatus::Success)
     }
 
-    async fn handle_sync_files(&self, job: LibrarySyncFilesJob) -> Result<(), String> {
+    async fn handle_sync_files(&self, job: LibrarySyncFilesJob) -> Result<JobWorkerStatus, String> {
         let Some(library_row) = library::get_by_id(&self.pool, &job.library_id)
             .await
             .map_err(|err| err.to_string())?
         else {
             println!("Library {} not found, skipping file import", job.library_id);
-            return Ok(());
+            return Ok(sync_files_status(false));
         };
 
         let mut created_ids = Vec::new();
@@ -320,15 +336,18 @@ impl LibraryProcessor {
             job.library_id
         );
 
-        Ok(())
+        Ok(sync_files_status(true))
     }
 
-    async fn handle_sync_assets_queue_all(&self, library_id: Uuid) -> Result<(), String> {
+    async fn handle_sync_assets_queue_all(
+        &self,
+        library_id: Uuid,
+    ) -> Result<JobWorkerStatus, String> {
         let Some(library_row) = library::get_by_id(&self.pool, &library_id)
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Ok(());
+            return Ok(queue_sync_assets_status(false));
         };
 
         let asset_ids = asset_delete::list_ids_by_library(&self.pool, &library_id)
@@ -337,7 +356,7 @@ impl LibraryProcessor {
         let total_assets = asset_ids.len();
         if total_assets == 0 {
             println!("Library {library_id} is empty, no need to check assets");
-            return Ok(());
+            return Ok(queue_sync_assets_status(true));
         }
 
         println!(
@@ -357,7 +376,7 @@ impl LibraryProcessor {
         );
 
         if affected as usize == total_assets {
-            return Ok(());
+            return Ok(queue_sync_assets_status(true));
         }
 
         println!("Scanning library {library_id} for assets missing from disk...");
@@ -387,7 +406,7 @@ impl LibraryProcessor {
         }
 
         println!("Finished queuing {count} asset check(s) for library {library_id}");
-        Ok(())
+        Ok(queue_sync_assets_status(true))
     }
 
     async fn handle_sync_assets(&self, job: LibrarySyncAssetsJob) -> Result<(), String> {
@@ -607,6 +626,47 @@ impl LibraryProcessor {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobWorkerStatus {
+    Success,
+    Skipped,
+    Failed,
+}
+
+impl JobWorkerStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Skipped => "skipped",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+fn sync_files_status(library_found: bool) -> JobWorkerStatus {
+    if library_found {
+        JobWorkerStatus::Success
+    } else {
+        JobWorkerStatus::Failed
+    }
+}
+
+fn queue_sync_files_status(library_found: bool, valid_import_path_count: usize) -> JobWorkerStatus {
+    if !library_found || valid_import_path_count == 0 {
+        JobWorkerStatus::Skipped
+    } else {
+        JobWorkerStatus::Success
+    }
+}
+
+fn queue_sync_assets_status(library_found: bool) -> JobWorkerStatus {
+    if library_found {
+        JobWorkerStatus::Success
+    } else {
+        JobWorkerStatus::Skipped
+    }
+}
+
 fn is_hidden_path(path: &str) -> bool {
     Path::new(path)
         .components()
@@ -671,11 +731,11 @@ pub fn spawn(
                 let processor = processor.clone();
                 async move {
                     let job_name = job.name.clone();
-                    crate::service::workers::wrap_simple_job(QUEUE_LIBRARY, &job_name, || async {
+                    crate::service::workers::wrap_status_job(QUEUE_LIBRARY, &job_name, || async {
                         processor
                             .process(&job_name, &job.data)
                             .await
-                            .map_err(|err| err.to_string())
+                            .map(|status| status.as_str())
                     })
                     .await
                 }
@@ -748,5 +808,31 @@ mod tests {
         assert!(log.contains("3 offlined, 2 onlined, 3 updated, 4 unchanged"));
         assert!(log.contains("Total progress: 10 of 100, 10.0 %"));
         assert!(log.contains(&library_id.to_string()));
+    }
+
+    #[test]
+    fn job_worker_status_strings_match_typescript() {
+        assert_eq!(JobWorkerStatus::Success.as_str(), "success");
+        assert_eq!(JobWorkerStatus::Skipped.as_str(), "skipped");
+        assert_eq!(JobWorkerStatus::Failed.as_str(), "failed");
+    }
+
+    #[test]
+    fn sync_files_missing_library_is_failed() {
+        assert_eq!(sync_files_status(false), JobWorkerStatus::Failed);
+        assert_eq!(sync_files_status(true), JobWorkerStatus::Success);
+    }
+
+    #[test]
+    fn queue_sync_files_missing_or_invalid_paths_is_skipped() {
+        assert_eq!(queue_sync_files_status(false, 1), JobWorkerStatus::Skipped);
+        assert_eq!(queue_sync_files_status(true, 0), JobWorkerStatus::Skipped);
+        assert_eq!(queue_sync_files_status(true, 2), JobWorkerStatus::Success);
+    }
+
+    #[test]
+    fn queue_sync_assets_missing_library_is_skipped() {
+        assert_eq!(queue_sync_assets_status(false), JobWorkerStatus::Skipped);
+        assert_eq!(queue_sync_assets_status(true), JobWorkerStatus::Success);
     }
 }
