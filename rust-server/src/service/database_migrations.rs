@@ -1,11 +1,28 @@
-use std::path::PathBuf;
-use std::process::Stdio;
+//! Database schema migrations via sqlx + upstream Kysely parity lock.
+//!
+//! ## Model
+//! - `migrations/1_baseline.sql` = fused end-state of Kysely history listed in
+//!   `migrations/baseline_lock.json` (`fused_kysely_migrations`).
+//! - Later upstream Kysely files (after that lock) become `migrations/2_*.sql`…
+//!   (one TS file → one sqlx file, **or** several TS files merged into one sqlx
+//!   file depending on when you sync). Update the lock when you absorb them.
+//!
+//! ## Runtime (automatic)
+//! 1. Bridge existing Immich schemas into `_sqlx_migrations` v1 if needed.
+//! 2. Apply pending sqlx migrations (`migrate!`).
+//! 3. Print status; warn if DB/`server` Kysely names are ahead of the lock.
+//!
+//! No Node / `IMMICH_SERVER_PATH` required for migrations.
 
-use tokio::process::Command;
+use sqlx::PgPool;
+use sqlx::migrate::{Migrate, Migration, Migrator};
 
 use crate::models::dto::env::EnvDto;
 
-const MIGRATION_SCRIPT: &str = "bin/run-kysely-migrations.cjs";
+include!(concat!(env!("OUT_DIR"), "/baseline_lock.rs"));
+include!(concat!(env!("OUT_DIR"), "/kysely_migrations.rs"));
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug)]
 pub enum MigrationError {
@@ -26,105 +43,268 @@ impl std::fmt::Display for MigrationError {
 
 impl std::error::Error for MigrationError {}
 
-pub async fn run(env: &EnvDto) -> Result<(), MigrationError> {
+/// Auto-check + initialize schema (call on every API boot / admin migrate).
+pub async fn run(pool: &PgPool, env: &EnvDto) -> Result<(), MigrationError> {
     if env.db_skip_migrations.unwrap_or(false) {
         println!("database migrations: skipped (DB_SKIP_MIGRATIONS=true)");
         return Ok(());
     }
 
-    let server_home = resolve_server_home(env)?;
-    let script = server_home.join(MIGRATION_SCRIPT);
-    if !script.exists() {
-        return Err(MigrationError::NotConfigured(format!(
-            "migration script not found at {}",
-            script.display()
-        )));
-    }
+    println!(
+        "database migrations: sqlx baseline v{} ({}); lock fused {} Kysely name(s)",
+        SQLX_BASELINE_VERSION,
+        SQLX_BASELINE_FILE,
+        FUSED_KYSELY_MIGRATIONS.len()
+    );
 
-    let migrations_dir = server_home.join("dist/schema/migrations");
-    if !migrations_dir.is_dir() {
-        return Err(MigrationError::NotConfigured(format!(
-            "compiled migrations not found at {} (build the Node server first)",
-            migrations_dir.display()
-        )));
-    }
+    bridge_legacy_schema_if_needed(pool).await?;
 
-    println!("database migrations: running kysely migrations via {}", script.display());
+    println!(
+        "database migrations: applying pending sqlx ({} file(s) in crate)",
+        MIGRATOR.iter().count()
+    );
 
-    let output = Command::new("node")
-        .arg(&script)
-        .current_dir(&server_home)
-        .env("DB_HOSTNAME", &env.db_url)
-        .env("DB_PORT", env.db_port.to_string())
-        .env("DB_USERNAME", &env.db_username)
-        .env("DB_PASSWORD", &env.db_password)
-        .env("DB_DATABASE_NAME", &env.db_database_name)
-        .env(
-            "IMMICH_ENV",
-            match env.immich_env {
-                Some(crate::models::dto::env::ImmichEnvironment::Development) => "development",
-                Some(crate::models::dto::env::ImmichEnvironment::Test) => "test",
-                _ => "production",
-            },
-        )
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()
+    MIGRATOR
+        .run(pool)
         .await
-        .map_err(|err| MigrationError::Io(err.to_string()))?;
+        .map_err(|err| MigrationError::Failed(err.to_string()))?;
 
-    if !output.status.success() {
-        return Err(MigrationError::Failed(format!(
-            "node exited with status {}",
-            output.status
-        )));
-    }
+    ensure_core_schema(pool).await?;
+    let status = collect_status(pool).await?;
+    print_status(&status);
+    warn_kysely_ahead_of_lock(&status);
 
     Ok(())
 }
 
-fn resolve_server_home(env: &EnvDto) -> Result<PathBuf, MigrationError> {
-    if let Some(path) = env.immich_server_path.as_ref() {
-        let path = PathBuf::from(path);
-        if path.is_dir() {
-            return Ok(path);
-        }
-    }
+#[derive(Debug, Default)]
+pub struct MigrationStatus {
+    pub sqlx_applied: Vec<(i64, String)>,
+    pub sqlx_pending: Vec<(i64, String)>,
+    pub asset_table_present: bool,
+    pub kysely_table_present: bool,
+    pub kysely_applied: Vec<String>,
+    pub kysely_ahead_of_lock: Vec<String>,
+    pub lock_fused_count: usize,
+    pub lock_baseline_version: i64,
+}
 
-    for candidate in candidate_server_paths() {
-        if candidate.join(MIGRATION_SCRIPT).exists() {
-            return Ok(candidate);
-        }
-    }
+pub async fn status(pool: &PgPool) -> Result<MigrationStatus, MigrationError> {
+    collect_status(pool).await
+}
 
-    Err(MigrationError::NotConfigured(
-        "could not locate Immich server directory for kysely migrations; set IMMICH_SERVER_PATH"
-            .into(),
+pub fn print_status(status: &MigrationStatus) {
+    println!(
+        "database migrations: status — asset_table={} sqlx_applied={} sqlx_pending={} \
+         kysely_rows={} kysely_ahead_of_lock={} (lock baseline v{}, fused {})",
+        status.asset_table_present,
+        status.sqlx_applied.len(),
+        status.sqlx_pending.len(),
+        status.kysely_applied.len(),
+        status.kysely_ahead_of_lock.len(),
+        status.lock_baseline_version,
+        status.lock_fused_count,
+    );
+    if !status.sqlx_applied.is_empty() {
+        let latest = status.sqlx_applied.last().unwrap();
+        println!(
+            "database migrations: latest sqlx version={} ({})",
+            latest.0, latest.1
+        );
+    }
+    if !status.kysely_ahead_of_lock.is_empty() {
+        println!(
+            "database migrations: WARNING DB/server has Kysely migration(s) not in baseline_lock — \
+             absorb into sqlx (new N_*.sql or merged file) then update migrations/baseline_lock.json: {}",
+            status.kysely_ahead_of_lock.join(", ")
+        );
+    }
+}
+
+fn warn_kysely_ahead_of_lock(status: &MigrationStatus) {
+    if status.kysely_ahead_of_lock.is_empty() {
+        return;
+    }
+    eprintln!(
+        "database migrations: schema may be ahead of this rust-server sqlx lock; \
+         sync upstream Kysely changes into migrations/ before relying on new columns"
+    );
+}
+
+async fn ensure_core_schema(pool: &PgPool) -> Result<(), MigrationError> {
+    if table_exists(pool, "asset").await? {
+        return Ok(());
+    }
+    Err(MigrationError::Failed(
+        "core table \"asset\" missing after sqlx migrate — baseline did not initialize".into(),
     ))
 }
 
-fn candidate_server_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+async fn collect_status(pool: &PgPool) -> Result<MigrationStatus, MigrationError> {
+    let asset_table_present = table_exists(pool, "asset").await?;
+    let kysely_table_present = table_exists(pool, "kysely_migrations").await?;
+    let sqlx_table_present = table_exists(pool, "_sqlx_migrations").await?;
 
-    if let Ok(current) = std::env::current_dir() {
-        paths.push(current.join("server"));
-        if current.ends_with("rust-server") {
-            paths.push(current.parent().unwrap_or(&current).join("server"));
+    let sqlx_applied = if sqlx_table_present {
+        sqlx::query_as::<_, (i64, String)>(
+            r#"
+                SELECT version, description
+                FROM _sqlx_migrations
+                WHERE success = true
+                ORDER BY version
+            "#,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|err| MigrationError::Failed(err.to_string()))?
+    } else {
+        Vec::new()
+    };
+
+    let applied_versions: std::collections::HashSet<i64> =
+        sqlx_applied.iter().map(|(v, _)| *v).collect();
+    let sqlx_pending: Vec<(i64, String)> = MIGRATOR
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+        .filter(|m| !applied_versions.contains(&m.version))
+        .map(|m| (m.version, m.description.to_string()))
+        .collect();
+
+    let kysely_applied = if kysely_table_present {
+        sqlx::query_scalar::<_, String>(r#"SELECT name FROM kysely_migrations ORDER BY name"#)
+            .fetch_all(pool)
+            .await
+            .map_err(|err| MigrationError::Failed(err.to_string()))?
+    } else {
+        Vec::new()
+    };
+
+    let fused: std::collections::HashSet<&str> = FUSED_KYSELY_MIGRATIONS.iter().copied().collect();
+    let mut kysely_ahead_of_lock: Vec<String> = kysely_applied
+        .iter()
+        .filter(|name| !fused.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    // Also surface compile-time upstream names ahead of lock (from build.rs).
+    for name in KYSELY_MIGRATION_NAMES {
+        if !fused.contains(*name) && !kysely_ahead_of_lock.iter().any(|n| n == name) {
+            kysely_ahead_of_lock.push((*name).to_string());
         }
     }
+    kysely_ahead_of_lock.sort();
+    kysely_ahead_of_lock.dedup();
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            paths.push(dir.join("server"));
-            paths.push(dir.join("../server"));
-        }
-    }
-
-    paths.push(PathBuf::from("/usr/src/app/server"));
-    paths
+    Ok(MigrationStatus {
+        sqlx_applied,
+        sqlx_pending,
+        asset_table_present,
+        kysely_table_present,
+        kysely_applied,
+        kysely_ahead_of_lock,
+        lock_fused_count: FUSED_KYSELY_MIGRATIONS.len(),
+        lock_baseline_version: SQLX_BASELINE_VERSION,
+    })
 }
 
-pub async fn verify_schema(pool: &sqlx::PgPool) -> Result<(), MigrationError> {
+async fn bridge_legacy_schema_if_needed(pool: &PgPool) -> Result<(), MigrationError> {
+    if sqlx_version_applied(pool, SQLX_BASELINE_VERSION).await? {
+        return Ok(());
+    }
+
+    if !table_exists(pool, "asset").await? {
+        println!("database migrations: empty database; sqlx will apply baseline");
+        return Ok(());
+    }
+
+    let Some(baseline) = MIGRATOR
+        .iter()
+        .find(|migration| migration.version == SQLX_BASELINE_VERSION)
+    else {
+        return Err(MigrationError::Failed(format!(
+            "missing sqlx migration version {SQLX_BASELINE_VERSION} ({SQLX_BASELINE_FILE})"
+        )));
+    };
+
+    println!(
+        "database migrations: existing Immich schema detected; \
+         bridging kysely/init history → sqlx baseline (version {SQLX_BASELINE_VERSION})"
+    );
+
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|err| MigrationError::Failed(err.to_string()))?;
+
+    conn.ensure_migrations_table()
+        .await
+        .map_err(|err| MigrationError::Failed(err.to_string()))?;
+
+    record_migration_applied(&mut conn, baseline).await?;
+
+    Ok(())
+}
+
+async fn sqlx_version_applied(pool: &PgPool, version: i64) -> Result<bool, MigrationError> {
+    if !table_exists(pool, "_sqlx_migrations").await? {
+        return Ok(false);
+    }
+
+    let applied: bool = sqlx::query_scalar(
+        r#"
+            SELECT EXISTS (
+                SELECT 1 FROM _sqlx_migrations
+                WHERE version = $1 AND success = true
+            )
+        "#,
+    )
+    .bind(version)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| MigrationError::Failed(err.to_string()))?;
+
+    Ok(applied)
+}
+
+async fn table_exists(pool: &PgPool, table: &str) -> Result<bool, MigrationError> {
+    sqlx::query_scalar(
+        r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = $1
+            )
+        "#,
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| MigrationError::Failed(err.to_string()))
+}
+
+async fn record_migration_applied(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    migration: &Migration,
+) -> Result<(), MigrationError> {
+    sqlx::query(
+        r#"
+            INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+            VALUES ($1, $2, TRUE, $3, 0)
+            ON CONFLICT (version) DO NOTHING
+        "#,
+    )
+    .bind(migration.version)
+    .bind(&*migration.description)
+    .bind(&*migration.checksum)
+    .execute(&mut **conn)
+    .await
+    .map_err(|err| MigrationError::Failed(err.to_string()))?;
+
+    Ok(())
+}
+
+pub async fn verify_schema(pool: &PgPool) -> Result<(), MigrationError> {
     let report = crate::models::db::schema_check::run(pool)
         .await
         .map_err(|err| MigrationError::Failed(err.to_string()))?;
@@ -136,4 +316,39 @@ pub async fn verify_schema(pool: &sqlx::PgPool) -> Result<(), MigrationError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrator_includes_baseline() {
+        let baseline = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == SQLX_BASELINE_VERSION)
+            .expect("expected baseline sqlx migration");
+        assert!(
+            baseline.description.contains("baseline"),
+            "unexpected description: {}",
+            baseline.description
+        );
+        assert!(!baseline.sql.is_empty());
+    }
+
+    #[test]
+    fn lock_lists_fused_kysely_history() {
+        assert_eq!(SQLX_BASELINE_VERSION, 1);
+        assert_eq!(SQLX_BASELINE_FILE, "1_baseline.sql");
+        assert!(
+            FUSED_KYSELY_MIGRATIONS.len() >= 80,
+            "expected fused Kysely history in baseline_lock.json, got {}",
+            FUSED_KYSELY_MIGRATIONS.len()
+        );
+        assert!(
+            FUSED_KYSELY_MIGRATIONS
+                .iter()
+                .any(|name| name.contains("InitialMigration"))
+        );
+    }
 }

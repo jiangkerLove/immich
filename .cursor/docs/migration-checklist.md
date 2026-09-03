@@ -5,7 +5,7 @@
 > 集成主线：`dev-rust`（你说的 rust-dev）  
 > 上游同步：`main`
 
-最后更新：`cursor/search-noop-deploy-docs-4063`（search no-op worker + 单进程部署说明，2026-09）  
+最后更新：`cursor/search-noop-deploy-docs-4063`（sqlx + baseline_lock 对标/启动自检，2026-09）  
 Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ---
@@ -20,8 +20,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | BullMQ 任务名 | 66 个 `JobName` | 66 个均有 worker 处理 | ✅ **已完成** |
 | BullMQ 队列 | 19 个 `QueueName` | 19 个均有 worker（`search` 为遗留空队列 no-op） | ✅ **已完成** |
 | WebSocket 客户端事件 | ~15 种 | 含 `on_album_update` | ✅ **已完成** |
-| 内部事件总线 | `EventRepository` ~30 种 |  mainly `ConfigUpdate` via Redis | ⚠️ **部分** |
-| 数据库迁移 | Kysely TS migrations | 仍调用 Node 脚本跑 Kysely | ⚠️ **混合方案** |
+| 内部事件总线 | `EventRepository` ~30 种 | `ConfigUpdate` Redis；单进程维护模式靠 DB 标志 + `process::exit` | ⚠️ **部分** |
+| 数据库迁移 | 上游 Kysely TS 链 | sqlx + `baseline_lock.json` 对标；启动自动 init/bridge/漂移检查 | ✅ **纯 Rust** |
 | 可单机部署使用 | ✓ | ✓ | ✅ **可用** |
 | 与上游完全等价 | ✓ | 仍有差距 | ⚠️ **持续对齐中** |
 
@@ -115,7 +115,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | 8 种 library 任务 | `workers/library.rs` |
 | 文件监视 | `service/library_watcher.rs` |
 | 定时扫描 | `service/library_scheduler.rs` |
-| 读权限检查 | `utils/fs_access.rs` |
+| 读权限检查 | `utils/fs_access.rs`（unix=`R_OK`，windows=`File::open`/`read_dir`） |
+| 磁盘用量 | `utils/disk.rs`（`sysinfo::Disks`，跨平台） |
 
 ### 2.6 同步（Sync）
 
@@ -131,7 +132,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | 功能 | 状态 | 文件 |
 |------|------|------|
 | 工作流 CRUD / 日志 / 分享 | ✅ | `service/workflow.rs` |
-| 执行引擎 | ⚠️ 仅 AssetV1 | `service/workflow_execution.rs`, `workers/workflow.rs` |
+| 执行引擎 | ✅ 仅 AssetV1（与上游一致） | `service/workflow_execution.rs`, `workers/workflow.rs` |
 | 触发：AssetCreate / AssetMetadataExtracted / AssetTagged | ✅ | `service/workflow_trigger.rs` |
 | 执行日志写入 | ✅ | `models/db/workflow_log.rs` |
 | Plugin 导入 / Extism 运行时 | ✅ | `service/plugin_import.rs`, `plugin_runtime.rs` |
@@ -155,7 +156,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | 版本检查 + 历史 + websocket | `service/version_check.rs`, `version_scheduler.rs` |
 | 数据库备份 / 恢复 | `service/database_backup.rs`, `database_backup_runner.rs` |
 | 完整性检查（10 种任务） | `service/integrity.rs`, `workers/integrity.rs` |
-| 维护模式 + maintenance worker | `service/maintenance.rs`, `maintenance_worker.rs` |
+| 维护模式 + maintenance worker | `service/maintenance.rs`, `maintenance_worker.rs`, `bootstrap.rs`（启动读 DB；进入后 exit） |
 | 夜间任务编排 | `service/nightly.rs`, `job.rs::queue_nightly_jobs` |
 | 地理数据导入 | `service/geodata_import.rs` |
 | 存储 / DB 引导 | `storage_bootstrap.rs`, `database_bootstrap.rs` |
@@ -209,13 +210,13 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
 | 3 | **HLS 跨进程协调** | TS 用 Socket.IO server events；Rust 用进程内 `PendingEvents` | **单进程部署可用**（见 §6 B-4）。仅 API/worker **分进程**时需 Redis 协调 | `service/transcoding.rs`, `service/hls.rs` |
-| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust mainly `ConfigUpdate` Redis 广播 | 单进程下多数副作用已内联；跨进程缺口主要是 HLS / `AppRestart` | `service/server_events.rs` |
+| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust mainly `ConfigUpdate` Redis | 单进程：维护模式已用 DB 标志 + 进程退出切换。跨进程缺口主要是 HLS；CLI enable 仍需手动/进程管理器重启 | `service/server_events.rs`, `bootstrap.rs` |
 
 ### P2 — 工作流 / 插件细节
 
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
-| 5 | **工作流仅执行 AssetV1** | 其他 workflow 类型返回 `Skipped` | `service/workflow_execution.rs` |
+| 5 | **工作流仅执行 AssetV1** | 上游 `WorkflowType` 也仅启用 AssetV1（`AssetPersonV1` 已注释） | **与上游一致**；扩展需等上游 | `workflow_execution.rs` |
 | ~~6~~ | ~~AssetV1 字段清空~~ | 上游亦为 `TODO allow setting to null` + `?? undefined`；双方均忽略 JSON null | **无需改 Rust**；与 TS 行为一致 |
 | 7 | **PersonRecognized 触发** | TS 已注释，双方均未启用 | 可暂缓 |
 | 8 | **Plugin `allowedHosts` 管理 API** | 运行时校验有，公开管理 API 无 | 可暂缓 |
@@ -225,7 +226,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
 | ~~9~~ | ~~`search` 队列无 worker~~ | ✅ 已加 no-op worker（上游亦无 `@OnJob`，仅空 Worker） | `workers/search.rs` |
-| 10 | **数据库迁移依赖 Node** | 通过 `bin/run-kysely-migrations.cjs` 跑 Kysely | `service/database_migrations.rs`；需 `IMMICH_SERVER_PATH` 或构建 `server/` |
+| ~~10~~ | ~~数据库迁移依赖 Node~~ | ✅ sqlx baseline + `baseline_lock.json`；启动自动 migrate；上游新 Kysely 用 `2+` 或合并演进后更新 lock | `migrations/`, `database_migrations.rs` |
 | 11 | **Telemetry Io/Repo 指标** | TS 有 DB/IO prometheus；Rust 未接全 | `utils/telemetry.rs` |
 | 12 | **结构化日志** | TS `LoggingRepository`；Rust 多为 `println!` | 全库 |
 | 13 | **`immich-admin` CLI** | 只移植了常用子命令 | `service/admin.rs` |
@@ -291,20 +292,22 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
    - 默认同时跑 API + 全部 BullMQ workers（未设 `IMMICH_WORKERS_INCLUDE=api` 单独拆分时）  
    - HLS 实时转码在同一进程的 `HlsEngine`（`PendingEvents`），**无需** Redis/Socket 跨进程协调  
    - 跨进程 `server_events` 目前仅广播 `ConfigUpdate`  
+   - **维护模式**：启动读 `system_metadata.maintenance-mode`；UI 进入后发 `AppRestartV1` 并 `process::exit(0)`，由进程管理器重启进 maintenance worker  
 5. 若要 **API / worker 分离**：优先做 HLS Redis pub/sub 协调（P1-3）；在此之前不要拆进程跑视频流
 
 ### 阶段 C — 工作流与插件
 
 6. ~~AssetV1 null 清空（P2-6）~~ — 上游未实现，已从待办移除  
-7. 按需扩展 workflow 类型（P2-5）  
+7. ~~扩展 workflow 类型（P2-5）~~ — 上游亦仅 AssetV1，暂无缺口  
 8. Plugin host 边界测试
 
 ### 阶段 D — 工程与长期维护
 
 9. ~~`search` 队列 no-op worker（P3-9）~~ ✅  
-10. 补全 telemetry / 日志（P3-11/12）  
-11. 评估是否将 Kysely 迁移纯 Rust 化（P3-10，工作量大）  
-12. 定期 `main` → `dev-rust` 合并上游，解决 `rust-server` 冲突
+9b. ~~Windows `fs_access` / 跨平台磁盘用量~~ ✅（`sysinfo`，不再依赖 `df`）  
+10. ~~Kysely 迁移纯 Rust 化（P3-10）~~ ✅ — `baseline_lock.json` 记录已融合的 Kysely 名；合上游时按同步节奏写 `migrations/N_*.sql`（可多条 TS 合并为一条），更新 lock；启动自动检查/初始化  
+11. 补全 telemetry / 日志（P3-11/12）  
+12. 定期 `main` → `dev-rust`：看 cargo warning / `immich-admin migration-status` 的 `kysely_ahead_of_lock`
 
 ---
 
@@ -357,12 +360,12 @@ cd rust-server && cargo +stable test --offline --lib
 | #17 | sync-main 全部合入 `dev-rust` |
 | #18 | Websocket 版本、UserDelete、ML QueueAll、Sidecar、integrity、dedup 等批量 parity |
 | （P0 切片） | `require_asset_access` 伙伴/相册读权限；`on_album_update` websocket + 共享链接上传通知 |
-| （本切片） | `search` 遗留队列 no-op worker；单进程部署/HLS 说明；纠正 P2-6（上游亦不清空 null） |
+| （本切片） | search/Windows/维护；**sqlx baseline + baseline_lock 对标**；启动自动 migrate/bridge/漂移检查；`migration-status` |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API 和后台任务主体已在 Rust，默认**单进程**可支撑日常使用；P0 与 `search` 队列消费者已对齐。  
-**还差：** 真实数据冒烟、分进程时的 HLS Redis、工作流类型扩展、运维可观测性、与上游持续同步。  
-**策略：** 按本文 §6 分阶段做小 PR，合并到 `dev-rust`；未准备好 HLS 跨进程前不要拆 API/worker。
+**现在：** API/任务/迁移均在 Rust；默认单进程可用；schema 用 sqlx baseline（融合上游 Kysely 终态）+ 增量。  
+**还差：** 真实数据冒烟、分进程 HLS Redis、CLI 维护远程重启、telemetry、合上游时同步 `migrations/`。  
+**策略：** 按本文 §6 分阶段做小 PR；未准备好 HLS 跨进程前不要拆 API/worker。

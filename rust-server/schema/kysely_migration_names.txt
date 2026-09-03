@@ -1,4 +1,7 @@
-1744910873969-InitialMigration
+﻿# Fallback list when ../server/src/schema/migrations is absent at build time.
+# Canonical parity record: migrations/baseline_lock.json (must match this list
+# for the fused sqlx baseline). When absorbing upstream Kysely changes, update
+# both this file and baseline_lock.json together with migrations/N_*.sql.1744910873969-InitialMigration
 1744991379464-AddNotificationsTable
 1745244781846-AddUserAvatarColorColumn
 1745902563899-AddAssetVisibilityColumn
@@ -82,3 +85,4 @@
 1780592070031-ConvertNegativeRatingToNull
 1780592071031-AssetOcrSync
 1781089983296-CreateIntegrityReportTable
+

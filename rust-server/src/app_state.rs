@@ -217,7 +217,7 @@ impl AppState {
             panic!("Database bootstrap failed: {err}");
         }
 
-        if let Err(err) = crate::service::database_migrations::run(&settings).await {
+        if let Err(err) = crate::service::database_migrations::run(&sql_pool, &settings).await {
             panic!("Failed to run database migrations: {err}");
         }
 

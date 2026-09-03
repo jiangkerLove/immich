@@ -112,7 +112,7 @@ impl DatabaseBackupRunner {
             cb("migrations", 90);
         }
 
-        crate::service::database_migrations::run(&self.env)
+        crate::service::database_migrations::run(&self.pool, &self.env)
             .await
             .map_err(|err| BackupRunnerError::Process(err.to_string()))?;
 

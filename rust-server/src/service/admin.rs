@@ -61,6 +61,11 @@ pub async fn run(args: &[String]) {
                 eprintln!("{err}");
             }
         }
+        "migration-status" => {
+            if let Err(err) = migration_status(&settings).await {
+                eprintln!("{err}");
+            }
+        }
         "media-location" => {
             let media = StoragePaths::new(resolve_media_location(&settings));
             println!("{}", media.media_location().display());
@@ -134,8 +139,9 @@ Commands:
   reset-admin-password [pw] Reset admin password (generates one if omitted)
   grant-admin <email>       Grant admin privileges
   revoke-admin <email>      Revoke admin privileges
-  schema-check              Verify kysely migrations and init.sql schema drift
-  run-migrations            Run pending Kysely database migrations
+  schema-check              Verify schema tables vs init.sql (legacy kysely names optional)
+  run-migrations            Auto-check + apply sqlx migrations (baseline + pending)
+  migration-status          Print sqlx / baseline_lock / kysely drift status
   media-location            Print current media location
   change-media-location <old> <new> [--yes]
                             Rewrite stored file paths after moving media
@@ -206,8 +212,8 @@ async fn reset_admin_password(settings: &EnvDto, password: Option<&str>) -> Resu
     let password = password.map(str::to_string);
     let generated = password.is_none();
     let password = password.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let hash = bcrypt::hash(&password, crate::constants::SALT_ROUNDS)
-        .map_err(|err| err.to_string())?;
+    let hash =
+        bcrypt::hash(&password, crate::constants::SALT_ROUNDS).map_err(|err| err.to_string())?;
 
     sqlx::query(r#"UPDATE "user" SET password = $1 WHERE id = $2"#)
         .bind(hash)
@@ -253,9 +259,31 @@ async fn schema_check(settings: &EnvDto) -> Result<(), String> {
 }
 
 async fn run_migrations(settings: &EnvDto) -> Result<(), String> {
-    crate::service::database_migrations::run(settings)
+    let pool = connect_pool(settings).await?;
+    crate::service::database_migrations::run(&pool, settings)
         .await
         .map_err(|err| err.to_string())
+}
+
+async fn migration_status(settings: &EnvDto) -> Result<(), String> {
+    let pool = connect_pool(settings).await?;
+    let status = crate::service::database_migrations::status(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    crate::service::database_migrations::print_status(&status);
+    if !status.sqlx_pending.is_empty() {
+        println!("pending sqlx:");
+        for (version, description) in &status.sqlx_pending {
+            println!("  - {version} {description}");
+        }
+    }
+    if !status.kysely_ahead_of_lock.is_empty() {
+        println!("kysely ahead of baseline_lock (need sqlx absorb):");
+        for name in &status.kysely_ahead_of_lock {
+            println!("  - {name}");
+        }
+    }
+    Ok(())
 }
 
 async fn set_password_login(settings: &EnvDto, enabled: bool) -> Result<(), String> {
@@ -327,16 +355,15 @@ async fn change_media_location(
         return Ok(());
     }
 
-    let updated = crate::models::db::media_location::migrate_file_paths(&pool, old_value, new_value)
-        .await
-        .map_err(|err| err.to_string())?;
+    let updated =
+        crate::models::db::media_location::migrate_file_paths(&pool, old_value, new_value)
+            .await
+            .map_err(|err| err.to_string())?;
 
     if updated == 0 {
         println!("No rows were updated");
     } else {
-        println!(
-            "Updated {updated} row(s). Set IMMICH_MEDIA_LOCATION={new_value} and restart."
-        );
+        println!("Updated {updated} row(s). Set IMMICH_MEDIA_LOCATION={new_value} and restart.");
     }
 
     let samples = crate::models::db::media_location::sample_file_paths(&pool)

@@ -8,6 +8,8 @@ include!(concat!(env!("OUT_DIR"), "/kysely_migrations.rs"));
 const OPTIONAL_TABLES: &[&str] = &["smart_search", "face_search"];
 const IGNORED_EXTRA_TABLES: &[&str] = &[
     "kysely_migrations",
+    "kysely_migrations_lock",
+    "_sqlx_migrations",
     "migration_overrides",
     "cluster_group",
     "cluster_group_request",

@@ -38,5 +38,7 @@ rustfmt +stable --edition 2024 path/to/edited.rs
 - `database_migrations.rs` 仍调用 Node Kysely（需 `IMMICH_SERVER_PATH`）
 - `search` 队列在 `queue.rs` 列出但无 worker
 - 多进程部署时 HLS 用进程内 `PendingEvents`，与 TS Socket 事件不同 — **默认请单进程跑**（见 migration-checklist §6 B-4）
+- `database_migrations.rs`：**启动自动** sqlx migrate + bridge；`migrations/baseline_lock.json` 记录已对标的 Kysely 名；上游新变更 → `migrations/N_*.sql`（可合并）并更新 lock
+- Windows：`fs_access` / `disk` 已可本地 `cargo check`；unix-only 测例需 `#[cfg(unix)]`
 
-完整差距见 `.cursor/docs/migration-checklist.md` §3（P0 / search no-op 已完成；分进程前先做 P1 HLS）。
+完整差距见 `.cursor/docs/migration-checklist.md` §3。
