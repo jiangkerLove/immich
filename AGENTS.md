@@ -110,6 +110,8 @@ rustfmt +stable --edition 2024 <edited-files...>
 - 路径读权限检查（`R_OK`）、library validate、SidecarCheck
 - Library scan queue（含 soft-deleted libraries）、path normalize
 
+详见根目录 **`RUST_MIGRATION.md`**（完整迁移清单、差距与路线图）。
+
 ### 暂缓 / 不要塞进普通 PR 的大块工作
 
 - ML / OCR / face / duplicate worker 大规模重写
