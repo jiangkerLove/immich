@@ -53,6 +53,16 @@ pub fn plugin_result_should_continue(result: &serde_json::Value) -> bool {
         .unwrap_or(true)
 }
 
+/// Matches TypeScript `new RegExp(pattern.replaceAll('.', '\\.').replaceAll('*', '.*'))`.
+pub fn hostname_matches_allowed_hosts(hostname: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|pattern| {
+        let escaped = pattern.replace('.', r"\.").replace('*', ".*");
+        regex::Regex::new(&escaped)
+            .map(|re| re.is_match(hostname))
+            .unwrap_or(false)
+    })
+}
+
 pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
     vec![
         WorkflowTriggerResponse {
@@ -192,5 +202,21 @@ mod tests {
         assert!(!plugin_result_should_continue(
             &json!({ "workflow": { "continue": false } })
         ));
+    }
+
+    #[test]
+    fn hostname_allowlist_matches_typescript_glob_rules() {
+        let star = vec!["*".to_string()];
+        assert!(hostname_matches_allowed_hosts("api.example.com", &star));
+
+        let exact = vec!["api.example.com".to_string()];
+        assert!(hostname_matches_allowed_hosts("api.example.com", &exact));
+        assert!(!hostname_matches_allowed_hosts("evil.com", &exact));
+
+        let wildcard = vec!["*.example.com".to_string()];
+        assert!(hostname_matches_allowed_hosts("foo.example.com", &wildcard));
+        assert!(!hostname_matches_allowed_hosts("example.org", &wildcard));
+
+        assert!(!hostname_matches_allowed_hosts("api.example.com", &[]));
     }
 }

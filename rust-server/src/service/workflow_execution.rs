@@ -163,9 +163,12 @@ impl WorkflowExecutionService {
         });
 
         let plugin_key = plugin_runtime::plugin_key(&step.plugin_id, step.host_functions);
-        let result = self
-            .runtime
-            .call_method(&plugin_key, &step.method_name, &payload)?;
+        let result = self.runtime.call_method(
+            &plugin_key,
+            &step.method_name,
+            &payload,
+            &step.allowed_hosts,
+        )?;
 
         if result.get("changes").is_some() {
             apply_asset_v1_changes(&self.asset_service, owner_id, asset_id, &result).await?;

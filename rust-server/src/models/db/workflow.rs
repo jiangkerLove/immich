@@ -269,6 +269,8 @@ pub struct WorkflowRunStep {
     pub method_name: String,
     pub types: Vec<String>,
     pub host_functions: bool,
+    #[serde(default, alias = "allowedHosts")]
+    pub allowed_hosts: Vec<String>,
 }
 
 pub async fn get_for_workflow_run(
@@ -291,7 +293,8 @@ pub async fn get_for_workflow_run(
                         plugin_method."pluginId" as "pluginId",
                         plugin_method.name as "methodName",
                         plugin_method.types,
-                        plugin_method."hostFunctions" as "hostFunctions"
+                        plugin_method."hostFunctions" as "hostFunctions",
+                        plugin_method."allowedHosts" as "allowedHosts"
                     FROM workflow_step
                     INNER JOIN plugin_method ON plugin_method.id = workflow_step."pluginMethodId"
                     WHERE workflow_step."workflowId" = workflow.id

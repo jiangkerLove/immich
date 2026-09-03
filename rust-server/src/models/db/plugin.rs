@@ -170,7 +170,9 @@ pub async fn search_methods(
     }
     if workflow_type.is_some() {
         binds += 1;
-        query.push_str(&format!(" AND plugin_method.types @> ARRAY[${binds}]::varchar[]"));
+        query.push_str(&format!(
+            " AND plugin_method.types @> ARRAY[${binds}]::varchar[]"
+        ));
     }
     if plugin_name.is_some() {
         binds += 1;
@@ -358,6 +360,7 @@ pub struct PluginMethodUpsertInput {
     pub host_functions: bool,
     pub schema: Option<Value>,
     pub ui_hints: Vec<String>,
+    pub allowed_hosts: Vec<String>,
 }
 
 pub async fn upsert(
@@ -417,16 +420,17 @@ pub async fn upsert(
                 r#"
                 INSERT INTO plugin_method (
                     "pluginId", name, title, description, types,
-                    "hostFunctions", schema, "uiHints"
+                    "hostFunctions", schema, "uiHints", "allowedHosts"
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT ("pluginId", name) DO UPDATE SET
                     title = EXCLUDED.title,
                     description = EXCLUDED.description,
                     types = EXCLUDED.types,
                     "hostFunctions" = EXCLUDED."hostFunctions",
                     schema = EXCLUDED.schema,
-                    "uiHints" = EXCLUDED."uiHints"
+                    "uiHints" = EXCLUDED."uiHints",
+                    "allowedHosts" = EXCLUDED."allowedHosts"
                 "#,
             )
             .bind(plugin_id)
@@ -437,6 +441,7 @@ pub async fn upsert(
             .bind(method.host_functions)
             .bind(&method.schema)
             .bind(&method.ui_hints)
+            .bind(&method.allowed_hosts)
             .execute(&mut *tx)
             .await?;
         }
