@@ -4,6 +4,7 @@ use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
 use crate::models::db::asset_edit::AssetEditRow;
+use crate::models::db::person_schema::PersonSchema;
 
 #[derive(Debug, Clone, FromRow, Deserialize)]
 pub struct AssetFileJobRow {
@@ -366,7 +367,8 @@ pub async fn get_person_thumbnail_job_data(
     pool: &Pool<Postgres>,
     person_id: &Uuid,
 ) -> Result<Option<PersonThumbnailJobData>, sqlx::Error> {
-    sqlx::query_as::<_, PersonThumbnailJobData>(
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query_as::<_, PersonThumbnailJobData>(&format!(
         r#"
         SELECT
             person."ownerId" AS owner_id,
@@ -391,10 +393,11 @@ pub async fn get_person_thumbnail_job_data(
         INNER JOIN asset_face ON asset_face.id = person."faceAssetId"
         INNER JOIN asset ON asset_face."assetId" = asset.id
         LEFT JOIN asset_exif ON asset_exif."assetId" = asset.id
-        WHERE person.id = $1
+        WHERE {where_id}
           AND asset_face."deletedAt" IS NULL
         "#,
-    )
+        where_id = schema.where_person_id("person.", "$1"),
+    ))
     .bind(person_id)
     .fetch_optional(pool)
     .await
@@ -405,7 +408,11 @@ pub async fn update_person_thumbnail_path(
     person_id: &Uuid,
     thumbnail_path: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"UPDATE person SET "thumbnailPath" = $1 WHERE id = $2"#)
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query(&format!(
+        r#"UPDATE person SET "thumbnailPath" = $1 WHERE {where_id}"#,
+        where_id = schema.where_person_id("", "$2"),
+    ))
         .bind(thumbnail_path)
         .bind(person_id)
         .execute(pool)
@@ -417,16 +424,18 @@ pub async fn get_random_face_id(
     pool: &Pool<Postgres>,
     person_id: &Uuid,
 ) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+    sqlx::query_scalar(&format!(
         r#"
         SELECT asset_face.id
         FROM asset_face
-        WHERE asset_face."personId" = $1
+        WHERE asset_face.{face_col} = $1
           AND asset_face."deletedAt" IS NULL
           AND asset_face."isVisible" = true
         LIMIT 1
-        "#,
-    )
+        "#
+    ))
     .bind(person_id)
     .fetch_optional(pool)
     .await
@@ -437,7 +446,11 @@ pub async fn update_person_face_asset_id(
     person_id: &Uuid,
     face_id: &Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"UPDATE person SET "faceAssetId" = $1 WHERE id = $2"#)
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query(&format!(
+        r#"UPDATE person SET "faceAssetId" = $1 WHERE {where_id}"#,
+        where_id = schema.where_person_id("", "$2"),
+    ))
         .bind(face_id)
         .bind(person_id)
         .execute(pool)
@@ -449,25 +462,29 @@ pub async fn stream_people_for_thumbnail_job(
     pool: &Pool<Postgres>,
     force: bool,
 ) -> Result<Vec<PersonThumbnailQueueRow>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let person_id = schema.person_id_as_id("");
     if force {
-        sqlx::query_as::<_, PersonThumbnailQueueRow>(
+        sqlx::query_as::<_, PersonThumbnailQueueRow>(&format!(
             r#"
-            SELECT id, "faceAssetId" AS face_asset_id
+            SELECT {person_id}, "faceAssetId" AS face_asset_id
             FROM person
-            ORDER BY id
+            ORDER BY {order_id}
             "#,
-        )
+            order_id = schema.person_id_expr(""),
+        ))
         .fetch_all(pool)
         .await
     } else {
-        sqlx::query_as::<_, PersonThumbnailQueueRow>(
+        sqlx::query_as::<_, PersonThumbnailQueueRow>(&format!(
             r#"
-            SELECT id, "faceAssetId" AS face_asset_id
+            SELECT {person_id}, "faceAssetId" AS face_asset_id
             FROM person
             WHERE "thumbnailPath" = ''
-            ORDER BY id
+            ORDER BY {order_id}
             "#,
-        )
+            order_id = schema.person_id_expr(""),
+        ))
         .fetch_all(pool)
         .await
     }

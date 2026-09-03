@@ -6,6 +6,7 @@ use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::{require_admin, require_permission};
+use crate::utils::config_visibility::{filter_config, ConfigVisibility};
 use crate::utils::system_config::{defaults, get_merged};
 use crate::service::websocket::WebSocketHub;
 
@@ -37,16 +38,57 @@ impl SystemConfigService {
         Ok(defaults())
     }
 
+    pub async fn get_admin_config(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminConfigRead)?;
+        get_merged(&self.pool).await.map_err(ErrorResp::from)
+    }
+
+    pub fn get_admin_config_defaults(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminConfigRead)?;
+        Ok(defaults())
+    }
+
+    pub async fn update_admin_config(&self, auth: &AuthDto, dto: &Value) -> Result<Value, ErrorResp> {
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminConfigUpdate)?;
+        self.apply_config_update(dto).await
+    }
+
     pub async fn get_config(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigRead)?;
         get_merged(&self.pool).await.map_err(ErrorResp::from)
     }
 
+    pub async fn get_user_config(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
+        require_permission(auth, Permission::UserConfigRead)?;
+        let config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
+        Ok(filter_config(&config, ConfigVisibility::User))
+    }
+
+    pub fn get_user_config_defaults(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {
+        require_permission(auth, Permission::UserConfigRead)?;
+        Ok(filter_config(&defaults(), ConfigVisibility::User))
+    }
+
+    pub async fn get_public_config(&self) -> Result<Value, ErrorResp> {
+        let config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
+        Ok(filter_config(&config, ConfigVisibility::Public))
+    }
+
+    pub fn get_public_config_defaults(&self) -> Value {
+        filter_config(&defaults(), ConfigVisibility::Public)
+    }
+
     pub async fn update_config(&self, auth: &AuthDto, dto: &Value) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::SystemConfigUpdate)?;
+        self.apply_config_update(dto).await
+    }
 
+    async fn apply_config_update(&self, dto: &Value) -> Result<Value, ErrorResp> {
         let old_config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
         crate::service::config_validate::validate_system_config(&old_config, dto).await?;
 

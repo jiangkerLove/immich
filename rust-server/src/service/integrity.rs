@@ -165,9 +165,12 @@ impl IntegrityService {
                 .await
                 .map_err(ErrorResp::from)?;
         } else {
-            tokio::fs::remove_file(&row.path)
+            let tracked = integrity::get_tracked_paths(&self.pool, &[row.path.clone()])
                 .await
-                .map_err(|err| ErrorResp::BadRequest(err.to_string()))?;
+                .map_err(ErrorResp::from)?;
+            if tracked.is_empty() {
+                let _ = tokio::fs::remove_file(&row.path).await;
+            }
             integrity::delete_by_id(&self.pool, id)
                 .await
                 .map_err(ErrorResp::from)?;

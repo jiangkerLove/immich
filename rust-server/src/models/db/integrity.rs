@@ -269,6 +269,38 @@ pub async fn get_person_thumbnail_paths_by_paths(
     .await
 }
 
+#[derive(Debug, FromRow)]
+pub struct TrackedPathRow {
+    pub path: String,
+}
+
+pub async fn get_tracked_paths(
+    pool: &Pool<Postgres>,
+    paths: &[String],
+) -> Result<Vec<TrackedPathRow>, sqlx::Error> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+    sqlx::query_as::<_, TrackedPathRow>(
+        r#"
+        SELECT "originalPath" AS path
+        FROM asset
+        WHERE "originalPath" = ANY($1)
+        UNION
+        SELECT path
+        FROM asset_file
+        WHERE path = ANY($1)
+        UNION
+        SELECT "thumbnailPath" AS path
+        FROM person
+        WHERE "thumbnailPath" = ANY($1)
+        "#,
+    )
+    .bind(paths)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_asset_count(pool: &Pool<Postgres>) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(r#"SELECT COUNT(*)::bigint FROM asset"#)
         .fetch_one(pool)

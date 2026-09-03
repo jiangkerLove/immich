@@ -464,7 +464,7 @@ impl PersonService {
                 .await?;
             }
 
-            person::reassign_faces_by_person(&self.pool, merge_id, target_id).await?;
+            person::reassign_faces_by_person(&self.pool, merge_id, target_id, &auth.user.id).await?;
             if !merge_person.thumbnail_path.is_empty() {
                 let _ = tokio::fs::remove_file(&merge_person.thumbnail_path).await;
             }

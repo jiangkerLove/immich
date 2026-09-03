@@ -7,6 +7,7 @@ pub mod album;
 pub mod api_key;
 pub mod shared_link;
 pub mod asset;
+pub mod asset_file;
 pub mod asset_media;
 pub mod auth;
 pub mod memory;
@@ -25,6 +26,8 @@ pub mod tag;
 pub mod search;
 pub mod trash;
 pub mod timeline;
+pub mod cluster_group;
+pub mod config;
 pub mod duplicate;
 pub mod system_config;
 pub mod user;
@@ -48,6 +51,7 @@ pub fn public_router() -> Router<AppState> {
         .merge(auth::public_router())
         .merge(oauth::public_router())
         .merge(server::public_router())
+        .merge(config::public_router())
         .merge(maintenance::public_router())
         .merge(database_backup::public_router())
 }
@@ -63,6 +67,7 @@ pub fn protected_router() -> Router<AppState> {
         .merge(album::router())
         .merge(tag::router())
         .merge(asset::router())
+        .merge(asset_file::router())
         .merge(shared_link::router())
         .merge(asset_media::router())
         .merge(timeline::router())
@@ -75,6 +80,7 @@ pub fn protected_router() -> Router<AppState> {
         .merge(partner::router())
         .merge(stack::router())
         .merge(person::router())
+        .merge(cluster_group::router())
         .merge(activity::router())
         .merge(map::router())
         .merge(download::router())
@@ -83,6 +89,7 @@ pub fn protected_router() -> Router<AppState> {
         .merge(user_admin::router())
         .merge(duplicate::router())
         .merge(system_config::router())
+        .merge(config::protected_router())
         .merge(maintenance::protected_router())
         .merge(video_stream::router())
         .merge(job::router())

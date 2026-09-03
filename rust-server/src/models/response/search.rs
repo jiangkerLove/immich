@@ -12,6 +12,8 @@ pub struct SearchAssetBucketResponse {
     pub facets: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,7 +93,11 @@ pub fn map_person(row: &crate::models::db::person::PersonRow) -> PersonResponse 
     }
 }
 
-pub fn empty_search_response(items: Vec<AssetResponse>, next_page: Option<String>) -> SearchResponse {
+pub fn empty_search_response(
+    items: Vec<AssetResponse>,
+    next_page: Option<String>,
+    next_cursor: Option<String>,
+) -> SearchResponse {
     let count = items.len() as i64;
     SearchResponse {
         albums: SearchAlbumBucketResponse {
@@ -106,6 +112,7 @@ pub fn empty_search_response(items: Vec<AssetResponse>, next_page: Option<String
             items,
             facets: vec![],
             next_page,
+            next_cursor,
         },
     }
 }

@@ -25,6 +25,8 @@ struct FacialRecognitionJobData {
 struct QueueAllJobData {
     force: Option<bool>,
     nightly: Option<bool>,
+    #[serde(rename = "clusterGroupId")]
+    cluster_group_id: Option<Uuid>,
 }
 
 #[derive(Clone)]
@@ -62,6 +64,7 @@ impl FacialRecognitionProcessor {
                     .queue_all(
                         job.force.unwrap_or(false),
                         job.nightly.unwrap_or(false),
+                        job.cluster_group_id,
                     )
                     .await?
                 {

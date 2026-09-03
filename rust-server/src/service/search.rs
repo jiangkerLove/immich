@@ -6,18 +6,27 @@ use crate::models::db::assets;
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::person;
 use crate::models::db::search::{self, PlaceRow, SearchFilter, SearchPage};
+use crate::models::db::search_v3::{
+    self, AssetSearchBuilderOptions, AssetSearchScope, SearchPagination,
+};
 use crate::models::db::system_metadata::{get_machine_learning_config, is_smart_search_enabled};
 use crate::models::db::timeline::get_timeline_partner_ids;
 use crate::models::dto::auth::AuthDto;
+use crate::models::dto::search::{is_new_shape_request, FilterIdsField, SearchFilter as SearchFilterDto, SearchOrder};
 use crate::models::response::asset::{map_assets, AssetResponse};
 use crate::models::response::response::ErrorResp;
 use crate::models::response::search::{
     empty_search_response, map_person, PersonResponse, PlacesResponse, SearchExploreResponse,
     SearchResponse, SearchStatisticsResponse,
 };
+use crate::service::access::require_album_ids_access;
 use crate::service::access::require_asset_access;
 use crate::service::ml::encode_clip_text;
 use crate::utils::permission::require_permission;
+use crate::utils::search_cursor::{decode_search_cursor, encode_search_cursor};
+use crate::utils::search_filter::{
+    apply_locked_visibility_policy, collect_filter_ids, is_fully_album_confined,
+};
 
 #[derive(Clone)]
 pub struct SearchService {
@@ -85,6 +94,9 @@ pub struct MetadataSearchReq {
     pub encoded_video_path: Option<String>,
     pub order: Option<String>,
     pub page: Option<i64>,
+    pub filter: Option<SearchFilterDto>,
+    pub order_by: Option<SearchOrder>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -93,6 +105,7 @@ pub struct StatisticsSearchReq {
     #[serde(flatten)]
     pub base: BaseSearchReq,
     pub description: Option<String>,
+    pub filter: Option<SearchFilterDto>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -100,6 +113,7 @@ pub struct StatisticsSearchReq {
 pub struct RandomSearchReq {
     #[serde(flatten)]
     pub result: ResultSearchReq,
+    pub filter: Option<SearchFilterDto>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -119,6 +133,7 @@ pub struct SmartSearchReq {
     pub query_asset_id: Option<Uuid>,
     pub language: Option<String>,
     pub page: Option<i64>,
+    pub filter: Option<SearchFilterDto>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -157,6 +172,10 @@ impl SearchService {
         dto: &MetadataSearchReq,
     ) -> Result<SearchResponse, ErrorResp> {
         require_permission(auth, Permission::AssetRead)?;
+        if is_new_shape_request(&dto.filter, &dto.order_by, &dto.cursor) {
+            return self.search_metadata_v3(auth, dto).await;
+        }
+
         self.require_locked_access(auth, dto.result.base.visibility.as_deref())?;
 
         let user_ids = self
@@ -184,7 +203,40 @@ impl SearchService {
 
         let (ids, next_page) = paginate_ids(ids, size, page);
         let items = self.load_assets(auth, &ids).await?;
-        Ok(empty_search_response(items, next_page))
+        Ok(empty_search_response(items, next_page, None))
+    }
+
+    async fn search_metadata_v3(
+        &self,
+        auth: &AuthDto,
+        dto: &MetadataSearchReq,
+    ) -> Result<SearchResponse, ErrorResp> {
+        validate_metadata_shape_exclusivity(dto)?;
+        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let offset = decode_search_cursor(dto.cursor.as_deref())?;
+        let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
+
+        let ids = search_v3::search_metadata_v3_ids(
+            &self.pool,
+            &AssetSearchBuilderOptions {
+                filter: Some(filter),
+                with_stacked: dto.result.with_stacked,
+            },
+            &scope,
+            dto.order_by.as_ref(),
+            &SearchPagination { take: size, skip: offset },
+        )
+        .await?;
+
+        let has_next_page = ids.len() as i64 > size;
+        let ids: Vec<Uuid> = ids.into_iter().take(size as usize).collect();
+        let items = self.load_assets(auth, &ids).await?;
+        let next_cursor = if has_next_page {
+            Some(encode_search_cursor(offset + size))
+        } else {
+            None
+        };
+        Ok(empty_search_response(items, None, next_cursor))
     }
 
     pub async fn search_statistics(
@@ -193,10 +245,33 @@ impl SearchService {
         dto: &StatisticsSearchReq,
     ) -> Result<SearchStatisticsResponse, ErrorResp> {
         require_permission(auth, Permission::AssetStatistics)?;
+        if dto.filter.is_some() {
+            return self.search_statistics_v3(auth, dto).await;
+        }
+
         let user_ids = self.get_user_ids(auth, None).await?;
         let mut filter = build_filter_from_base(&dto.base, user_ids);
         filter.description = dto.description.clone();
         let total = search::search_statistics_count(&self.pool, &filter).await?;
+        Ok(SearchStatisticsResponse { total })
+    }
+
+    async fn search_statistics_v3(
+        &self,
+        auth: &AuthDto,
+        dto: &StatisticsSearchReq,
+    ) -> Result<SearchStatisticsResponse, ErrorResp> {
+        validate_statistics_shape_exclusivity(dto)?;
+        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let total = search_v3::search_statistics_v3_count(
+            &self.pool,
+            &AssetSearchBuilderOptions {
+                filter: Some(filter),
+                with_stacked: None,
+            },
+            &scope,
+        )
+        .await?;
         Ok(SearchStatisticsResponse { total })
     }
 
@@ -206,6 +281,10 @@ impl SearchService {
         dto: &RandomSearchReq,
     ) -> Result<Vec<AssetResponse>, ErrorResp> {
         require_permission(auth, Permission::AssetRead)?;
+        if dto.filter.is_some() {
+            return self.search_random_v3(auth, dto).await;
+        }
+
         self.require_locked_access(auth, dto.result.base.visibility.as_deref())?;
 
         let user_ids = self
@@ -214,6 +293,27 @@ impl SearchService {
         let filter = build_filter_from_result(&dto.result, user_ids);
         let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
         let ids = search::search_random_ids(&self.pool, &filter, size).await?;
+        self.load_assets(auth, &ids).await
+    }
+
+    async fn search_random_v3(
+        &self,
+        auth: &AuthDto,
+        dto: &RandomSearchReq,
+    ) -> Result<Vec<AssetResponse>, ErrorResp> {
+        validate_random_shape_exclusivity(dto)?;
+        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
+        let ids = search_v3::search_random_v3_ids(
+            &self.pool,
+            &AssetSearchBuilderOptions {
+                filter: Some(filter),
+                with_stacked: dto.result.with_stacked,
+            },
+            &scope,
+            size,
+        )
+        .await?;
         self.load_assets(auth, &ids).await
     }
 
@@ -241,6 +341,10 @@ impl SearchService {
         dto: &SmartSearchReq,
     ) -> Result<SearchResponse, ErrorResp> {
         require_permission(auth, Permission::AssetRead)?;
+        if dto.filter.is_some() {
+            return self.search_smart_v3(auth, dto).await;
+        }
+
         self.require_locked_access(auth, dto.result.base.visibility.as_deref())?;
 
         let ml = get_machine_learning_config(&self.pool).await?;
@@ -282,7 +386,97 @@ impl SearchService {
 
         let (ids, next_page) = paginate_ids(ids, size, page);
         let items = self.load_assets(auth, &ids).await?;
-        Ok(empty_search_response(items, next_page))
+        Ok(empty_search_response(items, next_page, None))
+    }
+
+    async fn search_smart_v3(
+        &self,
+        auth: &AuthDto,
+        dto: &SmartSearchReq,
+    ) -> Result<SearchResponse, ErrorResp> {
+        validate_smart_shape_exclusivity(dto)?;
+
+        let ml = get_machine_learning_config(&self.pool).await?;
+        if !is_smart_search_enabled(&ml) {
+            return Err(ErrorResp::BadRequest(
+                "Smart search is not enabled".to_string(),
+            ));
+        }
+
+        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let embedding = if let Some(query) = dto.query.as_ref().filter(|q| !q.trim().is_empty()) {
+            encode_clip_text(&ml, query, dto.language.as_deref()).await?
+        } else if let Some(asset_id) = dto.query_asset_id {
+            require_asset_access(&self.pool, auth, &asset_id, Permission::AssetRead).await?;
+            search::get_smart_search_embedding(&self.pool, &asset_id)
+                .await?
+                .ok_or_else(|| {
+                    ErrorResp::BadRequest(format!("Asset {asset_id} has no embedding"))
+                })?
+        } else {
+            return Err(ErrorResp::BadRequest(
+                "Either `query` or `queryAssetId` must be set".to_string(),
+            ));
+        };
+
+        let size = dto.result.size.unwrap_or(100).clamp(1, 1000);
+        let ids = search_v3::search_smart_v3_ids(
+            &self.pool,
+            &AssetSearchBuilderOptions {
+                filter: Some(filter),
+                with_stacked: dto.result.with_stacked,
+            },
+            &scope,
+            &embedding,
+            size,
+        )
+        .await?;
+
+        let ids: Vec<Uuid> = ids.into_iter().take(size as usize).collect();
+        let items = self.load_assets(auth, &ids).await?;
+        Ok(empty_search_response(items, None, None))
+    }
+
+    async fn resolve_search_scope_v3(
+        &self,
+        auth: &AuthDto,
+        filter: Option<SearchFilterDto>,
+    ) -> Result<(SearchFilterDto, AssetSearchScope), ErrorResp> {
+        let filter = filter.unwrap_or_default();
+        let effective_filter = apply_locked_visibility_policy(auth, filter)?;
+
+        if auth.shared_link.is_some() && !is_fully_album_confined(&effective_filter) {
+            return Err(ErrorResp::BadRequest(
+                "Shared link access is only allowed in combination with an albumIds filter".to_string(),
+            ));
+        }
+
+        let album_ids = collect_filter_ids(&effective_filter, FilterIdsField::AlbumIds);
+        if !album_ids.is_empty() {
+            require_album_ids_access(
+                &self.pool,
+                auth,
+                &album_ids,
+                Permission::AlbumRead,
+            )
+            .await?;
+        }
+
+        let fully_confined = is_fully_album_confined(&effective_filter);
+        let user_ids = if fully_confined {
+            vec![auth.user.id]
+        } else {
+            self.get_user_ids(auth, None).await?
+        };
+
+        Ok((
+            effective_filter,
+            AssetSearchScope {
+                user_ids,
+                locked_owner_id: auth.user.id,
+                viewing_user_id: auth.user.id,
+            },
+        ))
     }
 
     pub async fn get_explore_data(
@@ -546,4 +740,198 @@ fn map_place(row: PlaceRow) -> PlacesResponse {
         admin1name: row.admin1_name,
         admin2name: row.admin2_name,
     }
+}
+
+fn validate_metadata_shape_exclusivity(dto: &MetadataSearchReq) -> Result<(), ErrorResp> {
+    let mut deprecated = deprecated_base_fields(&dto.result.base);
+    if dto.id.is_some() {
+        deprecated.push("id");
+    }
+    if dto.description.is_some() {
+        deprecated.push("description");
+    }
+    if dto.checksum.is_some() {
+        deprecated.push("checksum");
+    }
+    if dto.original_file_name.is_some() {
+        deprecated.push("originalFileName");
+    }
+    if dto.original_path.is_some() {
+        deprecated.push("originalPath");
+    }
+    if dto.preview_path.is_some() {
+        deprecated.push("previewPath");
+    }
+    if dto.thumbnail_path.is_some() {
+        deprecated.push("thumbnailPath");
+    }
+    if dto.encoded_video_path.is_some() {
+        deprecated.push("encodedVideoPath");
+    }
+    if dto.order.is_some() {
+        deprecated.push("order");
+    }
+    if dto.page.is_some() {
+        deprecated.push("page");
+    }
+    if dto.result.with_deleted.is_some() {
+        deprecated.push("withDeleted");
+    }
+    reject_mixed_shape(
+        &["filter", "orderBy", "cursor"],
+        &deprecated,
+        dto.filter.is_some(),
+        dto.order_by.is_some(),
+        dto.cursor.is_some(),
+    )
+}
+
+fn validate_statistics_shape_exclusivity(dto: &StatisticsSearchReq) -> Result<(), ErrorResp> {
+    let new_shape = ["filter"];
+    let mut deprecated = deprecated_base_fields(&dto.base);
+    if dto.description.is_some() {
+        deprecated.push("description");
+    }
+    reject_mixed_shape(&new_shape, &deprecated, dto.filter.is_some(), false, false)
+}
+
+fn validate_random_shape_exclusivity(dto: &RandomSearchReq) -> Result<(), ErrorResp> {
+    let new_shape = ["filter"];
+    let mut deprecated = deprecated_base_fields(&dto.result.base);
+    if dto.result.with_deleted.is_some() {
+        deprecated.push("withDeleted");
+    }
+    reject_mixed_shape(&new_shape, &deprecated, dto.filter.is_some(), false, false)
+}
+
+fn validate_smart_shape_exclusivity(dto: &SmartSearchReq) -> Result<(), ErrorResp> {
+    let new_shape = ["filter"];
+    let mut deprecated = deprecated_base_fields(&dto.result.base);
+    if dto.page.is_some() {
+        deprecated.push("page");
+    }
+    if dto.result.with_deleted.is_some() {
+        deprecated.push("withDeleted");
+    }
+    reject_mixed_shape(&new_shape, &deprecated, dto.filter.is_some(), false, false)
+}
+
+fn deprecated_base_fields(base: &BaseSearchReq) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if base.library_id.is_some() {
+        fields.push("libraryId");
+    }
+    if base.asset_type.is_some() {
+        fields.push("type");
+    }
+    if base.is_encoded.is_some() {
+        fields.push("isEncoded");
+    }
+    if base.is_favorite.is_some() {
+        fields.push("isFavorite");
+    }
+    if base.is_motion.is_some() {
+        fields.push("isMotion");
+    }
+    if base.is_offline.is_some() {
+        fields.push("isOffline");
+    }
+    if base.visibility.is_some() {
+        fields.push("visibility");
+    }
+    if base.created_before.is_some() {
+        fields.push("createdBefore");
+    }
+    if base.created_after.is_some() {
+        fields.push("createdAfter");
+    }
+    if base.updated_before.is_some() {
+        fields.push("updatedBefore");
+    }
+    if base.updated_after.is_some() {
+        fields.push("updatedAfter");
+    }
+    if base.trashed_before.is_some() {
+        fields.push("trashedBefore");
+    }
+    if base.trashed_after.is_some() {
+        fields.push("trashedAfter");
+    }
+    if base.taken_before.is_some() {
+        fields.push("takenBefore");
+    }
+    if base.taken_after.is_some() {
+        fields.push("takenAfter");
+    }
+    if base.city.is_some() {
+        fields.push("city");
+    }
+    if base.state.is_some() {
+        fields.push("state");
+    }
+    if base.country.is_some() {
+        fields.push("country");
+    }
+    if base.make.is_some() {
+        fields.push("make");
+    }
+    if base.model.is_some() {
+        fields.push("model");
+    }
+    if base.lens_model.is_some() {
+        fields.push("lensModel");
+    }
+    if base.is_not_in_album.is_some() {
+        fields.push("isNotInAlbum");
+    }
+    if base.person_ids.is_some() {
+        fields.push("personIds");
+    }
+    if base.tag_ids.is_some() {
+        fields.push("tagIds");
+    }
+    if base.album_ids.is_some() {
+        fields.push("albumIds");
+    }
+    if base.rating.is_some() {
+        fields.push("rating");
+    }
+    if base.ocr.is_some() {
+        fields.push("ocr");
+    }
+    fields
+}
+
+fn reject_mixed_shape(
+    new_shape: &[&str],
+    deprecated_fields: &[&str],
+    has_filter: bool,
+    has_order_by: bool,
+    has_cursor: bool,
+) -> Result<(), ErrorResp> {
+    if !(has_filter || has_order_by || has_cursor) {
+        return Ok(());
+    }
+    if deprecated_fields.is_empty() {
+        return Ok(());
+    }
+    let active: Vec<&str> = new_shape
+        .iter()
+        .copied()
+        .filter(|field| match *field {
+            "filter" => has_filter,
+            "orderBy" => has_order_by,
+            "cursor" => has_cursor,
+            _ => false,
+        })
+        .collect();
+    if active.is_empty() {
+        return Ok(());
+    }
+    let message = format!(
+        "Deprecated field {} cannot be combined with {}",
+        deprecated_fields.join(", "),
+        active.join("/")
+    );
+    Err(ErrorResp::BadRequest(message))
 }

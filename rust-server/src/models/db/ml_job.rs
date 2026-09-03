@@ -3,6 +3,8 @@ use serde::Deserialize;
 use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
+use super::person_schema::PersonSchema;
+
 const DUPLICATE_SEARCH_LIMIT: i64 = 64;
 
 #[derive(Debug, Clone, FromRow)]
@@ -407,11 +409,13 @@ pub async fn get_for_facial_recognition(
     pool: &Pool<Postgres>,
     face_id: &Uuid,
 ) -> Result<Option<FacialRecognitionFaceRow>, sqlx::Error> {
-    sqlx::query_as::<_, FacialRecognitionFaceRow>(
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+    sqlx::query_as::<_, FacialRecognitionFaceRow>(&format!(
         r#"
             SELECT
                 asset_face.id,
-                asset_face."personId" AS person_id,
+                asset_face.{face_col} AS person_id,
                 asset_face."sourceType"::text AS source_type,
                 asset."ownerId" AS owner_id,
                 asset.visibility,
@@ -422,8 +426,8 @@ pub async fn get_for_facial_recognition(
             LEFT JOIN face_search ON face_search."faceId" = asset_face.id
             WHERE asset_face.id = $1
               AND asset_face."deletedAt" IS NULL
-        "#,
-    )
+        "#
+    ))
     .bind(face_id)
     .fetch_optional(pool)
     .await
@@ -432,8 +436,29 @@ pub async fn get_for_facial_recognition(
 pub async fn stream_unassigned_ml_faces(
     pool: &Pool<Postgres>,
     force: bool,
+    cluster_group_id: Option<&Uuid>,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+
     if force {
+        if let Some(cluster_group_id) = cluster_group_id {
+            return sqlx::query_scalar(
+                r#"
+                SELECT asset_face.id
+                FROM asset_face
+                INNER JOIN asset ON asset.id = asset_face."assetId"
+                INNER JOIN "user" ON "user".id = asset."ownerId"
+                WHERE asset_face."sourceType" = 'machine-learning'
+                  AND asset_face."deletedAt" IS NULL
+                  AND "user"."clusterGroupId" = $1
+                "#,
+            )
+            .bind(cluster_group_id)
+            .fetch_all(pool)
+            .await;
+        }
+
         return sqlx::query_scalar(
             r#"
                 SELECT asset_face.id
@@ -446,15 +471,33 @@ pub async fn stream_unassigned_ml_faces(
         .await;
     }
 
-    sqlx::query_scalar(
+    if let Some(cluster_group_id) = cluster_group_id {
+        return sqlx::query_scalar(&format!(
+            r#"
+            SELECT asset_face.id
+            FROM asset_face
+            INNER JOIN asset ON asset.id = asset_face."assetId"
+            INNER JOIN "user" ON "user".id = asset."ownerId"
+            WHERE asset_face."sourceType" = 'machine-learning'
+              AND asset_face.{face_col} IS NULL
+              AND asset_face."deletedAt" IS NULL
+              AND "user"."clusterGroupId" = $1
+            "#
+        ))
+        .bind(cluster_group_id)
+        .fetch_all(pool)
+        .await;
+    }
+
+    sqlx::query_scalar(&format!(
         r#"
             SELECT asset_face.id
             FROM asset_face
             WHERE asset_face."sourceType" = 'machine-learning'
-              AND asset_face."personId" IS NULL
+              AND asset_face.{face_col} IS NULL
               AND asset_face."deletedAt" IS NULL
-        "#,
-    )
+        "#
+    ))
     .fetch_all(pool)
     .await
 }
@@ -475,6 +518,10 @@ pub async fn search_faces(
     has_person: bool,
     min_birth_date: Option<DateTime<Utc>>,
 ) -> Result<Vec<FaceSearchMatchRow>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let face_col = schema.face_person_col_quoted();
+    let person_join = schema.join_person_to_face_with_owner("person", "asset_face", "asset");
+
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL vchordrq.probes = 1")
         .execute(&mut *tx)
@@ -482,20 +529,20 @@ pub async fn search_faces(
         .ok();
 
     let rows = if has_person {
-        sqlx::query_as::<_, FaceSearchMatchRow>(
+        sqlx::query_as::<_, FaceSearchMatchRow>(&format!(
             r#"
                 WITH cte AS (
                     SELECT
                         asset_face.id,
-                        asset_face."personId" AS person_id,
+                        asset_face.{face_col} AS person_id,
                         face_search.embedding <=> $1::vector AS distance
                     FROM asset_face
                     INNER JOIN asset ON asset.id = asset_face."assetId"
                     INNER JOIN face_search ON face_search."faceId" = asset_face.id
-                    LEFT JOIN person ON person.id = asset_face."personId"
+                    LEFT JOIN person ON {person_join}
                     WHERE asset."ownerId" = ANY($2::uuid[])
                       AND asset."deletedAt" IS NULL
-                      AND asset_face."personId" IS NOT NULL
+                      AND asset_face.{face_col} IS NOT NULL
                       AND ($5::timestamptz IS NULL OR person."birthDate" IS NULL OR person."birthDate" <= $5::date)
                     ORDER BY distance
                     LIMIT $3
@@ -503,8 +550,8 @@ pub async fn search_faces(
                 SELECT id, person_id, distance
                 FROM cte
                 WHERE distance <= $4
-            "#,
-        )
+            "#
+        ))
         .bind(embedding)
         .bind(owner_ids)
         .bind(num_results)
@@ -513,17 +560,17 @@ pub async fn search_faces(
         .fetch_all(&mut *tx)
         .await?
     } else {
-        sqlx::query_as::<_, FaceSearchMatchRow>(
+        sqlx::query_as::<_, FaceSearchMatchRow>(&format!(
             r#"
                 WITH cte AS (
                     SELECT
                         asset_face.id,
-                        asset_face."personId" AS person_id,
+                        asset_face.{face_col} AS person_id,
                         face_search.embedding <=> $1::vector AS distance
                     FROM asset_face
                     INNER JOIN asset ON asset.id = asset_face."assetId"
                     INNER JOIN face_search ON face_search."faceId" = asset_face.id
-                    LEFT JOIN person ON person.id = asset_face."personId"
+                    LEFT JOIN person ON {person_join}
                     WHERE asset."ownerId" = ANY($2::uuid[])
                       AND asset."deletedAt" IS NULL
                       AND ($5::timestamptz IS NULL OR person."birthDate" IS NULL OR person."birthDate" <= $5::date)
@@ -533,8 +580,8 @@ pub async fn search_faces(
                 SELECT id, person_id, distance
                 FROM cte
                 WHERE distance <= $4
-            "#,
-        )
+            "#
+        ))
         .bind(embedding)
         .bind(owner_ids)
         .bind(num_results)

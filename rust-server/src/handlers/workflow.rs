@@ -8,8 +8,8 @@ use crate::app_state::AppState;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::workflow::{
-    WorkflowCreateReq, WorkflowResponse, WorkflowSearchQuery, WorkflowShareResponse,
-    WorkflowUpdateReq,
+    WorkflowCreateReq, WorkflowGetLogsQuery, WorkflowLogEntryResponse, WorkflowResponse,
+    WorkflowSearchQuery, WorkflowShareResponse, WorkflowUpdateReq,
 };
 use crate::utils::workflow::WorkflowTriggerResponse;
 
@@ -80,4 +80,15 @@ pub async fn delete_workflow_handler(
 ) -> Result<StatusCode, ErrorResp> {
     state.services.workflow.delete(&auth, &id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn get_workflow_logs_handler(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthDto>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<WorkflowGetLogsQuery>,
+) -> Result<Json<Vec<WorkflowLogEntryResponse>>, ErrorResp> {
+    Ok(Json(
+        state.services.workflow.get_logs(&auth, &id, &query).await?,
+    ))
 }

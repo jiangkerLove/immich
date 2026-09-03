@@ -320,11 +320,18 @@ impl JobService {
         .await
     }
 
-    pub async fn queue_facial_recognition_queue_all(&self, force: bool) -> Result<(), ErrorResp> {
+    pub async fn queue_facial_recognition_queue_all(
+        &self,
+        force: bool,
+        cluster_group_id: Option<Uuid>,
+    ) -> Result<(), ErrorResp> {
         self.add_job(
             QUEUE_FACIAL,
             "FacialRecognitionQueueAll",
-            serde_json::json!({ "force": force }),
+            serde_json::json!({
+                "force": force,
+                "clusterGroupId": cluster_group_id,
+            }),
         )
         .await
     }

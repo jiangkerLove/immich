@@ -8,7 +8,9 @@ use sqlx::{Pool as SqlPool, Postgres};
 use crate::models::dto::env::EnvDto;
 use crate::service::shared_link::SharedLinkService;
 use crate::service::asset::AssetService;
+use crate::service::asset_file::AssetFileService;
 use crate::service::asset_media::AssetMediaService;
+use crate::service::cluster_group::ClusterGroupService;
 use crate::service::oauth::OAuthService;
 use crate::service::search::SearchService;
 use crate::service::system_metadata::SystemMetadataService;
@@ -64,6 +66,7 @@ pub struct Services {
     pub album: AlbumService,
     pub tag: TagService,
     pub asset: AssetService,
+    pub asset_file: AssetFileService,
     pub shared_link: SharedLinkService,
     pub asset_media: AssetMediaService,
     pub oauth: OAuthService,
@@ -78,6 +81,7 @@ pub struct Services {
     pub partner: PartnerService,
     pub stack: StackService,
     pub person: PersonService,
+    pub cluster_group: ClusterGroupService,
     pub activity: ActivityService,
     pub map: MapService,
     pub download: DownloadService,
@@ -123,6 +127,7 @@ impl Services {
             album: albums.clone(),
             tag: TagService::new(pool.clone(), jobs.clone()),
             asset: AssetService::new(pool.clone(), jobs.clone(), websocket.clone()),
+            asset_file: AssetFileService::new(pool.clone(), jobs.clone()),
             shared_link: SharedLinkService::new(pool.clone(), albums),
             asset_media: AssetMediaService::new(pool.clone(), storage.clone(), jobs.clone()),
             oauth: OAuthService::new(pool.clone(), websocket.clone()),
@@ -137,6 +142,7 @@ impl Services {
             partner: PartnerService::new(pool.clone()),
             stack: StackService::new(pool.clone(), websocket.clone()),
             person: PersonService::new(pool.clone(), jobs.clone()),
+            cluster_group: ClusterGroupService::new(pool.clone(), jobs.clone()),
             activity: ActivityService::new(pool.clone()),
             map: MapService::new(pool.clone()),
             download: DownloadService::new(pool.clone()),

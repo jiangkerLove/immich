@@ -58,3 +58,11 @@ pub async fn delete_api_key_handler(
 ) -> Result<(), ErrorResp> {
     state.services.api_key.delete(&auth, &id).await
 }
+
+pub async fn rotate_api_key_handler(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthDto>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApiKeyCreateResp>, ErrorResp> {
+    Ok(Json(state.services.api_key.rotate(&auth, &id).await?))
+}

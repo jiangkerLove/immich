@@ -18,6 +18,8 @@ const PUBLIC_ROUTES: &[&str] = &[
     "/api/server/version-history",
     "/api/server/features",
     "/api/server/config",
+    "/api/public/config",
+    "/api/public/config/defaults",
     "/api/server/media-types",
     "/api/admin/maintenance/status",
     "/api/admin/maintenance/login",

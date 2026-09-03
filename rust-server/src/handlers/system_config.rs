@@ -31,6 +31,38 @@ pub async fn update_system_config_handler(
     ))
 }
 
+pub async fn get_admin_config_handler(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthDto>,
+) -> Result<Json<Value>, ErrorResp> {
+    Ok(Json(
+        state.services.system_config.get_admin_config(&auth).await?,
+    ))
+}
+
+pub async fn get_admin_config_defaults_handler(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthDto>,
+) -> Result<Json<Value>, ErrorResp> {
+    Ok(Json(
+        state.services.system_config.get_admin_config_defaults(&auth)?,
+    ))
+}
+
+pub async fn update_admin_config_handler(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthDto>,
+    Json(dto): Json<Value>,
+) -> Result<Json<Value>, ErrorResp> {
+    Ok(Json(
+        state
+            .services
+            .system_config
+            .update_admin_config(&auth, &dto)
+            .await?,
+    ))
+}
+
 pub async fn get_storage_template_options_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,

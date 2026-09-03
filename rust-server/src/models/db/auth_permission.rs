@@ -27,6 +27,9 @@ pub enum Permission {
     AssetUpdate,
     AssetDelete,
     AssetShare,
+    AssetFileRead,
+    AssetFileDownload,
+    AssetFileDelete,
     AssetView,
     AssetDownload,
     AssetUpload,
@@ -44,6 +47,12 @@ pub enum Permission {
     AlbumDownload,
 
     AuthChangePassword,
+
+    ClusterGroupRead,
+    ClusterGroupLeave,
+    ClusterGroupRequestCreate,
+    ClusterGroupRequestRead,
+    ClusterGroupRequestDelete,
 
     AuthDeviceDelete,
 
@@ -121,6 +130,11 @@ pub enum Permission {
     SystemConfigRead,
     SystemConfigUpdate,
 
+    AdminConfigRead,
+    AdminConfigUpdate,
+
+    UserConfigRead,
+
     SystemMetadataRead,
     SystemMetadataUpdate,
 
@@ -130,6 +144,7 @@ pub enum Permission {
     WorkflowRead,
     WorkflowUpdate,
     WorkflowDelete,
+    WorkflowLogs,
 
     ServerLicenseRead,
     ServerLicenseUpdate,
@@ -192,6 +207,9 @@ impl Permission {
             Permission::AssetUpdate => "asset.update",
             Permission::AssetDelete => "asset.delete",
             Permission::AssetShare => "asset.share",
+            Permission::AssetFileRead => "assetFile.read",
+            Permission::AssetFileDownload => "assetFile.download",
+            Permission::AssetFileDelete => "assetFile.delete",
             Permission::AssetView => "asset.view",
             Permission::AssetDownload => "asset.download",
             Permission::AssetUpload => "asset.upload",
@@ -209,6 +227,12 @@ impl Permission {
             Permission::AlbumDownload => "album.download",
 
             Permission::AuthChangePassword => "auth.changePassword",
+
+            Permission::ClusterGroupRead => "clusterGroup.read",
+            Permission::ClusterGroupLeave => "clusterGroup.leave",
+            Permission::ClusterGroupRequestCreate => "clusterGroupRequest.create",
+            Permission::ClusterGroupRequestRead => "clusterGroupRequest.read",
+            Permission::ClusterGroupRequestDelete => "clusterGroupRequest.delete",
 
             Permission::AuthDeviceDelete => "authDevice.delete",
 
@@ -285,6 +309,9 @@ impl Permission {
 
             Permission::SystemConfigRead => "systemConfig.read",
             Permission::SystemConfigUpdate => "systemConfig.update",
+            Permission::AdminConfigRead => "adminConfig.read",
+            Permission::AdminConfigUpdate => "adminConfig.update",
+            Permission::UserConfigRead => "userConfig.read",
 
             Permission::SystemMetadataRead => "systemMetadata.read",
             Permission::SystemMetadataUpdate => "systemMetadata.update",
@@ -295,6 +322,7 @@ impl Permission {
             Permission::WorkflowRead => "workflow.read",
             Permission::WorkflowUpdate => "workflow.update",
             Permission::WorkflowDelete => "workflow.delete",
+            Permission::WorkflowLogs => "workflow.logs",
 
             Permission::ServerLicenseRead => "serverLicense.read",
             Permission::ServerLicenseUpdate => "serverLicense.update",
@@ -357,6 +385,9 @@ impl Permission {
             "asset.update" => Some(Permission::AssetUpdate),
             "asset.delete" => Some(Permission::AssetDelete),
             "asset.share" => Some(Permission::AssetShare),
+            "assetFile.read" => Some(Permission::AssetFileRead),
+            "assetFile.download" => Some(Permission::AssetFileDownload),
+            "assetFile.delete" => Some(Permission::AssetFileDelete),
             "asset.view" => Some(Permission::AssetView),
             "asset.download" => Some(Permission::AssetDownload),
             "asset.upload" => Some(Permission::AssetUpload),
@@ -374,6 +405,12 @@ impl Permission {
             "album.download" => Some(Permission::AlbumDownload),
 
             "auth.changePassword" => Some(Permission::AuthChangePassword),
+
+            "clusterGroup.read" => Some(Permission::ClusterGroupRead),
+            "clusterGroup.leave" => Some(Permission::ClusterGroupLeave),
+            "clusterGroupRequest.create" => Some(Permission::ClusterGroupRequestCreate),
+            "clusterGroupRequest.read" => Some(Permission::ClusterGroupRequestRead),
+            "clusterGroupRequest.delete" => Some(Permission::ClusterGroupRequestDelete),
 
             "authDevice.delete" => Some(Permission::AuthDeviceDelete),
 
@@ -450,6 +487,9 @@ impl Permission {
 
             "systemConfig.read" => Some(Permission::SystemConfigRead),
             "systemConfig.update" => Some(Permission::SystemConfigUpdate),
+            "adminConfig.read" => Some(Permission::AdminConfigRead),
+            "adminConfig.update" => Some(Permission::AdminConfigUpdate),
+            "userConfig.read" => Some(Permission::UserConfigRead),
 
             "systemMetadata.read" => Some(Permission::SystemMetadataRead),
             "systemMetadata.update" => Some(Permission::SystemMetadataUpdate),
@@ -460,6 +500,7 @@ impl Permission {
             "workflow.read" => Some(Permission::WorkflowRead),
             "workflow.update" => Some(Permission::WorkflowUpdate),
             "workflow.delete" => Some(Permission::WorkflowDelete),
+            "workflow.logs" => Some(Permission::WorkflowLogs),
 
             "serverLicense.read" => Some(Permission::ServerLicenseRead),
             "serverLicense.update" => Some(Permission::ServerLicenseUpdate),

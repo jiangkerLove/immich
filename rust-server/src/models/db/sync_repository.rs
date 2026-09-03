@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::utils::bytes::hex_or_buffer_to_base64;
 use crate::utils::sync::SyncAck;
+use crate::models::db::person_schema::PersonSchema;
 
 #[derive(Debug, Clone)]
 pub struct SyncQueryOptions {
@@ -1519,13 +1520,15 @@ pub async fn asset_face_get_upserts(
     pool: &PgPool,
     options: &SyncQueryOptions,
 ) -> Result<Vec<SyncUpsert>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let person_col = schema.sync_face_person_id_select("asset_face");
     let rows = match &options.ack {
         Some(ack) => {
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"
                 SELECT "asset_face"."id",
                   "assetId",
-                  "personId",
+                  {person_col},
                   "imageWidth",
                   "imageHeight",
                   "boundingBoxX1",
@@ -1542,8 +1545,8 @@ pub async fn asset_face_get_upserts(
                   AND "asset_face"."updateId" > $2::uuid
                   AND "asset"."ownerId" = $3
                 ORDER BY "asset_face"."updateId" ASC
-                "#,
-            )
+                "#
+            ))
             .bind(&options.now_id)
             .bind(&ack.update_id)
             .bind(options.user_id)
@@ -1551,11 +1554,11 @@ pub async fn asset_face_get_upserts(
             .await?
         }
         None => {
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"
                 SELECT "asset_face"."id",
                   "assetId",
-                  "personId",
+                  {person_col},
                   "imageWidth",
                   "imageHeight",
                   "boundingBoxX1",
@@ -1571,8 +1574,8 @@ pub async fn asset_face_get_upserts(
                 WHERE "asset_face"."updateId" < $1::uuid
                   AND "asset"."ownerId" = $2
                 ORDER BY "asset_face"."updateId" ASC
-                "#,
-            )
+                "#
+            ))
             .bind(&options.now_id)
             .bind(options.user_id)
             .fetch_all(pool)
@@ -2820,18 +2823,20 @@ pub async fn person_get_deletes(
     pool: &PgPool,
     options: &SyncQueryOptions,
 ) -> Result<Vec<SyncDelete>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let person_col = schema.audit_person_id_select();
     let rows = match &options.ack {
         Some(ack) => {
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"
-                SELECT "id"::text, "personId"
+                SELECT "id"::text, {person_col}
                 FROM "person_audit"
                 WHERE "person_audit"."id" < $1::uuid
                   AND "person_audit"."id" > $2::uuid
                   AND "ownerId" = $3
                 ORDER BY "person_audit"."id" ASC
-                "#,
-            )
+                "#
+            ))
             .bind(&options.now_id)
             .bind(&ack.update_id)
             .bind(options.user_id)
@@ -2839,15 +2844,15 @@ pub async fn person_get_deletes(
             .await?
         }
         None => {
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"
-                SELECT "id"::text, "personId"
+                SELECT "id"::text, {person_col}
                 FROM "person_audit"
                 WHERE "person_audit"."id" < $1::uuid
                   AND "ownerId" = $2
                 ORDER BY "person_audit"."id" ASC
-                "#,
-            )
+                "#
+            ))
             .bind(&options.now_id)
             .bind(options.user_id)
             .fetch_all(pool)
@@ -2867,11 +2872,13 @@ pub async fn person_get_upserts(
     pool: &PgPool,
     options: &SyncQueryOptions,
 ) -> Result<Vec<SyncUpsert>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    let person_id = schema.person_id_as_id("");
     let rows = match &options.ack {
         Some(ack) => {
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"
-                SELECT "id",
+                SELECT {person_id},
                   "createdAt",
                   "updatedAt",
                   "ownerId",
@@ -2887,8 +2894,8 @@ pub async fn person_get_upserts(
                   AND "person"."updateId" > $2::uuid
                   AND "ownerId" = $3
                 ORDER BY "person"."updateId" ASC
-                "#,
-            )
+                "#
+            ))
             .bind(&options.now_id)
             .bind(&ack.update_id)
             .bind(options.user_id)
@@ -2896,9 +2903,9 @@ pub async fn person_get_upserts(
             .await?
         }
         None => {
-            sqlx::query(
+            sqlx::query(&format!(
                 r#"
-                SELECT "id",
+                SELECT {person_id},
                   "createdAt",
                   "updatedAt",
                   "ownerId",
@@ -2913,8 +2920,8 @@ pub async fn person_get_upserts(
                 WHERE "person"."updateId" < $1::uuid
                   AND "ownerId" = $2
                 ORDER BY "person"."updateId" ASC
-                "#,
-            )
+                "#
+            ))
             .bind(&options.now_id)
             .bind(options.user_id)
             .fetch_all(pool)

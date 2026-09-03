@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -6,6 +7,7 @@ use uuid::Uuid;
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::plugin;
 use crate::models::db::workflow::{self, WorkflowRow, WorkflowStepJson};
+use crate::models::db::workflow_log;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::plugin::find_validation_method;
@@ -79,6 +81,33 @@ pub struct WorkflowShareResponse {
     pub name: Option<String>,
     pub description: Option<String>,
     pub steps: Vec<WorkflowStepResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowGetLogsQuery {
+    pub result: Option<String>,
+    pub before: Option<DateTime<Utc>>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowLogStepResponse {
+    pub method: String,
+    pub index: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowLogEntryResponse {
+    pub id: Uuid,
+    pub at: String,
+    pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_data_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_step: Option<WorkflowLogStepResponse>,
 }
 
 #[derive(Clone)]
@@ -188,6 +217,27 @@ impl WorkflowService {
             .map_err(ErrorResp::from)
     }
 
+    pub async fn get_logs(
+        &self,
+        auth: &AuthDto,
+        id: &Uuid,
+        query: &WorkflowGetLogsQuery,
+    ) -> Result<Vec<WorkflowLogEntryResponse>, ErrorResp> {
+        self.require_workflow_access(auth, id, Permission::WorkflowLogs)
+            .await?;
+        let limit = query.limit.unwrap_or(50).clamp(1, 250);
+        let rows = workflow_log::get_logs(
+            &self.pool,
+            id,
+            query.result.as_deref(),
+            query.before,
+            limit,
+        )
+        .await
+        .map_err(ErrorResp::from)?;
+        Ok(rows.into_iter().map(map_workflow_log).collect())
+    }
+
     async fn find_or_fail(&self, id: &Uuid) -> Result<WorkflowRow, ErrorResp> {
         workflow::get_by_id(&self.pool, id)
             .await
@@ -284,4 +334,22 @@ fn map_steps(steps: Value, for_share: bool) -> Vec<WorkflowStepResponse> {
             }
         })
         .collect()
+}
+
+fn map_workflow_log(row: workflow_log::WorkflowLogRow) -> WorkflowLogEntryResponse {
+    let last_step = match (row.step_order, row.plugin_id, row.method_name) {
+        (Some(index), Some(plugin_id), Some(method_name)) => Some(WorkflowLogStepResponse {
+            method: format!("{plugin_id}#{method_name}"),
+            index,
+        }),
+        _ => None,
+    };
+
+    WorkflowLogEntryResponse {
+        id: row.id,
+        at: row.created_at.to_rfc3339(),
+        result: row.result,
+        trigger_data_id: row.trigger_data_id,
+        last_step,
+    }
 }
