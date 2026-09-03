@@ -274,7 +274,8 @@ impl LibraryProcessor {
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Err(format!("Library {} not found", job.library_id));
+            println!("Library {} not found, skipping file import", job.library_id);
+            return Ok(());
         };
 
         let mut created_ids = Vec::new();
@@ -307,11 +308,8 @@ impl LibraryProcessor {
                     crate::utils::workflow::TRIGGER_ASSET_CREATE,
                 )
                 .await;
-                self.jobs
-                    .queue_sidecar_check(asset_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
             }
+            self.queue_post_sync_jobs(&created_ids).await?;
         }
 
         Ok(())
@@ -412,13 +410,18 @@ impl LibraryProcessor {
             .await
             .map_err(|err| err.to_string())?;
 
-        for asset_id in update_ids {
+        self.queue_post_sync_jobs(&update_ids).await?;
+
+        Ok(())
+    }
+
+    async fn queue_post_sync_jobs(&self, asset_ids: &[Uuid]) -> Result<(), String> {
+        for asset_id in asset_ids {
             self.jobs
-                .queue_sidecar_check(&asset_id)
+                .queue_sidecar_check_with_source(asset_id, Some("upload"))
                 .await
                 .map_err(|err| err.to_string())?;
         }
-
         Ok(())
     }
 

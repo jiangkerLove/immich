@@ -55,7 +55,11 @@ impl SidecarService {
         Ok(())
     }
 
-    pub async fn check_sidecar(&self, asset_id: &Uuid) -> Result<SidecarCheckOutcome, String> {
+    pub async fn check_sidecar(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<SidecarCheckOutcome, String> {
         let Some(asset) = sidecar_job::get_for_sidecar_check(&self.pool, asset_id)
             .await
             .map_err(|err| err.to_string())?
@@ -73,7 +77,7 @@ impl SidecarService {
 
         let is_changed = sidecar_path.as_deref() != asset.sidecar_path.as_deref();
         if !is_changed {
-            self.queue_metadata_after_check(asset_id).await?;
+            self.queue_metadata_after_check(asset_id, source).await?;
             return Ok(SidecarCheckOutcome::Skipped);
         }
 
@@ -87,7 +91,7 @@ impl SidecarService {
                 .map_err(|err| err.to_string())?;
         }
 
-        self.queue_metadata_after_check(asset_id).await?;
+        self.queue_metadata_after_check(asset_id, source).await?;
         Ok(SidecarCheckOutcome::Success)
     }
 
@@ -130,11 +134,23 @@ impl SidecarService {
         Ok(SidecarWriteOutcome::Success)
     }
 
-    async fn queue_metadata_after_check(&self, asset_id: &Uuid) -> Result<(), String> {
-        self.jobs
-            .queue_asset_extract_metadata(asset_id)
-            .await
-            .map_err(|err| err.to_string())
+    async fn queue_metadata_after_check(
+        &self,
+        asset_id: &Uuid,
+        source: Option<&str>,
+    ) -> Result<(), String> {
+        match source {
+            Some(source) => self
+                .jobs
+                .queue_asset_extract_metadata_with_source(asset_id, source)
+                .await
+                .map_err(|err| err.to_string()),
+            None => self
+                .jobs
+                .queue_asset_extract_metadata(asset_id)
+                .await
+                .map_err(|err| err.to_string()),
+        }
     }
 
     async fn queue_metadata_after_write(&self, asset_id: &Uuid) -> Result<(), String> {
