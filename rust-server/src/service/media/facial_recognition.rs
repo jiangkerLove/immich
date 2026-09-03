@@ -4,8 +4,8 @@ use uuid::Uuid;
 use crate::models::db::ml_job;
 use crate::models::db::person;
 use crate::models::db::system_metadata::{
-    get_facial_recognition_state, get_machine_learning_config, is_facial_recognition_enabled,
-    set_facial_recognition_state, FacialRecognitionState,
+    FacialRecognitionState, get_facial_recognition_state, get_machine_learning_config,
+    is_facial_recognition_enabled, set_facial_recognition_state,
 };
 use crate::service::job::JobService;
 use crate::utils::workers::{QUEUE_FACE, QUEUE_FACIAL, QUEUE_THUMBNAIL};
@@ -103,13 +103,10 @@ impl FacialRecognitionService {
 
         ml_job::prewarm_face_vectors(&self.pool).await;
 
-        let face_ids = ml_job::stream_unassigned_ml_faces(
-            &self.pool,
-            force,
-            cluster_group_id.as_ref(),
-        )
-            .await
-            .map_err(|err| err.to_string())?;
+        let face_ids =
+            ml_job::stream_unassigned_ml_faces(&self.pool, force, cluster_group_id.as_ref())
+                .await
+                .map_err(|err| err.to_string())?;
 
         for chunk in face_ids.chunks(JOBS_BATCH_SIZE) {
             for face_id in chunk {
@@ -212,12 +209,11 @@ impl FacialRecognitionService {
         }
 
         if is_core && person_id.is_none() {
-            let new_person =
-                person::create_for_detected_face(&self.pool, &face.owner_id, face_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
+            let new_person = person::create_for_detected_face(&self.pool, &face.owner_id, face_id)
+                .await
+                .map_err(|err| err.to_string())?;
             self.jobs
-                .queue_person_generate_thumbnail(&new_person.id)
+                .queue_person_generate_thumbnail(&face.owner_id, &new_person.id)
                 .await
                 .map_err(|err| err.to_string())?;
             person_id = Some(new_person.id);

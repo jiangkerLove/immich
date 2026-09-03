@@ -170,7 +170,9 @@ impl AssetMediaService {
         assets::update_quota_usage(&self.pool, &auth.user.id, file_bytes.len() as i64).await?;
         self.attach_to_shared_link(auth, asset_id).await?;
 
-        self.jobs.queue_asset_extract_metadata(&asset_id).await?;
+        self.jobs
+            .queue_asset_extract_metadata_with_source(&asset_id, "upload")
+            .await?;
 
         let _ = crate::service::workflow_trigger::on_asset_trigger(
             &self.pool,

@@ -2,6 +2,7 @@ use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
 use crate::models::db::asset_job::AssetFileJobRow;
+use crate::models::db::person_schema::PersonSchema;
 
 #[derive(Debug, Clone, FromRow)]
 pub struct MigrationAssetRow {
@@ -63,27 +64,44 @@ pub struct MigrationPersonRow {
 
 pub async fn get_person_for_migration(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
 ) -> Result<Option<MigrationPersonRow>, sqlx::Error> {
-    sqlx::query_as::<_, MigrationPersonRow>(
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query_as::<_, MigrationPersonRow>(&format!(
         r#"
             SELECT
-                id,
+                {person_id_col},
                 "ownerId" AS owner_id,
                 "thumbnailPath" AS thumbnail_path
             FROM person
-            WHERE id = $1
+            WHERE {where_id}
         "#,
-    )
+        person_id_col = schema.person_id_as_id(""),
+        where_id = schema.where_owner_and_id("", "$1", "$2"),
+    ))
+    .bind(owner_id)
     .bind(person_id)
     .fetch_optional(pool)
     .await
 }
 
-pub async fn stream_persons_for_migration(pool: &Pool<Postgres>) -> Result<Vec<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(r#"SELECT id FROM person"#)
-        .fetch_all(pool)
-        .await
+#[derive(Debug, Clone, FromRow)]
+pub struct MigrationPersonIdRow {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+}
+
+pub async fn stream_persons_for_migration(
+    pool: &Pool<Postgres>,
+) -> Result<Vec<MigrationPersonIdRow>, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    sqlx::query_as::<_, MigrationPersonIdRow>(&format!(
+        r#"SELECT {person_id}, "ownerId" AS owner_id FROM person"#,
+        person_id = schema.person_id_as_id(""),
+    ))
+    .fetch_all(pool)
+    .await
 }
 
 pub fn parse_asset_files(value: Option<serde_json::Value>) -> Vec<AssetFileJobRow> {

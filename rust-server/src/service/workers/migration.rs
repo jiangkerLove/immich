@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::dto::env::EnvDto;
-use crate::service::job::JobService;
+use crate::service::job::{JobService, PersonJob};
 use crate::service::media::file_migration::{FileMigrationOutcome, FileMigrationService};
 use crate::utils::storage::StoragePaths;
 
@@ -47,9 +47,13 @@ impl MigrationProcessor {
                 }
             }
             "PersonFileMigration" => {
-                let job: EntityJobData =
+                let job: PersonJob =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                match self.service.migrate_person(&job.id).await? {
+                match self
+                    .service
+                    .migrate_person(&job.owner_id, &job.person_group_id)
+                    .await?
+                {
                     FileMigrationOutcome::Success => Ok(JobWorkerStatus::Success),
                     FileMigrationOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
                     FileMigrationOutcome::Failed => Ok(JobWorkerStatus::Failed),
@@ -80,7 +84,13 @@ impl JobWorkerStatus {
     }
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDto, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    storage: StoragePaths,
+    _env: EnvDto,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let jobs = JobService::new(redis_url.clone());
         let processor = Arc::new(MigrationProcessor::new(pool, storage, jobs));

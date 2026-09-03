@@ -1,6 +1,67 @@
 pub const TRIGGER_ASSET_CREATE: &str = "AssetCreate";
 pub const TRIGGER_ASSET_METADATA: &str = "AssetMetadataExtraction";
+pub const TRIGGER_ASSET_TAGGED: &str = "AssetTagged";
 pub const TYPE_ASSET_V1: &str = "AssetV1";
+
+pub const WORKFLOW_RESULT_COMPLETED: &str = "completed";
+pub const WORKFLOW_RESULT_HALTED: &str = "halted";
+pub const WORKFLOW_RESULT_ERROR: &str = "error";
+
+/// How a workflow run ended, used to decide what to persist in `workflow_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowRunEnd {
+    Completed,
+    Halted,
+    Error,
+}
+
+/// Fields written to `workflow_log` for a given run outcome.
+/// Matches the TypeScript `WorkflowExecutionService` insert shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowRunLog {
+    pub result: &'static str,
+    pub include_step_id: bool,
+}
+
+pub fn should_write_workflow_log(logging: bool) -> bool {
+    logging
+}
+
+pub fn workflow_run_log(end: WorkflowRunEnd) -> WorkflowRunLog {
+    match end {
+        WorkflowRunEnd::Completed => WorkflowRunLog {
+            result: WORKFLOW_RESULT_COMPLETED,
+            include_step_id: false,
+        },
+        WorkflowRunEnd::Halted => WorkflowRunLog {
+            result: WORKFLOW_RESULT_HALTED,
+            include_step_id: true,
+        },
+        WorkflowRunEnd::Error => WorkflowRunLog {
+            result: WORKFLOW_RESULT_ERROR,
+            include_step_id: true,
+        },
+    }
+}
+
+/// Plugin methods halt the remaining steps by returning `{ workflow: { continue: false } }`.
+pub fn plugin_result_should_continue(result: &serde_json::Value) -> bool {
+    result
+        .get("workflow")
+        .and_then(|value| value.get("continue"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
+
+/// Matches TypeScript `new RegExp(pattern.replaceAll('.', '\\.').replaceAll('*', '.*'))`.
+pub fn hostname_matches_allowed_hosts(hostname: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|pattern| {
+        let escaped = pattern.replace('.', r"\.").replace('*', ".*");
+        regex::Regex::new(&escaped)
+            .map(|re| re.is_match(hostname))
+            .unwrap_or(false)
+    })
+}
 
 pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
     vec![
@@ -10,6 +71,10 @@ pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
         },
         WorkflowTriggerResponse {
             trigger: TRIGGER_ASSET_METADATA.to_string(),
+            types: vec![TYPE_ASSET_V1.to_string()],
+        },
+        WorkflowTriggerResponse {
+            trigger: TRIGGER_ASSET_TAGGED.to_string(),
             types: vec![TYPE_ASSET_V1.to_string()],
         },
     ]
@@ -24,7 +89,9 @@ pub struct WorkflowTriggerResponse {
 
 pub fn is_method_compatible(method_types: &[String], trigger: &str) -> bool {
     let valid_types = match trigger {
-        TRIGGER_ASSET_CREATE | TRIGGER_ASSET_METADATA => &[TYPE_ASSET_V1][..],
+        TRIGGER_ASSET_CREATE | TRIGGER_ASSET_METADATA | TRIGGER_ASSET_TAGGED => {
+            &[TYPE_ASSET_V1][..]
+        }
         _ => return false,
     };
 
@@ -58,4 +125,156 @@ pub fn parse_method_string(method: &str) -> Option<ParsedMethod> {
         plugin_name,
         method_name: method_name.to_string(),
     })
+}
+
+/// Last `/`-separated segment, matching TypeScript `entity.value.split('/').at(-1)`.
+pub fn tag_name_from_value(value: &str) -> &str {
+    value.rsplit('/').next().unwrap_or(value)
+}
+
+/// Shape AssetV1 JSON to match TypeScript plugin payloads:
+/// Node `Buffer` checksum and `TagResponseDto.name`.
+pub fn shape_asset_v1_payload(mut asset: serde_json::Value) -> serde_json::Value {
+    if let Some(encoded) = asset.get("checksum").and_then(|value| value.as_str())
+        && let Ok(bytes) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+    {
+        asset["checksum"] = serde_json::json!({
+            "type": "Buffer",
+            "data": bytes,
+        });
+    }
+
+    if let Some(tags) = asset.get_mut("tags").and_then(|value| value.as_array_mut()) {
+        for tag in tags {
+            let Some(value) = tag.get("value").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let name = tag_name_from_value(value).to_string();
+            if let Some(obj) = tag.as_object_mut() {
+                obj.insert("name".to_string(), serde_json::Value::String(name));
+            }
+        }
+    }
+
+    asset
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn result_constants_match_upstream_enum() {
+        assert_eq!(WORKFLOW_RESULT_COMPLETED, "completed");
+        assert_eq!(WORKFLOW_RESULT_HALTED, "halted");
+        assert_eq!(WORKFLOW_RESULT_ERROR, "error");
+    }
+
+    #[test]
+    fn logging_flag_gates_writes() {
+        assert!(!should_write_workflow_log(false));
+        assert!(should_write_workflow_log(true));
+    }
+
+    #[test]
+    fn completed_log_omits_step_id() {
+        assert_eq!(
+            workflow_run_log(WorkflowRunEnd::Completed),
+            WorkflowRunLog {
+                result: WORKFLOW_RESULT_COMPLETED,
+                include_step_id: false,
+            }
+        );
+    }
+
+    #[test]
+    fn halted_and_error_logs_include_step_id() {
+        assert_eq!(
+            workflow_run_log(WorkflowRunEnd::Halted),
+            WorkflowRunLog {
+                result: WORKFLOW_RESULT_HALTED,
+                include_step_id: true,
+            }
+        );
+        assert_eq!(
+            workflow_run_log(WorkflowRunEnd::Error),
+            WorkflowRunLog {
+                result: WORKFLOW_RESULT_ERROR,
+                include_step_id: true,
+            }
+        );
+    }
+
+    #[test]
+    fn asset_tagged_is_a_supported_trigger() {
+        let triggers = get_workflow_triggers();
+        assert!(
+            triggers
+                .iter()
+                .any(|item| item.trigger == TRIGGER_ASSET_TAGGED)
+        );
+        assert!(is_method_compatible(
+            &[TYPE_ASSET_V1.to_string()],
+            TRIGGER_ASSET_TAGGED
+        ));
+        assert!(!is_method_compatible(
+            &[TYPE_ASSET_V1.to_string()],
+            "UnknownTrigger"
+        ));
+    }
+
+    #[test]
+    fn plugin_continue_defaults_to_true() {
+        assert!(plugin_result_should_continue(&json!({})));
+        assert!(plugin_result_should_continue(&json!({ "workflow": {} })));
+        assert!(plugin_result_should_continue(
+            &json!({ "workflow": { "continue": true } })
+        ));
+        assert!(!plugin_result_should_continue(
+            &json!({ "workflow": { "continue": false } })
+        ));
+    }
+
+    #[test]
+    fn hostname_allowlist_matches_typescript_glob_rules() {
+        let star = vec!["*".to_string()];
+        assert!(hostname_matches_allowed_hosts("api.example.com", &star));
+
+        let exact = vec!["api.example.com".to_string()];
+        assert!(hostname_matches_allowed_hosts("api.example.com", &exact));
+        assert!(!hostname_matches_allowed_hosts("evil.com", &exact));
+
+        let wildcard = vec!["*.example.com".to_string()];
+        assert!(hostname_matches_allowed_hosts("foo.example.com", &wildcard));
+        assert!(!hostname_matches_allowed_hosts("example.org", &wildcard));
+
+        assert!(!hostname_matches_allowed_hosts("api.example.com", &[]));
+    }
+
+    #[test]
+    fn tag_name_uses_last_path_segment() {
+        assert_eq!(tag_name_from_value("family/mom"), "mom");
+        assert_eq!(tag_name_from_value("vacation"), "vacation");
+    }
+
+    #[test]
+    fn asset_v1_checksum_matches_node_buffer_json() {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let shaped = shape_asset_v1_payload(json!({ "checksum": encoded, "tags": [] }));
+        assert_eq!(
+            shaped["checksum"],
+            json!({ "type": "Buffer", "data": [1, 2, 3] })
+        );
+    }
+
+    #[test]
+    fn asset_v1_tags_include_name() {
+        let shaped = shape_asset_v1_payload(json!({
+            "tags": [{ "id": "1", "value": "family/mom" }]
+        }));
+        assert_eq!(shaped["tags"][0]["name"], "mom");
+    }
 }

@@ -239,13 +239,15 @@ pub async fn get_random_face_id(
 
 pub async fn get_person_face_asset_id(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     sqlx::query_scalar(&format!(
         r#"SELECT "faceAssetId" FROM person WHERE {where_id}"#,
-        where_id = schema.where_person_id("", "$1"),
+        where_id = schema.where_owner_and_id("", "$1", "$2"),
     ))
+        .bind(owner_id)
         .bind(person_id)
         .fetch_optional(pool)
         .await
@@ -253,16 +255,18 @@ pub async fn get_person_face_asset_id(
 
 pub async fn set_person_face_asset_id(
     pool: &Pool<Postgres>,
+    owner_id: &Uuid,
     person_id: &Uuid,
     face_asset_id: Option<Uuid>,
 ) -> Result<(), sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     sqlx::query(&format!(
-        r#"UPDATE person SET "faceAssetId" = $2 WHERE {where_id}"#,
-        where_id = schema.where_person_id("", "$1"),
+        r#"UPDATE person SET "faceAssetId" = $1 WHERE {where_id}"#,
+        where_id = schema.where_owner_and_id("", "$2", "$3"),
     ))
-        .bind(person_id)
         .bind(face_asset_id)
+        .bind(owner_id)
+        .bind(person_id)
         .execute(pool)
         .await?;
     Ok(())

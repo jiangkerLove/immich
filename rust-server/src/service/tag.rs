@@ -248,6 +248,7 @@ impl TagService {
         for asset_id in touched {
             self.sync_asset_tags(&asset_id).await?;
             self.jobs.queue_sidecar_write(&asset_id).await?;
+            self.trigger_asset_tagged(&auth.user.id, &asset_id).await;
         }
         Ok(TagBulkAssetsResponse { count })
     }
@@ -274,6 +275,7 @@ impl TagService {
                     .await;
                     self.sync_asset_tags(asset_id).await?;
                     self.jobs.queue_sidecar_write(asset_id).await?;
+                    self.trigger_asset_tagged(&auth.user.id, asset_id).await;
                     results.push(BulkIdResponse {
                         id: *asset_id,
                         success: true,
@@ -385,5 +387,16 @@ impl TagService {
             .execute(&self.db.pool)
             .await;
         Ok(())
+    }
+
+    async fn trigger_asset_tagged(&self, user_id: &Uuid, asset_id: &Uuid) {
+        let _ = crate::service::workflow_trigger::on_asset_trigger(
+            &self.db.pool,
+            &self.jobs,
+            user_id,
+            asset_id,
+            crate::utils::workflow::TRIGGER_ASSET_TAGGED,
+        )
+        .await;
     }
 }
