@@ -259,21 +259,21 @@ impl WorkflowService {
         id: &Uuid,
         permission: Permission,
     ) -> Result<(), ErrorResp> {
-        require_permission(auth, permission)?;
+        require_permission(auth, permission.clone())?;
+        let denied = || {
+            ErrorResp::BadRequest(format!(
+                "Not found or no {} access",
+                permission.as_str()
+            ))
+        };
         let Some(row) = workflow::get_by_id(&self.pool, id)
             .await
             .map_err(ErrorResp::from)?
         else {
-            return Err(ErrorResp::BadRequest(format!(
-                "Not found or no {} access",
-                permission.as_str()
-            )));
+            return Err(denied());
         };
         if row.owner_id != auth.user.id {
-            return Err(ErrorResp::BadRequest(format!(
-                "Not found or no {} access",
-                permission.as_str()
-            )));
+            return Err(denied());
         }
         Ok(())
     }
