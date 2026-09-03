@@ -1,6 +1,57 @@
 pub const TRIGGER_ASSET_CREATE: &str = "AssetCreate";
 pub const TRIGGER_ASSET_METADATA: &str = "AssetMetadataExtraction";
+pub const TRIGGER_ASSET_TAGGED: &str = "AssetTagged";
 pub const TYPE_ASSET_V1: &str = "AssetV1";
+
+pub const WORKFLOW_RESULT_COMPLETED: &str = "completed";
+pub const WORKFLOW_RESULT_HALTED: &str = "halted";
+pub const WORKFLOW_RESULT_ERROR: &str = "error";
+
+/// How a workflow run ended, used to decide what to persist in `workflow_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowRunEnd {
+    Completed,
+    Halted,
+    Error,
+}
+
+/// Fields written to `workflow_log` for a given run outcome.
+/// Matches the TypeScript `WorkflowExecutionService` insert shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowRunLog {
+    pub result: &'static str,
+    pub include_step_id: bool,
+}
+
+pub fn should_write_workflow_log(logging: bool) -> bool {
+    logging
+}
+
+pub fn workflow_run_log(end: WorkflowRunEnd) -> WorkflowRunLog {
+    match end {
+        WorkflowRunEnd::Completed => WorkflowRunLog {
+            result: WORKFLOW_RESULT_COMPLETED,
+            include_step_id: false,
+        },
+        WorkflowRunEnd::Halted => WorkflowRunLog {
+            result: WORKFLOW_RESULT_HALTED,
+            include_step_id: true,
+        },
+        WorkflowRunEnd::Error => WorkflowRunLog {
+            result: WORKFLOW_RESULT_ERROR,
+            include_step_id: true,
+        },
+    }
+}
+
+/// Plugin methods halt the remaining steps by returning `{ workflow: { continue: false } }`.
+pub fn plugin_result_should_continue(result: &serde_json::Value) -> bool {
+    result
+        .get("workflow")
+        .and_then(|value| value.get("continue"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
 
 pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
     vec![
@@ -10,6 +61,10 @@ pub fn get_workflow_triggers() -> Vec<WorkflowTriggerResponse> {
         },
         WorkflowTriggerResponse {
             trigger: TRIGGER_ASSET_METADATA.to_string(),
+            types: vec![TYPE_ASSET_V1.to_string()],
+        },
+        WorkflowTriggerResponse {
+            trigger: TRIGGER_ASSET_TAGGED.to_string(),
             types: vec![TYPE_ASSET_V1.to_string()],
         },
     ]
@@ -24,7 +79,9 @@ pub struct WorkflowTriggerResponse {
 
 pub fn is_method_compatible(method_types: &[String], trigger: &str) -> bool {
     let valid_types = match trigger {
-        TRIGGER_ASSET_CREATE | TRIGGER_ASSET_METADATA => &[TYPE_ASSET_V1][..],
+        TRIGGER_ASSET_CREATE | TRIGGER_ASSET_METADATA | TRIGGER_ASSET_TAGGED => {
+            &[TYPE_ASSET_V1][..]
+        }
         _ => return false,
     };
 
@@ -58,4 +115,82 @@ pub fn parse_method_string(method: &str) -> Option<ParsedMethod> {
         plugin_name,
         method_name: method_name.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn result_constants_match_upstream_enum() {
+        assert_eq!(WORKFLOW_RESULT_COMPLETED, "completed");
+        assert_eq!(WORKFLOW_RESULT_HALTED, "halted");
+        assert_eq!(WORKFLOW_RESULT_ERROR, "error");
+    }
+
+    #[test]
+    fn logging_flag_gates_writes() {
+        assert!(!should_write_workflow_log(false));
+        assert!(should_write_workflow_log(true));
+    }
+
+    #[test]
+    fn completed_log_omits_step_id() {
+        assert_eq!(
+            workflow_run_log(WorkflowRunEnd::Completed),
+            WorkflowRunLog {
+                result: WORKFLOW_RESULT_COMPLETED,
+                include_step_id: false,
+            }
+        );
+    }
+
+    #[test]
+    fn halted_and_error_logs_include_step_id() {
+        assert_eq!(
+            workflow_run_log(WorkflowRunEnd::Halted),
+            WorkflowRunLog {
+                result: WORKFLOW_RESULT_HALTED,
+                include_step_id: true,
+            }
+        );
+        assert_eq!(
+            workflow_run_log(WorkflowRunEnd::Error),
+            WorkflowRunLog {
+                result: WORKFLOW_RESULT_ERROR,
+                include_step_id: true,
+            }
+        );
+    }
+
+    #[test]
+    fn asset_tagged_is_a_supported_trigger() {
+        let triggers = get_workflow_triggers();
+        assert!(
+            triggers
+                .iter()
+                .any(|item| item.trigger == TRIGGER_ASSET_TAGGED)
+        );
+        assert!(is_method_compatible(
+            &[TYPE_ASSET_V1.to_string()],
+            TRIGGER_ASSET_TAGGED
+        ));
+        assert!(!is_method_compatible(
+            &[TYPE_ASSET_V1.to_string()],
+            "UnknownTrigger"
+        ));
+    }
+
+    #[test]
+    fn plugin_continue_defaults_to_true() {
+        assert!(plugin_result_should_continue(&json!({})));
+        assert!(plugin_result_should_continue(&json!({ "workflow": {} })));
+        assert!(plugin_result_should_continue(
+            &json!({ "workflow": { "continue": true } })
+        ));
+        assert!(!plugin_result_should_continue(
+            &json!({ "workflow": { "continue": false } })
+        ));
+    }
 }
