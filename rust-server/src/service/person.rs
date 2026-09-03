@@ -366,6 +366,7 @@ impl PersonService {
         self.unlink_people_thumbnails(&auth.user.id, &dto.ids)
             .await?;
         person::delete_for_owner(&self.pool, &auth.user.id, &dto.ids).await?;
+        person::delete_empty_groups(&self.pool).await?;
         Ok(())
     }
 

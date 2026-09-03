@@ -321,7 +321,7 @@ pub async fn list_without_faces(pool: &Pool<Postgres>) -> Result<Vec<(Uuid, Stri
             LEFT JOIN asset_face af ON {join}
                 AND af."deletedAt" IS NULL
                 AND af."isVisible" = TRUE
-            GROUP BY {group_id}, person."thumbnailPath"
+            GROUP BY {group_id}, person."ownerId", person."thumbnailPath"
             HAVING COUNT(af.id) = 0
         "#,
         group_id = schema.person_id_expr("person."),
@@ -343,6 +343,42 @@ pub async fn delete_by_ids(pool: &Pool<Postgres>, ids: &[Uuid]) -> Result<(), sq
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn delete_empty_groups(pool: &Pool<Postgres>) -> Result<u64, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    if !schema.is_cluster_groups() {
+        return Ok(0);
+    }
+    let result = sqlx::query(
+        r#"
+        DELETE FROM person_group
+        WHERE NOT EXISTS (
+            SELECT 1 FROM person WHERE person."personGroupId" = person_group.id
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn delete_orphaned_cluster_groups(pool: &Pool<Postgres>) -> Result<u64, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    if !schema.is_cluster_groups() {
+        return Ok(0);
+    }
+    let result = sqlx::query(
+        r#"
+        DELETE FROM cluster_group
+        WHERE NOT EXISTS (
+            SELECT 1 FROM "user" WHERE "user"."clusterGroupId" = cluster_group.id
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 #[derive(Debug, FromRow)]
