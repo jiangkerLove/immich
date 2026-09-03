@@ -50,7 +50,10 @@ pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<LibraryRow>, sqlx::Er
     .await
 }
 
-pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<LibraryRow>, sqlx::Error> {
+pub async fn get_by_id(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<LibraryRow>, sqlx::Error> {
     sqlx::query_as::<_, LibraryRow>(
         r#"
             SELECT
@@ -70,6 +73,36 @@ pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<Librar
                 ), 0) as asset_count
             FROM library l
             WHERE l.id = $1 AND l."deletedAt" IS NULL
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_by_id_with_deleted(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<LibraryRow>, sqlx::Error> {
+    sqlx::query_as::<_, LibraryRow>(
+        r#"
+            SELECT
+                l.id,
+                l.name,
+                l."ownerId" as owner_id,
+                l."importPaths" as import_paths,
+                l."exclusionPatterns" as exclusion_patterns,
+                l."createdAt" as created_at,
+                l."updatedAt" as updated_at,
+                l."refreshedAt" as refreshed_at,
+                l."deletedAt" as deleted_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM asset a
+                    WHERE a."libraryId" = l.id AND a."deletedAt" IS NULL
+                ), 0) as asset_count
+            FROM library l
+            WHERE l.id = $1
         "#,
     )
     .bind(id)
@@ -98,9 +131,7 @@ pub async fn create(
     .fetch_one(pool)
     .await?;
 
-    get_by_id(pool, &id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    get_by_id(pool, &id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
@@ -110,9 +141,7 @@ pub async fn update(
     import_paths: Option<&[String]>,
     exclusion_patterns: Option<&[String]>,
 ) -> Result<LibraryRow, sqlx::Error> {
-    let current = get_by_id(pool, id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)?;
+    let current = get_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)?;
 
     let name = name.unwrap_or(&current.name);
     let import_paths = import_paths.unwrap_or(&current.import_paths);
@@ -135,9 +164,7 @@ pub async fn update(
     .execute(pool)
     .await?;
 
-    get_by_id(pool, id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    get_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn soft_delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {

@@ -9,10 +9,10 @@ use tokio::sync::OnceCell;
 
 use crate::constants::SERVER_VERSION;
 use crate::models::db::system_metadata;
-use crate::service::hls::is_maintenance_mode;
 use crate::models::db::version_history;
 use crate::models::dto::env::EnvDto;
 use crate::models::response::response::ErrorResp;
+use crate::service::hls::is_maintenance_mode;
 use crate::utils::bytes::as_human_readable;
 use crate::utils::disk::check_disk_usage;
 use crate::utils::mime_types::{
@@ -132,7 +132,7 @@ pub struct ServerPingResponse {
     pub res: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerVersionResponse {
     pub major: u64,
@@ -301,7 +301,9 @@ impl ServerService {
         }
     }
 
-    pub async fn get_version_history(&self) -> Result<Vec<ServerVersionHistoryResponse>, ErrorResp> {
+    pub async fn get_version_history(
+        &self,
+    ) -> Result<Vec<ServerVersionHistoryResponse>, ErrorResp> {
         let rows = version_history::get_all(&self.pool).await?;
         Ok(rows
             .into_iter()
@@ -356,11 +358,7 @@ impl ServerService {
             trash_days: json_i32(&config, &["trash", "days"], 30),
             user_delete_delay: json_i32(&config, &["user", "deleteDelay"], 7),
             oauth_button_text: json_str(&config, &["oauth", "buttonText"], "Login with OAuth"),
-            oauth_account_management_url: json_str(
-                &config,
-                &["oauth", "accountManagementUrl"],
-                "",
-            ),
+            oauth_account_management_url: json_str(&config, &["oauth", "accountManagementUrl"], ""),
             is_initialized: !self.allow_setup || has_admin,
             is_onboarded: admin_onboarding.is_onboarded,
             external_domain: json_str(&config, &["server", "externalDomain"], ""),
@@ -376,14 +374,17 @@ impl ServerService {
                 "https://tiles.immich.cloud/v1/style/light.json",
             ),
             maintenance_mode,
-            min_faces: json_i32(&config, &["machineLearning", "facialRecognition", "minFaces"], 3),
+            min_faces: json_i32(
+                &config,
+                &["machineLearning", "facialRecognition", "minFaces"],
+                3,
+            ),
         })
     }
 
     pub async fn get_about(&self) -> Result<ServerAboutResponse, ErrorResp> {
         let version = format!("v{SERVER_VERSION}");
-        let version_url =
-            format!("https://github.com/immich-app/immich/releases/tag/{version}");
+        let version_url = format!("https://github.com/immich-app/immich/releases/tag/{version}");
 
         let license = system_metadata::get_json(&self.pool, "license").await?;
         let licensed = license.is_some();
@@ -428,14 +429,16 @@ impl ServerService {
             .clone()
     }
 
-    pub fn get_storage(&self, auth: &crate::models::dto::auth::AuthDto) -> Result<ServerStorageResponse, ErrorResp> {
+    pub fn get_storage(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<ServerStorageResponse, ErrorResp> {
         if !auth.user.is_admin {
             return Err(ErrorResp::Forbidden("Forbidden".to_string()));
         }
 
-        let disk = check_disk_usage(&self.library_path).ok_or_else(|| {
-            ErrorResp::ServerError("Failed to read disk usage".to_string())
-        })?;
+        let disk = check_disk_usage(&self.library_path)
+            .ok_or_else(|| ErrorResp::ServerError("Failed to read disk usage".to_string()))?;
 
         let disk_use_raw = disk.used;
         let usage_percentage = if disk.total == 0 {
@@ -455,7 +458,10 @@ impl ServerService {
         })
     }
 
-    pub async fn get_statistics(&self, auth: &crate::models::dto::auth::AuthDto) -> Result<ServerStatsResponse, ErrorResp> {
+    pub async fn get_statistics(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<ServerStatsResponse, ErrorResp> {
         if !auth.user.is_admin {
             return Err(ErrorResp::Forbidden("Forbidden".to_string()));
         }
@@ -492,9 +498,8 @@ impl ServerService {
     }
 
     pub fn get_apk_links(&self) -> ServerApkLinksResponse {
-        let base_url = format!(
-            "https://github.com/immich-app/immich/releases/download/v{SERVER_VERSION}"
-        );
+        let base_url =
+            format!("https://github.com/immich-app/immich/releases/download/v{SERVER_VERSION}");
         ServerApkLinksResponse {
             arm64v8a: format!("{base_url}/app-arm64-v8a-release.apk"),
             armeabiv7a: format!("{base_url}/app-armeabi-v7a-release.apk"),
@@ -603,11 +608,7 @@ impl ServerService {
 }
 
 fn non_empty(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 async fn probe_tool_versions() -> ToolVersions {

@@ -484,7 +484,7 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Ok(JobWorkerStatus::Success);
+            return Ok(JobWorkerStatus::Skipped);
         };
 
         if !force {
@@ -500,11 +500,11 @@ impl BackgroundTaskProcessor {
                 let ready_before = Utc::now() - Duration::days(delete_delay as i64);
                 if deleted_at > ready_before {
                     eprintln!("Skipped user not ready for deletion: id={}", job.id);
-                    return Ok(JobWorkerStatus::Success);
+                    return Ok(JobWorkerStatus::Skipped);
                 }
             } else {
                 eprintln!("Skipped user not ready for deletion: id={}", job.id);
-                return Ok(JobWorkerStatus::Success);
+                return Ok(JobWorkerStatus::Skipped);
             }
         }
 

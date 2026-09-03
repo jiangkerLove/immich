@@ -291,13 +291,20 @@ impl LibraryProcessor {
     }
 
     async fn handle_sync_files(&self, job: LibrarySyncFilesJob) -> Result<JobWorkerStatus, String> {
-        let Some(library_row) = library::get_by_id(&self.pool, &job.library_id)
+        let Some(library_row) = library::get_by_id_with_deleted(&self.pool, &job.library_id)
             .await
             .map_err(|err| err.to_string())?
         else {
             println!("Library {} not found, skipping file import", job.library_id);
             return Ok(sync_files_status(false));
         };
+        if library_row.deleted_at.is_some() {
+            println!(
+                "Library {} is deleted, won't import assets into it",
+                job.library_id
+            );
+            return Ok(JobWorkerStatus::Failed);
+        }
 
         let mut created_ids = Vec::new();
         for path in &job.paths {
