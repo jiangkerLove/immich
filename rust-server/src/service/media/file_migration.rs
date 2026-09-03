@@ -2,7 +2,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::asset_job::{self, UpsertAssetFile};
-use crate::models::db::migration_job::{self, find_asset_file, parse_asset_files, MigrationAssetRow};
+use crate::models::db::migration_job::{
+    self, MigrationAssetRow, find_asset_file, parse_asset_files,
+};
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::JobService;
 use crate::utils::storage::StoragePaths;
@@ -51,10 +53,8 @@ impl FileMigrationService {
     }
 
     pub async fn queue_all(&self) -> Result<(), String> {
-        StoragePaths::remove_empty_dirs(&self.storage.thumbs_base(), false)
-            .await?;
-        StoragePaths::remove_empty_dirs(&self.storage.encoded_video_base(), false)
-            .await?;
+        StoragePaths::remove_empty_dirs(&self.storage.thumbs_base(), false).await?;
+        StoragePaths::remove_empty_dirs(&self.storage.encoded_video_base(), false).await?;
 
         let asset_ids = migration_job::stream_for_migration(&self.pool)
             .await
@@ -68,13 +68,13 @@ impl FileMigrationService {
             }
         }
 
-        let person_ids = migration_job::stream_persons_for_migration(&self.pool)
+        let people = migration_job::stream_persons_for_migration(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        for chunk in person_ids.chunks(JOBS_BATCH_SIZE) {
-            for person_id in chunk {
+        for chunk in people.chunks(JOBS_BATCH_SIZE) {
+            for person in chunk {
                 self.jobs
-                    .queue_person_file_migration(person_id)
+                    .queue_person_file_migration(&person.owner_id, &person.id)
                     .await
                     .map_err(|err| err.to_string())?;
             }
@@ -105,8 +105,12 @@ impl FileMigrationService {
         Ok(FileMigrationOutcome::Success)
     }
 
-    pub async fn migrate_person(&self, person_id: &Uuid) -> Result<FileMigrationOutcome, String> {
-        let Some(person) = migration_job::get_person_for_migration(&self.pool, person_id)
+    pub async fn migrate_person(
+        &self,
+        owner_id: &Uuid,
+        person_id: &Uuid,
+    ) -> Result<FileMigrationOutcome, String> {
+        let Some(person) = migration_job::get_person_for_migration(&self.pool, owner_id, person_id)
             .await
             .map_err(|err| err.to_string())?
         else {
@@ -125,7 +129,10 @@ impl FileMigrationService {
             "face",
             Some(person.thumbnail_path.clone()),
             new_path.to_string_lossy().into_owned(),
-            SavePathTarget::PersonThumbnail(*person_id),
+            SavePathTarget::PersonThumbnail {
+                owner_id: person.owner_id,
+                person_id: *person_id,
+            },
         )
         .await?;
 
@@ -169,9 +176,7 @@ impl FileMigrationService {
         files: &[crate::models::db::asset_job::AssetFileJobRow],
     ) -> Result<(), String> {
         let old_file = find_asset_file(files, "encoded_video", false);
-        let new_path = self
-            .storage
-            .encoded_video_path(&asset.owner_id, &asset.id);
+        let new_path = self.storage.encoded_video_path(&asset.owner_id, &asset.id);
         self.run_move(
             asset.id,
             "encoded_video",
@@ -231,8 +236,7 @@ impl FileMigrationService {
                     read_string(thumbnail, "format", &config.thumbnail_format);
             }
             if let Some(fullsize) = image.get("fullsize") {
-                config.fullsize_format =
-                    read_string(fullsize, "format", &config.fullsize_format);
+                config.fullsize_format = read_string(fullsize, "format", &config.fullsize_format);
             }
         }
         Ok(config)
@@ -248,7 +252,10 @@ enum SavePathTarget {
         is_progressive: bool,
         is_transparent: bool,
     },
-    PersonThumbnail(Uuid),
+    PersonThumbnail {
+        owner_id: Uuid,
+        person_id: Uuid,
+    },
 }
 
 async fn save_path(pool: &PgPool, target: SavePathTarget, new_path: String) -> Result<(), String> {
@@ -274,8 +281,11 @@ async fn save_path(pool: &PgPool, target: SavePathTarget, new_path: String) -> R
             .await
             .map_err(|err| err.to_string())?;
         }
-        SavePathTarget::PersonThumbnail(person_id) => {
-            asset_job::update_person_thumbnail_path(pool, &person_id, &new_path)
+        SavePathTarget::PersonThumbnail {
+            owner_id,
+            person_id,
+        } => {
+            asset_job::update_person_thumbnail_path(pool, &owner_id, &person_id, &new_path)
                 .await
                 .map_err(|err| err.to_string())?;
         }

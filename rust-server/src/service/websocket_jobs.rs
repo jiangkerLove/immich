@@ -11,8 +11,9 @@ use crate::models::db::asset_edit;
 use crate::models::db::assets;
 use crate::models::response::asset::get_asset_response;
 use crate::models::response::sync::{
-    sync_exif_from_json, AssetEditReadyV2, AssetUploadReadyV2, SyncAssetEditV1, SyncAssetV2,
+    AssetEditReadyV2, AssetUploadReadyV2, SyncAssetEditV1, SyncAssetV2, sync_exif_from_json,
 };
+use crate::service::job::PersonJob;
 use crate::service::websocket::WebSocketHub;
 
 const BULL_PREFIX: &str = "immich_bull";
@@ -85,12 +86,10 @@ async fn listen_queue(
                     continue;
                 }
 
-                let job_name = job_names
-                    .remove(&job_id)
-                    .or_else(|| {
-                        // fallback: job may have been added before listener started
-                        None
-                    });
+                let job_name = job_names.remove(&job_id).or_else(|| {
+                    // fallback: job may have been added before listener started
+                    None
+                });
 
                 let job = queue.get_job(&job_id).await.ok().flatten();
                 let (name, data) = match (job_name, job) {
@@ -134,21 +133,29 @@ async fn handle_job_completed(
     job_name: &str,
     data: &Value,
 ) {
-    let Ok(job) = serde_json::from_value::<EntityJobData>(data.clone()) else {
-        return;
-    };
-
     match (queue_name, job_name) {
         (QUEUE_THUMBNAIL, "AssetGenerateThumbnails") => {
+            let Ok(job) = serde_json::from_value::<EntityJobData>(data.clone()) else {
+                return;
+            };
             handle_asset_generate_thumbnails(pool, websocket, &job).await;
         }
         (QUEUE_THUMBNAIL, "PersonGenerateThumbnail") => {
-            handle_person_thumbnail(pool, websocket, job.id).await;
+            let Ok(job) = serde_json::from_value::<PersonJob>(data.clone()) else {
+                return;
+            };
+            websocket.emit_person_thumbnail(job.owner_id, job.person_group_id);
         }
         (QUEUE_EDITOR, "AssetEditThumbnailGeneration") => {
+            let Ok(job) = serde_json::from_value::<EntityJobData>(data.clone()) else {
+                return;
+            };
             handle_asset_edit_ready(pool, websocket, job.id).await;
         }
         (QUEUE_METADATA, "AssetExtractMetadata") => {
+            let Ok(job) = serde_json::from_value::<EntityJobData>(data.clone()) else {
+                return;
+            };
             if job.source.as_deref() == Some("sidecar-write") {
                 handle_asset_metadata_sidecar(pool, websocket, job.id).await;
             }
@@ -187,20 +194,6 @@ async fn handle_asset_generate_thumbnails(
         };
         websocket.emit_asset_upload_ready(row.owner_id, payload);
     }
-}
-
-async fn handle_person_thumbnail(pool: &PgPool, websocket: &WebSocketHub, person_id: Uuid) {
-    let Ok(Some(owner_id)) = sqlx::query_scalar::<_, Uuid>(
-        r#"SELECT "ownerId" FROM person WHERE id = $1"#,
-    )
-    .bind(person_id)
-    .fetch_optional(pool)
-    .await
-    else {
-        return;
-    };
-
-    websocket.emit_person_thumbnail(owner_id, person_id);
 }
 
 async fn handle_asset_edit_ready(pool: &PgPool, websocket: &WebSocketHub, asset_id: Uuid) {

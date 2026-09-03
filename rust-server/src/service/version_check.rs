@@ -14,6 +14,12 @@ const VERSION_CHECK_URL_PROD: &str = "https://version.immich.cloud/version";
 const VERSION_CHECK_URL_DEV: &str = "https://version.dev.immich.cloud/version";
 const MIN_CHECK_INTERVAL_SECS: i64 = 50;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionCheckOutcome {
+    Success,
+    Skipped,
+}
+
 #[derive(Debug, Deserialize)]
 struct VersionResponse {
     version: String,
@@ -31,11 +37,21 @@ struct ReleaseEvent {
     release_type: Option<String>,
 }
 
+pub fn should_skip_version_check(enabled: bool, seconds_since_last_check: Option<i64>) -> bool {
+    if !enabled {
+        return true;
+    }
+    matches!(
+        seconds_since_last_check,
+        Some(secs) if secs < MIN_CHECK_INTERVAL_SECS
+    )
+}
+
 pub async fn run_version_check(
     pool: &PgPool,
     websocket: &WebSocketHub,
     env: Option<&ImmichEnvironment>,
-) -> Result<(), String> {
+) -> Result<VersionCheckOutcome, String> {
     let config = crate::utils::system_config::get_merged(pool)
         .await
         .map_err(|err| err.to_string())?;
@@ -46,7 +62,7 @@ pub async fn run_version_check(
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
     if !enabled {
-        return Ok(());
+        return Ok(VersionCheckOutcome::Skipped);
     }
 
     let channel = version_check
@@ -58,13 +74,17 @@ pub async fn run_version_check(
     let existing = system_metadata::get_version_check_state(pool)
         .await
         .map_err(|err| err.to_string())?;
-    if let Some(checked_at) = existing.checked_at.as_deref() {
-        if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(checked_at) {
-            let elapsed = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
-            if elapsed.num_seconds() < MIN_CHECK_INTERVAL_SECS {
-                return Ok(());
-            }
-        }
+    let seconds_since_last_check = existing.checked_at.as_deref().and_then(|checked_at| {
+        chrono::DateTime::parse_from_rfc3339(checked_at)
+            .ok()
+            .map(|parsed| {
+                Utc::now()
+                    .signed_duration_since(parsed.with_timezone(&Utc))
+                    .num_seconds()
+            })
+    });
+    if should_skip_version_check(true, seconds_since_last_check) {
+        return Ok(VersionCheckOutcome::Skipped);
     }
 
     let release = fetch_latest_release(env, channel).await?;
@@ -96,7 +116,7 @@ pub async fn run_version_check(
         websocket.client_broadcast("on_new_release", payload);
     }
 
-    Ok(())
+    Ok(VersionCheckOutcome::Success)
 }
 
 async fn fetch_latest_release(
@@ -197,4 +217,23 @@ fn diff_release_type(current: &str, release: &str) -> Option<String> {
         return Some("prerelease".to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_when_disabled() {
+        assert!(should_skip_version_check(false, None));
+        assert!(should_skip_version_check(false, Some(100)));
+    }
+
+    #[test]
+    fn skips_when_checked_within_fifty_seconds() {
+        assert!(should_skip_version_check(true, Some(0)));
+        assert!(should_skip_version_check(true, Some(49)));
+        assert!(!should_skip_version_check(true, Some(50)));
+        assert!(!should_skip_version_check(true, None));
+    }
 }

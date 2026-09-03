@@ -16,6 +16,8 @@ const QUEUE_SIDECAR: &str = "sidecar";
 #[derive(Debug, Deserialize)]
 struct EntityJobData {
     id: Uuid,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,7 +42,11 @@ impl SidecarProcessor {
             "SidecarCheck" => {
                 let job: EntityJobData =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                match self.service.check_sidecar(&job.id).await? {
+                match self
+                    .service
+                    .check_sidecar(&job.id, job.source.as_deref())
+                    .await?
+                {
                     SidecarCheckOutcome::NotFound => Ok(JobWorkerStatus::Skipped),
                     SidecarCheckOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
                     SidecarCheckOutcome::Success => Ok(JobWorkerStatus::Success),
@@ -66,6 +72,31 @@ impl SidecarProcessor {
                 Ok(JobWorkerStatus::Skipped)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sidecar_check_deserializes_upload_source() {
+        let job: EntityJobData = serde_json::from_value(json!({
+            "id": "11111111-1111-1111-1111-111111111111",
+            "source": "upload"
+        }))
+        .unwrap();
+        assert_eq!(job.source.as_deref(), Some("upload"));
+    }
+
+    #[test]
+    fn sidecar_check_deserializes_without_source() {
+        let job: EntityJobData = serde_json::from_value(json!({
+            "id": "11111111-1111-1111-1111-111111111111"
+        }))
+        .unwrap();
+        assert_eq!(job.source, None);
     }
 }
 

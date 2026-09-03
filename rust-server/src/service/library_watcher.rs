@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use sqlx::PgPool;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -21,6 +21,7 @@ const WRITE_STABILITY_MS: u64 = 5000;
 enum WatcherCommand {
     SetEnabled(bool),
     WatchAll,
+    Watch(Uuid),
     Unwatch(Uuid),
     UnwatchAll,
 }
@@ -113,6 +114,10 @@ pub async fn reload_watch_config(pool: &PgPool) {
     }
 }
 
+pub fn request_watch(library_id: Uuid) {
+    send_command(WatcherCommand::Watch(library_id));
+}
+
 pub fn request_unwatch(library_id: Uuid) {
     send_command(WatcherCommand::Unwatch(library_id));
 }
@@ -146,6 +151,18 @@ impl LibraryWatcherManager {
                 };
                 for library in libraries {
                     self.watch_library(&library).await;
+                }
+            }
+            WatcherCommand::Watch(id) => {
+                if !self.watch_enabled {
+                    return;
+                }
+                match library::get_by_id(&self.pool, &id).await {
+                    Ok(Some(library)) => self.watch_library(&library).await,
+                    Ok(None) => self.unwatch_library(id),
+                    Err(err) => {
+                        eprintln!("library watcher: failed to load library {id}: {err}");
+                    }
                 }
             }
             WatcherCommand::Unwatch(id) => {

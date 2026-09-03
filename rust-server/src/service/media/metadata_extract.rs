@@ -351,10 +351,6 @@ impl MetadataExtractService {
     }
 
     async fn queue_follow_up_jobs(&self, job: &EntityJob) -> Result<(), String> {
-        if job.source.as_deref() == Some("sidecar-write") {
-            return Ok(());
-        }
-
         let config = get_json(&self.pool, "system-config")
             .await
             .map_err(|err| err.to_string())?;

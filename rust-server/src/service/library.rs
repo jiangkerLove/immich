@@ -9,6 +9,7 @@ use crate::models::db::library::{self, LibraryRow};
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::job::JobService;
+use crate::utils::fs_access::has_read_access;
 use crate::utils::permission::require_admin;
 
 const DEFAULT_EXCLUSIONS: &[&str] = &[
@@ -130,6 +131,7 @@ impl LibraryService {
             &exclusion_patterns,
         )
         .await?;
+        crate::service::library_watcher::request_watch(row.id);
         Ok(map_library(row))
     }
 
@@ -162,6 +164,7 @@ impl LibraryService {
             dto.exclusion_patterns.as_deref(),
         )
         .await?;
+        crate::service::library_watcher::request_watch(*id);
         Ok(map_library(row))
     }
 
@@ -255,11 +258,21 @@ impl LibraryService {
         }
 
         match tokio::fs::metadata(import_path).await {
-            Ok(metadata) if metadata.is_dir() => ValidateLibraryImportPathResponse {
-                import_path: import_path.to_string(),
-                is_valid: true,
-                message: None,
-            },
+            Ok(metadata) if metadata.is_dir() => {
+                if !has_read_access(import_path) {
+                    ValidateLibraryImportPathResponse {
+                        import_path: import_path.to_string(),
+                        is_valid: false,
+                        message: Some("Lacking read permission for folder".to_string()),
+                    }
+                } else {
+                    ValidateLibraryImportPathResponse {
+                        import_path: import_path.to_string(),
+                        is_valid: true,
+                        message: None,
+                    }
+                }
+            }
             Ok(_) => ValidateLibraryImportPathResponse {
                 import_path: import_path.to_string(),
                 is_valid: false,

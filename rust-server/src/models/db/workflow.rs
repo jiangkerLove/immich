@@ -12,6 +12,7 @@ pub struct WorkflowRow {
     pub description: Option<String>,
     pub trigger: String,
     pub enabled: bool,
+    pub logging: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub steps: Value,
@@ -25,6 +26,7 @@ const WORKFLOW_SELECT: &str = r#"
         workflow.description,
         workflow.trigger,
         workflow.enabled,
+        workflow.logging,
         workflow."createdAt" as created_at,
         workflow."updatedAt" as updated_at,
         (
@@ -51,6 +53,7 @@ pub async fn search(
     id: Option<Uuid>,
     trigger: Option<&str>,
     enabled: Option<bool>,
+    logging: Option<bool>,
 ) -> Result<Vec<WorkflowRow>, sqlx::Error> {
     let mut query = String::from(WORKFLOW_SELECT);
     query.push_str(r#" WHERE workflow."ownerId" = $1"#);
@@ -66,6 +69,10 @@ pub async fn search(
     }
     if enabled.is_some() {
         query.push_str(&format!(" AND workflow.enabled = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if logging.is_some() {
+        query.push_str(&format!(" AND workflow.logging = ${bind_idx}"));
         let _ = bind_idx;
     }
     query.push_str(r#" ORDER BY workflow."createdAt" DESC"#);
@@ -80,10 +87,16 @@ pub async fn search(
     if let Some(enabled) = enabled {
         q = q.bind(enabled);
     }
+    if let Some(logging) = logging {
+        q = q.bind(logging);
+    }
     q.fetch_all(pool).await
 }
 
-pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<WorkflowRow>, sqlx::Error> {
+pub async fn get_by_id(
+    pool: &Pool<Postgres>,
+    id: &Uuid,
+) -> Result<Option<WorkflowRow>, sqlx::Error> {
     let query = format!("{WORKFLOW_SELECT} WHERE workflow.id = $1");
     sqlx::query_as::<_, WorkflowRow>(&query)
         .bind(id)
@@ -98,13 +111,14 @@ pub async fn create(
     name: Option<&str>,
     description: Option<&str>,
     enabled: bool,
+    logging: bool,
     steps: &[(Uuid, bool, Option<Value>)],
 ) -> Result<WorkflowRow, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let id: Uuid = sqlx::query_scalar(
         r#"
-        INSERT INTO workflow ("ownerId", trigger, name, description, enabled)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO workflow ("ownerId", trigger, name, description, enabled, logging)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         "#,
     )
@@ -113,15 +127,14 @@ pub async fn create(
     .bind(name)
     .bind(description)
     .bind(enabled)
+    .bind(logging)
     .fetch_one(&mut *tx)
     .await?;
 
     replace_steps(&mut tx, &id, steps).await?;
     tx.commit().await?;
 
-    get_by_id(pool, &id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    get_by_id(pool, &id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
@@ -131,12 +144,25 @@ pub async fn update(
     name: Option<Option<&str>>,
     description: Option<Option<&str>>,
     enabled: Option<bool>,
+    logging: Option<bool>,
     steps: Option<&[(Uuid, bool, Option<Value>)]>,
 ) -> Result<WorkflowRow, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let current = get_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)?;
 
-    if trigger.is_some() || name.is_some() || description.is_some() || enabled.is_some() {
+    if logging == Some(false) {
+        sqlx::query(r#"DELETE FROM workflow_log WHERE "workflowId" = $1"#)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    if trigger.is_some()
+        || name.is_some()
+        || description.is_some()
+        || enabled.is_some()
+        || logging.is_some()
+    {
         let next_name = match name {
             None => current.name.as_deref(),
             Some(value) => value,
@@ -153,6 +179,7 @@ pub async fn update(
                 name = $3,
                 description = $4,
                 enabled = $5,
+                logging = $6,
                 "updatedAt" = NOW()
             WHERE id = $1
             "#,
@@ -162,6 +189,7 @@ pub async fn update(
         .bind(next_name)
         .bind(next_description)
         .bind(enabled.unwrap_or(current.enabled))
+        .bind(logging.unwrap_or(current.logging))
         .execute(&mut *tx)
         .await?;
     }
@@ -172,9 +200,7 @@ pub async fn update(
 
     tx.commit().await?;
 
-    get_by_id(pool, id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    get_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn delete(pool: &Pool<Postgres>, id: &Uuid) -> Result<(), sqlx::Error> {
@@ -230,6 +256,7 @@ pub struct WorkflowRunRow {
     pub id: Uuid,
     pub name: Option<String>,
     pub trigger: String,
+    pub logging: bool,
     pub steps: Value,
 }
 
@@ -242,6 +269,8 @@ pub struct WorkflowRunStep {
     pub method_name: String,
     pub types: Vec<String>,
     pub host_functions: bool,
+    #[serde(default, alias = "allowedHosts")]
+    pub allowed_hosts: Vec<String>,
 }
 
 pub async fn get_for_workflow_run(
@@ -254,6 +283,7 @@ pub async fn get_for_workflow_run(
             workflow.id,
             workflow.name,
             workflow.trigger,
+            workflow.logging,
             (
                 SELECT COALESCE(json_agg(step ORDER BY workflow_step."order"), '[]'::json)
                 FROM (
@@ -263,7 +293,8 @@ pub async fn get_for_workflow_run(
                         plugin_method."pluginId" as "pluginId",
                         plugin_method.name as "methodName",
                         plugin_method.types,
-                        plugin_method."hostFunctions" as "hostFunctions"
+                        plugin_method."hostFunctions" as "hostFunctions",
+                        plugin_method."allowedHosts" as "allowedHosts"
                     FROM workflow_step
                     INNER JOIN plugin_method ON plugin_method.id = workflow_step."pluginMethodId"
                     WHERE workflow_step."workflowId" = workflow.id
@@ -311,6 +342,19 @@ pub async fn get_for_asset_v1(
             'isFavorite', a."isFavorite",
             'isExternal', a."isExternal",
             'isEdited', a."isEdited",
+            'tags', COALESCE((
+                SELECT json_agg(json_build_object(
+                    'id', t.id,
+                    'value', t.value,
+                    'createdAt', t."createdAt",
+                    'updatedAt', t."updatedAt",
+                    'color', t.color,
+                    'parentId', t."parentId"
+                ))
+                FROM tag t
+                INNER JOIN tag_asset ta ON ta."tagId" = t.id
+                WHERE ta."assetId" = a.id
+            ), '[]'::json),
             'exifInfo', (
                 SELECT json_build_object(
                     'make', e.make,
