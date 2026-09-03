@@ -10,9 +10,7 @@ use uuid::Uuid;
 
 use crate::models::db::asset_delete;
 use crate::models::db::assets::{self, NewLibraryAsset};
-use crate::models::db::library::{
-    self, LibraryAssetSyncRow, LibraryRow,
-};
+use crate::models::db::library::{self, LibraryAssetSyncRow, LibraryRow};
 use crate::service::job::JobService;
 use crate::utils::checksum::sha1_bytes;
 use crate::utils::file_walk::walk_file_batches;
@@ -37,6 +35,7 @@ struct LibraryIdJob {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LibrarySyncFilesJob {
     library_id: Uuid,
     paths: Vec<String>,
@@ -47,6 +46,7 @@ struct LibrarySyncFilesJob {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LibrarySyncAssetsJob {
     library_id: Uuid,
     import_paths: Vec<String>,
@@ -234,9 +234,7 @@ impl LibraryProcessor {
             let filtered: Vec<String> = path_batch
                 .into_iter()
                 .filter(|path| !is_hidden_path(path))
-                .filter(|path| {
-                    !path_matches_exclusion(path, &library_row.exclusion_patterns)
-                })
+                .filter(|path| !path_matches_exclusion(path, &library_row.exclusion_patterns))
                 .collect();
 
             crawl_count += filtered.len();
@@ -287,7 +285,10 @@ impl LibraryProcessor {
             {
                 Ok(Some(asset_id)) => created_ids.push(asset_id),
                 Ok(None) => {}
-                Err(err) => eprintln!("Error processing {path} for library {}: {err}", job.library_id),
+                Err(err) => eprintln!(
+                    "Error processing {path} for library {}: {err}",
+                    job.library_id
+                ),
             }
         }
 
@@ -297,9 +298,17 @@ impl LibraryProcessor {
                 created_ids.len(),
                 job.library_id
             );
-            for asset_id in created_ids {
+            for asset_id in &created_ids {
+                let _ = crate::service::workflow_trigger::on_asset_trigger(
+                    &self.pool,
+                    &self.jobs,
+                    &library_row.owner_id,
+                    asset_id,
+                    crate::utils::workflow::TRIGGER_ASSET_CREATE,
+                )
+                .await;
                 self.jobs
-                    .queue_sidecar_check(&asset_id)
+                    .queue_sidecar_check(asset_id)
                     .await
                     .map_err(|err| err.to_string())?;
             }
@@ -415,13 +424,10 @@ impl LibraryProcessor {
 
     async fn handle_remove_asset(&self, job: LibraryRemoveAssetJob) -> Result<(), String> {
         for asset_path in job.paths {
-            let Some(asset_id) = library::get_asset_id_by_library_path(
-                &self.pool,
-                &job.library_id,
-                &asset_path,
-            )
-            .await
-            .map_err(|err| err.to_string())?
+            let Some(asset_id) =
+                library::get_asset_id_by_library_path(&self.pool, &job.library_id, &asset_path)
+                    .await
+                    .map_err(|err| err.to_string())?
             else {
                 continue;
             };
@@ -520,9 +526,7 @@ impl LibraryProcessor {
         owner_id: &Uuid,
         library_id: &Uuid,
     ) -> Result<Option<Uuid>, String> {
-        let normalized = Path::new(file_path)
-            .to_string_lossy()
-            .into_owned();
+        let normalized = Path::new(file_path).to_string_lossy().into_owned();
         let metadata = tokio::fs::metadata(&normalized)
             .await
             .map_err(|err| err.to_string())?;
@@ -573,7 +577,13 @@ fn is_hidden_path(path: &str) -> bool {
         .any(|part| part.starts_with('.'))
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, jobs: JobService, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    storage: StoragePaths,
+    jobs: JobService,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let processor = Arc::new(LibraryProcessor::new(pool, storage, jobs));
         let worker = WorkerBuilder::new(QUEUE_LIBRARY)
@@ -608,4 +618,44 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, jobs: JobSe
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sync_files_job_deserializes_camel_case() {
+        let job: LibrarySyncFilesJob = serde_json::from_value(json!({
+            "libraryId": "11111111-1111-1111-1111-111111111111",
+            "paths": ["/data/photo.jpg"],
+            "progressCounter": 3,
+            "totalAssets": 10
+        }))
+        .expect("libraryId payload should deserialize");
+
+        assert_eq!(
+            job.library_id.to_string(),
+            "11111111-1111-1111-1111-111111111111"
+        );
+        assert_eq!(job.paths, vec!["/data/photo.jpg"]);
+        assert_eq!(job.progress_counter, Some(3));
+        assert_eq!(job.total_assets, Some(10));
+    }
+
+    #[test]
+    fn sync_assets_job_deserializes_camel_case() {
+        let job: LibrarySyncAssetsJob = serde_json::from_value(json!({
+            "libraryId": "11111111-1111-1111-1111-111111111111",
+            "importPaths": ["/data"],
+            "exclusionPatterns": ["**/.git/**"],
+            "assetIds": ["22222222-2222-2222-2222-222222222222"]
+        }))
+        .expect("libraryId payload should deserialize");
+
+        assert_eq!(job.import_paths, vec!["/data"]);
+        assert_eq!(job.exclusion_patterns, vec!["**/.git/**"]);
+        assert_eq!(job.asset_ids.len(), 1);
+    }
 }

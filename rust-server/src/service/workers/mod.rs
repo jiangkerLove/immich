@@ -56,29 +56,27 @@ pub struct WorkerContext {
 pub fn spawn_all(ctx: WorkerContext) {
     let _ = WORKER_CTX.set(ctx.clone());
 
-    if crate::utils::workers::should_run_microservices_workers(&ctx.env) {
-        if crate::utils::telemetry::job_metrics_enabled() {
-            if let Some(config) = crate::utils::telemetry::config() {
-                if !crate::utils::telemetry::api_metrics_enabled() {
-                    crate::utils::telemetry::spawn_prometheus_exporter(config.microservices_port);
-                    println!(
-                        "prometheus job metrics listening on 0.0.0.0:{}",
-                        config.microservices_port
-                    );
-                }
+    if crate::utils::workers::should_run_microservices_workers(&ctx.env)
+        && crate::utils::telemetry::job_metrics_enabled()
+    {
+        if let Some(config) = crate::utils::telemetry::config() {
+            if !crate::utils::telemetry::api_metrics_enabled() {
+                crate::utils::telemetry::spawn_prometheus_exporter(config.microservices_port);
+                println!(
+                    "prometheus job metrics listening on 0.0.0.0:{}",
+                    config.microservices_port
+                );
             }
         }
-
-        let pool = ctx.pool.clone();
-        let env = ctx.env.clone();
-        tokio::spawn(async move {
-            if let Err(err) = crate::service::plugin_import::sync_plugins(&pool, &env).await {
-                eprintln!("plugin import failed: {err}");
-            }
-        });
     }
 
     tokio::spawn(async move {
+        if crate::utils::workers::should_run_microservices_workers(&ctx.env) {
+            if let Err(err) = crate::service::plugin_import::sync_plugins(&ctx.pool, &ctx.env).await
+            {
+                eprintln!("plugin import failed: {err}");
+            }
+        }
         let config = get_merged(&ctx.pool).await.unwrap_or_else(|_| defaults());
         spawn_workers(&ctx, &config).await;
     });
