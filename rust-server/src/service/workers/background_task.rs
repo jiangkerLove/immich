@@ -66,37 +66,76 @@ impl BackgroundTaskProcessor {
         }
     }
 
-    pub async fn process(&self, name: &str, data: &Value) -> Result<(), String> {
+    async fn process(&self, name: &str, data: &Value) -> Result<JobWorkerStatus, String> {
         match name {
-            "FileDelete" => self.handle_file_delete(data).await,
-            "SessionCleanup" => self.handle_session_cleanup().await,
-            "NotificationsCleanup" => self.handle_notifications_cleanup().await,
-            "PersonCleanup" => self.handle_person_cleanup().await,
-            "TagCleanup" => self.handle_tag_cleanup().await,
-            "MemoryCleanup" => self.handle_memory_cleanup().await,
+            "FileDelete" => self
+                .handle_file_delete(data)
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "SessionCleanup" => self
+                .handle_session_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "NotificationsCleanup" => self
+                .handle_notifications_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "PersonCleanup" => self
+                .handle_person_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "TagCleanup" => self
+                .handle_tag_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "MemoryCleanup" => self
+                .handle_memory_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
             "VersionCheck" => self.handle_version_check().await,
-            "UserSyncUsage" => self.handle_user_sync_usage().await,
-            "AuditTableCleanup" => self.handle_audit_table_cleanup().await,
-            "HlsSessionCleanup" => self.handle_hls_session_cleanup().await,
-            "AssetDeleteCheck" => self.handle_asset_delete_check().await,
-            "AssetEmptyTrash" => self.handle_asset_empty_trash().await,
+            "UserSyncUsage" => self
+                .handle_user_sync_usage()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "AuditTableCleanup" => self
+                .handle_audit_table_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "HlsSessionCleanup" => self
+                .handle_hls_session_cleanup()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "AssetDeleteCheck" => self
+                .handle_asset_delete_check()
+                .await
+                .map(|_| JobWorkerStatus::Success),
+            "AssetEmptyTrash" => self
+                .handle_asset_empty_trash()
+                .await
+                .map(|_| JobWorkerStatus::Success),
             "AssetDelete" => {
                 let job: EntityJob =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
                 self.handle_asset_delete(job).await
             }
-            "UserDeleteCheck" => self.handle_user_delete_check().await,
+            "UserDeleteCheck" => self
+                .handle_user_delete_check()
+                .await
+                .map(|_| JobWorkerStatus::Success),
             "UserDelete" => {
                 let job: EntityJob =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
                 self.handle_user_delete(job).await
             }
-            "MemoryGenerate" => self.handle_memory_generate().await,
+            "MemoryGenerate" => self
+                .handle_memory_generate()
+                .await
+                .map(|_| JobWorkerStatus::Success),
             other => {
                 eprintln!(
                     "backgroundTask job {other} is not implemented in rust-server yet; skipping"
                 );
-                Ok(())
+                Ok(JobWorkerStatus::Skipped)
             }
         }
     }
@@ -187,13 +226,17 @@ impl BackgroundTaskProcessor {
         crate::service::memory_generate::run_memory_generate(&self.pool).await
     }
 
-    async fn handle_version_check(&self) -> Result<(), String> {
-        version_check::run_version_check(
+    async fn handle_version_check(&self) -> Result<JobWorkerStatus, String> {
+        match version_check::run_version_check(
             &self.pool,
             &self.websocket,
             self.env.immich_env.as_ref(),
         )
-        .await
+        .await?
+        {
+            version_check::VersionCheckOutcome::Success => Ok(JobWorkerStatus::Success),
+            version_check::VersionCheckOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+        }
     }
 
     async fn handle_user_sync_usage(&self) -> Result<(), String> {
@@ -246,7 +289,9 @@ impl BackgroundTaskProcessor {
     }
 
     async fn handle_asset_delete_check(&self) -> Result<(), String> {
-        let config = get_merged(&self.pool).await.map_err(|err| err.to_string())?;
+        let config = get_merged(&self.pool)
+            .await
+            .map_err(|err| err.to_string())?;
         let trash_enabled = config
             .get("trash")
             .and_then(|value| value.get("enabled"))
@@ -308,52 +353,56 @@ impl BackgroundTaskProcessor {
         }
 
         if !asset_ids.is_empty() {
-            println!("Queued {} asset(s) for deletion from the trash", asset_ids.len());
+            println!(
+                "Queued {} asset(s) for deletion from the trash",
+                asset_ids.len()
+            );
         }
         Ok(())
     }
 
-    async fn handle_asset_delete(&self, job: EntityJob) -> Result<(), String> {
+    async fn handle_asset_delete(&self, job: EntityJob) -> Result<JobWorkerStatus, String> {
         let delete_on_disk = job.delete_on_disk.unwrap_or(false);
         let Some(asset) = asset_delete::get_for_deletion(&self.pool, &job.id)
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Ok(());
+            return Ok(JobWorkerStatus::Failed);
         };
 
         if let (Some(stack_id), Some(primary_asset_id)) = (asset.stack_id, asset.primary_asset_id) {
-            if primary_asset_id == asset.id {
-                let replacements =
-                    asset_delete::list_stack_timeline_asset_ids(&self.pool, &stack_id, &asset.id)
-                        .await
-                        .map_err(|err| err.to_string())?;
-                if replacements.len() >= 2 {
-                    stack::update_primary(&self.pool, &stack_id, &replacements[0])
-                        .await
-                        .map_err(|err| err.to_string())?;
-                } else {
+            let replacements =
+                asset_delete::list_stack_timeline_asset_ids(&self.pool, &stack_id, &asset.id)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            match asset_delete::stack_action_after_asset_delete(
+                primary_asset_id == asset.id,
+                replacements.len(),
+            ) {
+                asset_delete::StackDeleteAction::Delete => {
                     stack::delete(&self.pool, &stack_id)
                         .await
                         .map_err(|err| err.to_string())?;
                 }
+                asset_delete::StackDeleteAction::PromoteFirst => {
+                    stack::update_primary(&self.pool, &stack_id, &replacements[0])
+                        .await
+                        .map_err(|err| err.to_string())?;
+                }
+                asset_delete::StackDeleteAction::Keep => {}
             }
         }
 
-        let file_paths = asset_delete::list_asset_file_paths(&self.pool, &job.id)
+        let files = asset_delete::list_asset_files_for_deletion(&self.pool, &job.id)
             .await
             .map_err(|err| err.to_string())?;
         let live_photo_video_id = asset.live_photo_video_id;
 
         if asset.library_id.is_none() {
             if let Some(size) = asset.file_size {
-                crate::models::db::assets::update_quota_usage(
-                    &self.pool,
-                    &asset.owner_id,
-                    -size,
-                )
-                .await
-                .map_err(|err| err.to_string())?;
+                crate::models::db::assets::update_quota_usage(&self.pool, &asset.owner_id, -size)
+                    .await
+                    .map_err(|err| err.to_string())?;
             }
         }
 
@@ -365,11 +414,14 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?;
 
-        let mut files_to_delete = file_paths;
-        if delete_on_disk && !asset.is_offline {
-            files_to_delete.push(asset.original_path.clone());
-        }
-        files_to_delete.retain(|path| !path.is_empty());
+        self.websocket.emit_asset_delete(asset.owner_id, job.id);
+
+        let files_to_delete = asset_delete::deletion_file_paths(
+            &files,
+            &asset.original_path,
+            delete_on_disk,
+            asset.is_offline,
+        );
         self.jobs
             .queue_file_delete(&files_to_delete)
             .await
@@ -394,11 +446,13 @@ impl BackgroundTaskProcessor {
             }
         }
 
-        Ok(())
+        Ok(JobWorkerStatus::Success)
     }
 
     async fn handle_user_delete_check(&self) -> Result<(), String> {
-        let config = get_merged(&self.pool).await.map_err(|err| err.to_string())?;
+        let config = get_merged(&self.pool)
+            .await
+            .map_err(|err| err.to_string())?;
         let delete_delay = config
             .get("user")
             .and_then(|value| value.get("deleteDelay"))
@@ -424,15 +478,19 @@ impl BackgroundTaskProcessor {
         Ok(())
     }
 
-    async fn handle_user_delete(&self, job: EntityJob) -> Result<(), String> {
+    async fn handle_user_delete(&self, job: EntityJob) -> Result<JobWorkerStatus, String> {
         let force = job.force.unwrap_or(false);
-        let user = UserDb::select_by_id_admin(&self.pool, &job.id, true)
+        let Some(user) = UserDb::select_by_id_admin(&self.pool, &job.id, true)
             .await
             .map_err(|err| err.to_string())?
-            .ok_or_else(|| format!("User {} not found", job.id))?;
+        else {
+            return Ok(JobWorkerStatus::Success);
+        };
 
         if !force {
-            let config = get_merged(&self.pool).await.map_err(|err| err.to_string())?;
+            let config = get_merged(&self.pool)
+                .await
+                .map_err(|err| err.to_string())?;
             let delete_delay = config
                 .get("user")
                 .and_then(|value| value.get("deleteDelay"))
@@ -442,11 +500,11 @@ impl BackgroundTaskProcessor {
                 let ready_before = Utc::now() - Duration::days(delete_delay as i64);
                 if deleted_at > ready_before {
                     eprintln!("Skipped user not ready for deletion: id={}", job.id);
-                    return Ok(());
+                    return Ok(JobWorkerStatus::Success);
                 }
             } else {
                 eprintln!("Skipped user not ready for deletion: id={}", job.id);
-                return Ok(());
+                return Ok(JobWorkerStatus::Success);
             }
         }
 
@@ -473,7 +531,26 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?;
 
-        Ok(())
+        self.websocket.emit_user_delete(user.id);
+
+        Ok(JobWorkerStatus::Success)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobWorkerStatus {
+    Success,
+    Skipped,
+    Failed,
+}
+
+impl JobWorkerStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Skipped => "skipped",
+            Self::Failed => "failed",
+        }
     }
 }
 
@@ -501,12 +578,16 @@ pub fn spawn(
                 let processor = processor.clone();
                 async move {
                     let job_name = job.name.clone();
-                    crate::service::workers::wrap_simple_job(QUEUE_BACKGROUND, &job_name, || async {
-                        processor
-                            .process(&job_name, &job.data)
-                            .await
-                            .map_err(|err| err.to_string())
-                    })
+                    crate::service::workers::wrap_status_job(
+                        QUEUE_BACKGROUND,
+                        &job_name,
+                        || async {
+                            processor
+                                .process(&job_name, &job.data)
+                                .await
+                                .map(|status| status.as_str())
+                        },
+                    )
                     .await
                 }
             })
@@ -522,4 +603,16 @@ pub fn spawn(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_worker_status_strings_match_typescript() {
+        assert_eq!(JobWorkerStatus::Success.as_str(), "success");
+        assert_eq!(JobWorkerStatus::Skipped.as_str(), "skipped");
+        assert_eq!(JobWorkerStatus::Failed.as_str(), "failed");
+    }
 }
