@@ -257,10 +257,16 @@ impl LibraryProcessor {
                     .await
                     .map_err(|err| err.to_string())?;
             }
+
+            println!(
+                "Crawled {crawl_count} file(s) so far: {} of current batch of {} will be imported to library {library_id}...",
+                new_paths.len(),
+                filtered.len()
+            );
         }
 
         println!(
-            "Finished disk crawl for library {library_id}: crawled {crawl_count} file(s), queued {import_count} for import"
+            "Finished disk crawl, {crawl_count} file(s) found on disk and queued {import_count} file(s) for import into {library_id}"
         );
 
         library::update_refreshed_at(&self.pool, &library_id)
@@ -294,11 +300,6 @@ impl LibraryProcessor {
         }
 
         if !created_ids.is_empty() {
-            println!(
-                "Imported {} file(s) into library {}",
-                created_ids.len(),
-                job.library_id
-            );
             for asset_id in &created_ids {
                 let _ = crate::service::workflow_trigger::on_asset_trigger(
                     &self.pool,
@@ -312,6 +313,13 @@ impl LibraryProcessor {
             self.queue_post_sync_jobs(&created_ids).await?;
         }
 
+        println!(
+            "Imported {} {} file(s) into library {}",
+            created_ids.len(),
+            import_progress_suffix(job.progress_counter, job.total_assets),
+            job.library_id
+        );
+
         Ok(())
     }
 
@@ -323,13 +331,18 @@ impl LibraryProcessor {
             return Ok(());
         };
 
-        let has_assets = asset_delete::library_has_assets(&self.pool, &library_id)
+        let asset_ids = asset_delete::list_ids_by_library(&self.pool, &library_id)
             .await
             .map_err(|err| err.to_string())?;
-        if !has_assets {
+        let total_assets = asset_ids.len();
+        if total_assets == 0 {
             println!("Library {library_id} is empty, no need to check assets");
             return Ok(());
         }
+
+        println!(
+            "Checking {total_assets} asset(s) against import paths and exclusion patterns in library {library_id}..."
+        );
 
         let affected = library::detect_offline_external_assets(
             &self.pool,
@@ -340,13 +353,14 @@ impl LibraryProcessor {
         .await
         .map_err(|err| err.to_string())?;
         println!(
-            "{affected} asset(s) were offlined due to import paths and/or exclusion pattern(s) in library {library_id}"
+            "{affected} asset(s) out of {total_assets} were offlined due to import paths and/or exclusion pattern(s) in library {library_id}"
         );
 
-        let asset_ids = asset_delete::list_ids_by_library(&self.pool, &library_id)
-            .await
-            .map_err(|err| err.to_string())?;
-        let total_assets = asset_ids.len();
+        if affected as usize == total_assets {
+            return Ok(());
+        }
+
+        println!("Scanning library {library_id} for assets missing from disk...");
 
         let mut count = 0usize;
         for chunk in asset_ids.chunks(JOBS_LIBRARY_PAGINATION_SIZE) {
@@ -366,6 +380,10 @@ impl LibraryProcessor {
                 )
                 .await
                 .map_err(|err| err.to_string())?;
+            println!(
+                "Queued check of {count} of {total_assets} ({:.1} %) existing asset(s) so far in library {library_id}",
+                100.0 * count as f64 / total_assets as f64
+            );
         }
 
         println!("Finished queuing {count} asset check(s) for library {library_id}");
@@ -376,6 +394,7 @@ impl LibraryProcessor {
         let assets = library::list_assets_for_sync(&self.pool, &job.asset_ids)
             .await
             .map_err(|err| err.to_string())?;
+        let batch_len = assets.len();
 
         let mut active_offline = Vec::new();
         let mut trashed_offline = Vec::new();
@@ -411,6 +430,21 @@ impl LibraryProcessor {
             .map_err(|err| err.to_string())?;
 
         self.queue_post_sync_jobs(&update_ids).await?;
+
+        println!(
+            "{}",
+            sync_assets_progress_log(
+                batch_len,
+                active_offline.len(),
+                trashed_offline.len(),
+                active_online.len(),
+                trashed_online.len(),
+                update_ids.len(),
+                job.progress_counter,
+                job.total_assets,
+                job.library_id,
+            )
+        );
 
         Ok(())
     }
@@ -580,6 +614,43 @@ fn is_hidden_path(path: &str) -> bool {
         .any(|part| part.starts_with('.'))
 }
 
+fn import_progress_suffix(progress_counter: Option<u64>, total_assets: Option<u64>) -> String {
+    match (progress_counter, total_assets) {
+        (Some(counter), Some(total)) if counter > 0 && total > 0 => {
+            format!("({counter} of {total})")
+        }
+        (Some(counter), _) => format!("({counter} done so far)"),
+        (None, _) => "(0 done so far)".to_string(),
+    }
+}
+
+fn sync_assets_progress_log(
+    batch_len: usize,
+    active_offline: usize,
+    trashed_offline: usize,
+    active_online: usize,
+    trashed_online: usize,
+    updated: usize,
+    progress_counter: Option<u64>,
+    total_assets: Option<u64>,
+    library_id: Uuid,
+) -> String {
+    let offlined = active_offline + trashed_offline;
+    let onlined = active_online + trashed_online;
+    // Match TypeScript: remaining omits trashed online/offline from the subtraction.
+    let remaining = batch_len.saturating_sub(active_offline + updated + active_online);
+    let counter = progress_counter.unwrap_or(0);
+    let total = total_assets.unwrap_or(0);
+    let pct = if total == 0 {
+        "0.0".to_string()
+    } else {
+        format!("{:.1}", 100.0 * counter as f64 / total as f64)
+    };
+    format!(
+        "Checked existing asset(s): {offlined} offlined, {onlined} onlined, {updated} updated, {remaining} unchanged of current batch of {batch_len} (Total progress: {counter} of {total}, {pct} %) in library {library_id}."
+    )
+}
+
 pub fn spawn(
     pool: PgPool,
     redis_url: String,
@@ -660,5 +731,22 @@ mod tests {
         assert_eq!(job.import_paths, vec!["/data"]);
         assert_eq!(job.exclusion_patterns, vec!["**/.git/**"]);
         assert_eq!(job.asset_ids.len(), 1);
+    }
+
+    #[test]
+    fn import_progress_suffix_matches_typescript_truthiness() {
+        assert_eq!(import_progress_suffix(Some(3), Some(10)), "(3 of 10)");
+        assert_eq!(import_progress_suffix(Some(3), None), "(3 done so far)");
+        assert_eq!(import_progress_suffix(Some(0), Some(10)), "(0 done so far)");
+        assert_eq!(import_progress_suffix(None, None), "(0 done so far)");
+    }
+
+    #[test]
+    fn sync_assets_progress_log_omits_trashed_from_remaining() {
+        let library_id = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111);
+        let log = sync_assets_progress_log(10, 2, 1, 1, 1, 3, Some(10), Some(100), library_id);
+        assert!(log.contains("3 offlined, 2 onlined, 3 updated, 4 unchanged"));
+        assert!(log.contains("Total progress: 10 of 100, 10.0 %"));
+        assert!(log.contains(&library_id.to_string()));
     }
 }
