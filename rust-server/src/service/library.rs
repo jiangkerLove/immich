@@ -130,6 +130,7 @@ impl LibraryService {
             &exclusion_patterns,
         )
         .await?;
+        crate::service::library_watcher::request_watch(row.id);
         Ok(map_library(row))
     }
 
@@ -162,6 +163,7 @@ impl LibraryService {
             dto.exclusion_patterns.as_deref(),
         )
         .await?;
+        crate::service::library_watcher::request_watch(*id);
         Ok(map_library(row))
     }
 
