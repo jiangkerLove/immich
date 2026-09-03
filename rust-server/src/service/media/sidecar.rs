@@ -71,7 +71,7 @@ impl SidecarService {
         let sidecar_path =
             first_readable_sidecar(&asset.original_path, asset.sidecar_path.as_deref());
 
-        let is_changed = sidecar_path.as_deref() != asset.sidecar_path.as_deref();
+        let is_changed = is_sidecar_changed(sidecar_path.as_deref(), asset.sidecar_path.as_deref());
         if !is_changed {
             self.queue_metadata_after_check(asset_id, source).await?;
             return Ok(SidecarCheckOutcome::Skipped);
@@ -154,6 +154,13 @@ impl SidecarService {
             .queue_asset_extract_metadata_with_source(asset_id, "sidecar-write")
             .await
             .map_err(|err| err.to_string())
+    }
+}
+
+fn is_sidecar_changed(disk: Option<&str>, db: Option<&str>) -> bool {
+    match (disk, db) {
+        (Some(disk), Some(db)) => disk != db,
+        _ => true,
     }
 }
 
@@ -275,6 +282,15 @@ fn merge_time_zone(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidecar_changed_matches_typescript_null_undefined_semantics() {
+        assert!(is_sidecar_changed(None, None));
+        assert!(is_sidecar_changed(Some("/a.xmp"), None));
+        assert!(is_sidecar_changed(None, Some("/a.xmp")));
+        assert!(!is_sidecar_changed(Some("/a.xmp"), Some("/a.xmp")));
+        assert!(is_sidecar_changed(Some("/a.xmp"), Some("/b.xmp")));
+    }
 
     #[test]
     fn sidecar_candidates_match_typescript_order() {

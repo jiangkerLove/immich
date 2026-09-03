@@ -237,10 +237,6 @@ impl ThumbnailService {
         owner_id: &Uuid,
         person_id: &Uuid,
     ) -> Result<ThumbnailJobOutcome, String> {
-        if !self.is_person_thumbnail_enabled().await? {
-            return Ok(ThumbnailJobOutcome::Skipped);
-        }
-
         let Some(data) = asset_job::get_person_thumbnail_job_data(&self.pool, owner_id, person_id)
             .await
             .map_err(|err| err.to_string())?
@@ -532,35 +528,6 @@ impl ThumbnailService {
             .queue_post_thumbnail_ml_jobs(job, is_video)
             .await
             .map_err(|err| err.to_string())
-    }
-
-    async fn is_person_thumbnail_enabled(&self) -> Result<bool, String> {
-        let stored = get_json(&self.pool, "system-config")
-            .await
-            .map_err(|err| err.to_string())?;
-        let Some(config) = stored else {
-            return Ok(false);
-        };
-
-        let ml_enabled = config
-            .get("machineLearning")
-            .and_then(|ml| ml.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let facial_enabled = config
-            .get("machineLearning")
-            .and_then(|ml| ml.get("facialRecognition"))
-            .and_then(|fr| fr.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let face_import = config
-            .get("metadata")
-            .and_then(|md| md.get("faces"))
-            .and_then(|faces| faces.get("import"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        Ok((ml_enabled && facial_enabled) || face_import)
     }
 
     async fn load_image_config(&self) -> Result<ImageFormatConfig, String> {

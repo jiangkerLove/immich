@@ -131,7 +131,7 @@ impl FileMigrationService {
         };
 
         if person.thumbnail_path.is_empty() {
-            return Ok(FileMigrationOutcome::Skipped);
+            return Ok(FileMigrationOutcome::Success);
         }
 
         let new_path = self
