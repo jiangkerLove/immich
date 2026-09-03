@@ -38,8 +38,18 @@ pub async fn require_asset_access(
         return Ok(());
     }
 
-    let allowed = assets::owner_has_asset(pool, &auth.user.id, asset_id).await?;
-    if !allowed {
+    let elevated = auth
+        .session
+        .as_ref()
+        .is_some_and(|session| session.has_elevated_permission);
+    let owner_only = matches!(
+        permission,
+        Permission::AssetUpdate | Permission::AssetDelete
+    );
+    let allowed =
+        assets::filter_accessible_ids(pool, &auth.user.id, &[*asset_id], elevated, owner_only)
+            .await?;
+    if allowed.is_empty() {
         return Err(ErrorResp::BadRequest(format!(
             "Not found or no {} access",
             permission.as_str()
@@ -83,8 +93,12 @@ pub async fn require_assets_access(
         .session
         .as_ref()
         .is_some_and(|session| session.has_elevated_permission);
-    let owner_only = matches!(permission, Permission::AssetUpdate | Permission::AssetDelete);
-    let allowed = assets::filter_accessible_ids(pool, &auth.user.id, asset_ids, elevated, owner_only).await?;
+    let owner_only = matches!(
+        permission,
+        Permission::AssetUpdate | Permission::AssetDelete
+    );
+    let allowed =
+        assets::filter_accessible_ids(pool, &auth.user.id, asset_ids, elevated, owner_only).await?;
 
     if allowed.len() != asset_ids.len() {
         return Err(ErrorResp::BadRequest(format!(

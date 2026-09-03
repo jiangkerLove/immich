@@ -39,4 +39,4 @@ rustfmt +stable --edition 2024 path/to/edited.rs
 - `search` 队列在 `queue.rs` 列出但无 worker
 - 多进程部署时 HLS 用进程内 `PendingEvents`，与 TS Socket 事件不同
 
-完整差距见 `.cursor/docs/migration-checklist.md` §3。
+完整差距见 `.cursor/docs/migration-checklist.md` §3（P0 已完成；优先 P1 多进程 HLS / 事件总线）。

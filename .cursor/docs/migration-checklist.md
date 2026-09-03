@@ -5,7 +5,7 @@
 > 集成主线：`dev-rust`（你说的 rust-dev）  
 > 上游同步：`main`
 
-最后更新：`dev-rust` @ PR #18 合并后（2026-09）  
+最后更新：`cursor/p0-partner-access-album-ws-4063`（P0 伙伴媒体访问 + `on_album_update`，2026-09）  
 Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ---
@@ -19,7 +19,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | 数据库访问 | 55 个 repository | `models/db/` 内联 SQL（54 模块） | ✅ **已完成**（架构不同） |
 | BullMQ 任务名 | 66 个 `JobName` | 66 个均有 worker 处理 | ✅ **已完成** |
 | BullMQ 队列 | 19 个 `QueueName` | 18 个有 worker；`search` 无 worker | ⚠️ **基本完成** |
-| WebSocket 客户端事件 | ~15 种 | 缺 `on_album_update` | ⚠️ **约 95%** |
+| WebSocket 客户端事件 | ~15 种 | 含 `on_album_update` | ✅ **已完成** |
 | 内部事件总线 | `EventRepository` ~30 种 |  mainly `ConfigUpdate` via Redis | ⚠️ **部分** |
 | 数据库迁移 | Kysely TS migrations | 仍调用 Node 脚本跑 Kysely | ⚠️ **混合方案** |
 | 可单机部署使用 | ✓ | ✓ | ✅ **可用** |
@@ -63,6 +63,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | Session | `service/session.rs` |
 | API Key | `service/api_key.rs` |
 | 批量资产权限（伙伴相册等） | `service/access.rs` → `filter_accessible_ids` |
+| 单资产媒体读权限（伙伴/相册/共享链接） | `require_asset_access` → 与批量路径一致走 `filter_accessible_ids` |
 | 权限枚举 | `models/db/auth_permission.rs` |
 
 ### 2.3 资产业务与媒体流水线
@@ -81,16 +82,17 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | 资产编辑 | `service/media/edits.rs` |
 | 可见性 | `service/media/visibility.rs` |
 
-**近期对齐（PR #7–#18）：**
+**近期对齐（PR #7–#18 + P0 切片）：**
 
 - Library job 状态 `Success` / `Skipped` / `Failed`
 - Library scan 含软删除库、`path_normalize`、路径 `R_OK`
 - Background-task：`AssetDelete` / `VersionCheck` / `UserDelete` 状态
-- Websocket：`on_new_release` 连接时推送
+- Websocket：`on_new_release` 连接时推送；**`on_album_update`**（加/删相册资产、共享链接上传）
 - ML `*QueueAll` 在功能关闭时 `Skipped`
 - Integrity 扫描跳过隐藏文件
 - `LibrarySyncAssetsQueueAll` 任务名、migration 空目录清理条件
 - Sidecar `null/undefined` 变更检测、Person 迁移空路径等
+- **单资产媒体访问**：`require_asset_access` 支持伙伴 / 相册成员（不再仅 owner）
 
 ### 2.4 机器学习流水线（调用 ML 服务，非算法重写）
 
@@ -196,8 +198,10 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 | # | 问题 | 上游行为 | 当前 rust | 建议改动 |
 |---|------|----------|-----------|----------|
-| 1 | **伙伴资产媒体访问** | 伙伴可通过 `/original`、`/thumbnail`、视频流访问共享资产 | `require_asset_access()` 只查 **owner**，伙伴会被拒 | `service/access.rs`：读类权限改走 `filter_accessible_ids`；涉及 `asset_media.rs`, `hls.rs`, `asset_file.rs` |
-| 2 | **缺少 `on_album_update` websocket** | 相册邀请/更新后推送，客户端刷新列表 | Rust 未 emit | `service/notification.rs` / `album.rs` + `websocket.rs` |
+| ~~1~~ | ~~伙伴资产媒体访问~~ | ~~伙伴可通过媒体端点访问共享资产~~ | ✅ `require_asset_access` → `filter_accessible_ids` | 已完成 |
+| ~~2~~ | ~~缺少 `on_album_update` websocket~~ | ~~相册变更后推送~~ | ✅ `AlbumService::notify_album_update` + `emit_album_update` | 已完成 |
+
+> P0 两项已在本切片落地。下一优先见 P1。
 
 ### P1 — 多实例 / 拆分部署
 
@@ -267,7 +271,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | `on_server_version` / `on_new_release` | ✓ | ✓ | ✅ |
 | `AssetUploadReadyV2` / `AssetEditReadyV2` | ✓ | ✓ | ✅ |
 | `AppRestartV1` | ✓ | ✓ | ✅ |
-| **`on_album_update`** | ✓ | ✗ | ❌ 待做 |
+| **`on_album_update`** | ✓ | ✓ | ✅ |
 | HLS server events（跨进程） | ✓ | 进程内 only | ⚠️ |
 
 ---
@@ -276,8 +280,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ### 阶段 A —「日常能用」加固（1–2 个 PR 批次）
 
-1. 修复伙伴/共享链接的**单资产媒体访问**（P0-1）
-2. 补上 **`on_album_update`**（P0-2）
+1. ~~修复伙伴/共享链接的**单资产媒体访问**（P0-1）~~ ✅
+2. ~~补上 **`on_album_update`**（P0-2）~~ ✅
 3. 用真实数据跑一遍：上传 → 元数据 → 缩略图 → 搜索 → 同步
 
 ### 阶段 B — 部署模型清晰化
@@ -348,11 +352,12 @@ cd rust-server && cargo +stable test --offline --lib
 | #11–#16 | Workflow 日志、plugin host、library/background 任务状态、R_OK、scan queue |
 | #17 | sync-main 全部合入 `dev-rust` |
 | #18 | Websocket 版本、UserDelete、ML QueueAll、Sidecar、integrity、dedup 等批量 parity |
+| （本切片） | P0：`require_asset_access` 伙伴/相册读权限；`on_album_update` websocket + 共享链接上传通知 |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API 和后台任务主体已在 Rust，`dev-rust` 可支撑单机 Immich 使用。  
-**还差：** 伙伴媒体访问、相册 websocket、多进程 HLS、工作流细节、运维可观测性、与上游持续同步。  
+**现在：** API 和后台任务主体已在 Rust，`dev-rust` 可支撑单机 Immich 使用；P0 伙伴媒体访问与相册 websocket 已对齐。  
+**还差：** 多进程 HLS、工作流细节、运维可观测性、与上游持续同步、真实数据冒烟。  
 **策略：** 按本文 §6 分阶段做小 PR，合并到 `dev-rust`，不必每个小点单独发版。

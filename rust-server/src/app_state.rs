@@ -101,7 +101,7 @@ impl Services {
     ) -> Self {
         let jobs = JobService::new(redis_url.clone());
         let library_path = storage.media_location().to_path_buf();
-        let albums = AlbumService::new(pool.clone(), jobs.clone());
+        let albums = AlbumService::new(pool.clone(), jobs.clone(), websocket.clone());
         Self {
             auth: AuthService::with_websocket(pool.clone(), websocket.clone()),
             user: UserService::new(pool.clone(), storage.clone()),
@@ -118,8 +118,13 @@ impl Services {
             tag: TagService::new(pool.clone(), jobs.clone()),
             asset: AssetService::new(pool.clone(), jobs.clone(), websocket.clone()),
             asset_file: AssetFileService::new(pool.clone(), jobs.clone()),
-            shared_link: SharedLinkService::new(pool.clone(), albums),
-            asset_media: AssetMediaService::new(pool.clone(), storage.clone(), jobs.clone()),
+            shared_link: SharedLinkService::new(pool.clone(), albums.clone()),
+            asset_media: AssetMediaService::new(
+                pool.clone(),
+                storage.clone(),
+                jobs.clone(),
+                albums,
+            ),
             oauth: OAuthService::new(pool.clone(), websocket.clone()),
             timeline: TimelineService::new(pool.clone()),
             trash: TrashService::new(pool.clone(), jobs.clone(), websocket.clone()),

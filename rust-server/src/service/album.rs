@@ -5,20 +5,22 @@ use uuid::Uuid;
 
 use crate::models::db::album::{self, AlbumAccessLevel, AlbumUserRole};
 use crate::models::db::assets;
+use crate::models::db::auth_permission::Permission;
+use crate::models::db::user_metadata::UserMetadataPO;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::{check_album_ids_access, require_album_access};
 use crate::service::db::DbService;
 use crate::service::job::JobService;
-use crate::models::db::user_metadata::UserMetadataPO;
+use crate::service::websocket::WebSocketHub;
 use crate::utils::permission::require_permission;
 use crate::utils::preferences::resolve_preferences;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct AlbumService {
     db: DbService,
     jobs: JobService,
+    websocket: WebSocketHub,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,14 +184,18 @@ pub struct UpdateAlbumUserReq {
 }
 
 impl AlbumService {
-    pub fn new(pool: sqlx::PgPool, jobs: JobService) -> Self {
+    pub fn new(pool: sqlx::PgPool, jobs: JobService, websocket: WebSocketHub) -> Self {
         Self {
             db: DbService::new(pool),
             jobs,
+            websocket,
         }
     }
 
-    pub async fn get_statistics(&self, auth: &AuthDto) -> Result<AlbumStatisticsResponse, ErrorResp> {
+    pub async fn get_statistics(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<AlbumStatisticsResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumStatistics)?;
 
         let owned = album::count_owned_albums(&self.db.pool, &auth.user.id).await?;
@@ -277,7 +283,11 @@ impl AlbumService {
         self.build_response(viewer_id, album_id).await
     }
 
-    pub async fn create(&self, auth: &AuthDto, dto: &CreateAlbumReq) -> Result<AlbumResponse, ErrorResp> {
+    pub async fn create(
+        &self,
+        auth: &AuthDto,
+        dto: &CreateAlbumReq,
+    ) -> Result<AlbumResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumCreate)?;
 
         let album_users: Vec<_> = dto
@@ -348,13 +358,17 @@ impl AlbumService {
 
         for album_user in album_users {
             if album_user.role == "owner" {
-                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "Cannot add another owner".to_string(),
+                ));
             }
             let role = album::parse_album_user_role(&album_user.role).ok_or_else(|| {
                 ErrorResp::BadRequest(format!("Invalid album user role: {}", album_user.role))
             })?;
             if role == AlbumUserRole::Owner {
-                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "Cannot add another owner".to_string(),
+                ));
             }
             sqlx::query(
                 r#"INSERT INTO album_user ("albumId", "userId", role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"#,
@@ -391,7 +405,8 @@ impl AlbumService {
         require_album_access(&self.db.pool, auth, id, Permission::AlbumUpdate).await?;
 
         if let Some(thumbnail_id) = dto.album_thumbnail_asset_id {
-            let in_album = album::filter_asset_ids_in_album(&self.db.pool, id, &[thumbnail_id]).await?;
+            let in_album =
+                album::filter_asset_ids_in_album(&self.db.pool, id, &[thumbnail_id]).await?;
             if !in_album.contains(&thumbnail_id) {
                 return Err(ErrorResp::BadRequest("Invalid album thumbnail".to_string()));
             }
@@ -442,8 +457,7 @@ impl AlbumService {
     ) -> Result<Vec<BulkIdResponse>, ErrorResp> {
         require_album_access(&self.db.pool, auth, id, Permission::AlbumAddAsset).await?;
 
-        let existing =
-            album::filter_asset_ids_in_album(&self.db.pool, id, &dto.ids).await?;
+        let existing = album::filter_asset_ids_in_album(&self.db.pool, id, &dto.ids).await?;
         let not_present: Vec<Uuid> = dto
             .ids
             .iter()
@@ -513,7 +527,8 @@ impl AlbumService {
                 }
             }
 
-            self.queue_album_update_notifications(id, &auth.user.id).await?;
+            self.notify_album_update(id, Some(&auth.user.id), true)
+                .await?;
         }
 
         Ok(results)
@@ -526,9 +541,13 @@ impl AlbumService {
     ) -> Result<AlbumsAddAssetsResponse, ErrorResp> {
         require_permission(auth, Permission::AlbumAddAsset)?;
 
-        let allowed_albums =
-            check_album_ids_access(&self.db.pool, auth, &dto.album_ids, Permission::AlbumAddAsset)
-                .await?;
+        let allowed_albums = check_album_ids_access(
+            &self.db.pool,
+            auth,
+            &dto.album_ids,
+            Permission::AlbumAddAsset,
+        )
+        .await?;
         if allowed_albums.is_empty() {
             return Ok(AlbumsAddAssetsResponse {
                 success: false,
@@ -560,12 +579,8 @@ impl AlbumService {
 
         let mut success = false;
         for album_id in allowed_albums {
-            let existing = album::filter_asset_ids_in_album(
-                &self.db.pool,
-                &album_id,
-                &dto.asset_ids,
-            )
-            .await?;
+            let existing =
+                album::filter_asset_ids_in_album(&self.db.pool, &album_id, &dto.asset_ids).await?;
             let not_present: Vec<Uuid> = allowed_assets
                 .iter()
                 .filter(|asset_id| !existing.contains(asset_id))
@@ -582,15 +597,14 @@ impl AlbumService {
                 .map_err(ErrorResp::from)?;
             success = true;
 
-            let thumbnail =
-                album::get_album_thumbnail_asset_id(&self.db.pool, &album_id).await?;
+            let thumbnail = album::get_album_thumbnail_asset_id(&self.db.pool, &album_id).await?;
             if thumbnail.is_none() {
                 if let Some(first_id) = not_present.first() {
                     album::set_album_thumbnail(&self.db.pool, &album_id, first_id).await?;
                 }
             }
 
-            self.queue_album_update_notifications(&album_id, &auth.user.id)
+            self.notify_album_update(&album_id, Some(&auth.user.id), true)
                 .await?;
         }
 
@@ -612,15 +626,10 @@ impl AlbumService {
     ) -> Result<Vec<BulkIdResponse>, ErrorResp> {
         require_album_access(&self.db.pool, auth, id, Permission::AlbumRemoveAsset).await?;
 
-        let existing =
-            album::filter_asset_ids_in_album(&self.db.pool, id, &dto.ids).await?;
-        let can_always_remove = album::has_album_access(
-            &self.db.pool,
-            &auth.user.id,
-            id,
-            AlbumAccessLevel::Owner,
-        )
-        .await?;
+        let existing = album::filter_asset_ids_in_album(&self.db.pool, id, &dto.ids).await?;
+        let can_always_remove =
+            album::has_album_access(&self.db.pool, &auth.user.id, id, AlbumAccessLevel::Owner)
+                .await?;
 
         let allowed: HashSet<Uuid> = if can_always_remove {
             existing.clone()
@@ -681,6 +690,9 @@ impl AlbumService {
             if thumbnail.is_some_and(|thumb| removed_ids.contains(&thumb)) {
                 album::update_album_thumbnails(&self.db.pool, id).await?;
             }
+
+            // Websocket only — matches TS AlbumUpdate with empty recipientIds.
+            self.notify_album_update(id, None, false).await?;
         }
 
         Ok(results)
@@ -700,14 +712,18 @@ impl AlbumService {
             }
 
             if album_user.role == "owner" {
-                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "Cannot add another owner".to_string(),
+                ));
             }
 
             let role = album::parse_album_user_role(&album_user.role).ok_or_else(|| {
                 ErrorResp::BadRequest(format!("Invalid album user role: {}", album_user.role))
             })?;
             if role == AlbumUserRole::Owner {
-                return Err(ErrorResp::BadRequest("Cannot add another owner".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "Cannot add another owner".to_string(),
+                ));
             }
 
             if album::album_user_exists(&self.db.pool, id, &album_user.user_id)
@@ -748,7 +764,9 @@ impl AlbumService {
             .await?
             .is_none()
         {
-            return Err(ErrorResp::BadRequest("Album not shared with user".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "Album not shared with user".to_string(),
+            ));
         }
 
         album::update_album_user_role(&self.db.pool, id, user_id, role).await?;
@@ -865,14 +883,27 @@ impl AlbumService {
         Ok(response)
     }
 
-    async fn queue_album_update_notifications(
+    /// Emit `on_album_update` to all album members; optionally queue email jobs.
+    /// When `email_actor_id` is `Some`, that user is excluded from email recipients
+    /// (they still receive the websocket). When `queue_emails` is false, only websocket
+    /// is sent (e.g. asset removal).
+    pub async fn notify_album_update(
         &self,
         album_id: &Uuid,
-        actor_id: &Uuid,
+        email_actor_id: Option<&Uuid>,
+        queue_emails: bool,
     ) -> Result<(), ErrorResp> {
         let members = album::list_album_member_ids(&self.db.pool, album_id).await?;
+        for user_id in &members {
+            self.websocket.emit_album_update(*user_id, *album_id);
+        }
+
+        if !queue_emails {
+            return Ok(());
+        }
+
         for recipient_id in members {
-            if recipient_id == *actor_id {
+            if email_actor_id.is_some_and(|actor| *actor == recipient_id) {
                 continue;
             }
             self.jobs

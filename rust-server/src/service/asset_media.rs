@@ -6,14 +6,17 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::assets::{self, NewAsset};
-use crate::models::db::shared_links;
 use crate::models::db::auth_permission::Permission;
+use crate::models::db::shared_links;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::{require_asset_access, require_upload_access};
+use crate::service::album::AlbumService;
 use crate::service::job::JobService;
 use crate::utils::checksum::{decode_checksum, sha1_bytes};
-use crate::utils::file_response::{file_extension, file_response, file_stem, guess_mime, FileResponse};
+use crate::utils::file_response::{
+    FileResponse, file_extension, file_response, file_stem, guess_mime,
+};
 use crate::utils::storage::StoragePaths;
 
 #[derive(Clone)]
@@ -21,6 +24,7 @@ pub struct AssetMediaService {
     pool: PgPool,
     storage: StoragePaths,
     jobs: JobService,
+    albums: AlbumService,
 }
 
 #[derive(Serialize)]
@@ -79,8 +83,18 @@ pub struct AssetMediaOptionsQuery {
 }
 
 impl AssetMediaService {
-    pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
-        Self { pool, storage, jobs }
+    pub fn new(
+        pool: PgPool,
+        storage: StoragePaths,
+        jobs: JobService,
+        albums: AlbumService,
+    ) -> Self {
+        Self {
+            pool,
+            storage,
+            jobs,
+            albums,
+        }
     }
 
     pub async fn upload_asset(
@@ -95,7 +109,9 @@ impl AssetMediaService {
 
         if let Some(quota) = auth.user.quota_size_in_bytes {
             if auth.user.quota_usage_in_bytes + file_bytes.len() as i64 > quota {
-                return Err(ErrorResp::BadRequest("Quota has been exceeded!".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "Quota has been exceeded!".to_string(),
+                ));
             }
         }
 
@@ -117,7 +133,9 @@ impl AssetMediaService {
         tokio::fs::create_dir_all(&upload_dir)
             .await
             .map_err(|e| ErrorResp::ServerError(e.to_string()))?;
-        let upload_path = self.storage.upload_path(&auth.user.id, &file_uuid, &stored_name);
+        let upload_path = self
+            .storage
+            .upload_path(&auth.user.id, &file_uuid, &stored_name);
         tokio::fs::write(&upload_path, file_bytes)
             .await
             .map_err(|e| ErrorResp::ServerError(e.to_string()))?;
@@ -226,7 +244,9 @@ impl AssetMediaService {
         require_asset_access(&self.pool, auth, asset_id, Permission::AssetView).await?;
 
         if query.size.as_deref() == Some("original") {
-            return Err(ErrorResp::BadRequest("May not request original file".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "May not request original file".to_string(),
+            ));
         }
 
         let file_type = match query.size.as_deref() {
@@ -243,7 +263,8 @@ impl AssetMediaService {
             .path
             .ok_or_else(|| ErrorResp::BadRequest("Asset media not found".to_string()))?;
 
-        let suffix = if auth.shared_link.is_some() && !auth.shared_link.as_ref().unwrap().show_exif {
+        let suffix = if auth.shared_link.is_some() && !auth.shared_link.as_ref().unwrap().show_exif
+        {
             asset_id.to_string()
         } else {
             file_stem(&row.original_file_name)
@@ -267,7 +288,9 @@ impl AssetMediaService {
         require_asset_access(&self.pool, auth, asset_id, Permission::AssetView).await?;
         let row = assets::get_for_video(&self.pool, asset_id)
             .await?
-            .ok_or_else(|| ErrorResp::BadRequest("Asset not found or asset is not a video".to_string()))?;
+            .ok_or_else(|| {
+                ErrorResp::BadRequest("Asset not found or asset is not a video".to_string())
+            })?;
 
         let path = row.encoded_video_path.unwrap_or(row.original_path);
         file_response(FileResponse {
@@ -296,10 +319,7 @@ impl AssetMediaService {
         let rows = assets::get_by_checksums(&self.pool, &auth.user.id, &checksums).await?;
         let mut map: HashMap<Vec<u8>, (Uuid, bool)> = HashMap::new();
         for row in rows {
-            map.insert(
-                row.checksum,
-                (row.id, row.deleted_at.is_some()),
-            );
+            map.insert(row.checksum, (row.id, row.deleted_at.is_some()));
         }
 
         let results = dto
@@ -341,6 +361,10 @@ impl AssetMediaService {
             let album_uuid = Uuid::parse_str(album_id)
                 .map_err(|_| ErrorResp::ServerError("Invalid album".to_string()))?;
             shared_links::add_album_assets(&self.pool, &album_uuid, &[asset_id]).await?;
+            // Match TS: websocket + email to all album members (no actor exclusion).
+            self.albums
+                .notify_album_update(&album_uuid, None, true)
+                .await?;
         } else {
             shared_links::add_assets(&self.pool, &link_id, &[asset_id]).await?;
         }

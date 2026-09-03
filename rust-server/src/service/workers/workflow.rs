@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::models::dto::env::EnvDto;
 use crate::service::job::JobService;
 use crate::service::plugin_runtime::PluginRuntime;
-use crate::service::workflow_execution::{WorkflowExecutionOutcome, WorkflowExecutionService};
 use crate::service::websocket::WebSocketHub;
+use crate::service::workflow_execution::{WorkflowExecutionOutcome, WorkflowExecutionService};
 
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_WORKFLOW: &str = "workflow";
@@ -92,7 +92,11 @@ pub fn spawn(
     concurrency: usize,
 ) {
     tokio::spawn(async move {
-        let runtime = Arc::new(PluginRuntime::new(pool.clone(), jobs.clone()));
+        let runtime = Arc::new(PluginRuntime::new(
+            pool.clone(),
+            jobs.clone(),
+            websocket.clone(),
+        ));
         let processor = Arc::new(WorkflowProcessor::new(
             pool.clone(),
             runtime.clone(),

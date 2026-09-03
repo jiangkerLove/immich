@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::models::db::plugin::{PluginLoadMethodJson, PluginLoadRow};
 use crate::service::job::JobService;
 use crate::service::plugin_host::{CallHostContext, HostContext};
+use crate::service::websocket::WebSocketHub;
 use crate::utils::crypto::random_bytes_as_text;
 
 pub struct PluginRuntime {
@@ -25,13 +26,14 @@ struct WorkflowAuthClaims {
 }
 
 impl PluginRuntime {
-    pub fn new(pool: PgPool, jobs: JobService) -> Self {
+    pub fn new(pool: PgPool, jobs: JobService, websocket: WebSocketHub) -> Self {
         let jwt_secret = random_bytes_as_text(32);
         Self {
             plugins: Mutex::new(HashMap::new()),
             context: Arc::new(HostContext {
                 pool,
                 jobs,
+                websocket,
                 jwt_secret,
             }),
         }

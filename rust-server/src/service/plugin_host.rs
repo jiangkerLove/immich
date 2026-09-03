@@ -17,6 +17,7 @@ use crate::service::album::{
 };
 use crate::service::job::JobService;
 use crate::service::tag::{TagBulkAssetsReq, TagService};
+use crate::service::websocket::WebSocketHub;
 use crate::utils::workflow::hostname_matches_allowed_hosts;
 
 const HOST_NAMESPACE: &str = "extism:host/user";
@@ -25,6 +26,7 @@ const HOST_NAMESPACE: &str = "extism:host/user";
 pub struct HostContext {
     pub pool: PgPool,
     pub jobs: JobService,
+    pub websocket: WebSocketHub,
     pub jwt_secret: String,
 }
 
@@ -90,7 +92,7 @@ impl HostContext {
     }
 
     fn album_service(&self) -> AlbumService {
-        AlbumService::new(self.pool.clone(), self.jobs.clone())
+        AlbumService::new(self.pool.clone(), self.jobs.clone(), self.websocket.clone())
     }
 
     async fn auth_from_token(&self, token: &str) -> Result<AuthDto, String> {

@@ -206,6 +206,10 @@ impl WebSocketHub {
     pub fn emit_notification(&self, user_id: Uuid, notification: NotificationResponse) {
         self.client_send("on_notification", user_id.to_string(), notification);
     }
+
+    pub fn emit_album_update(&self, user_id: Uuid, album_id: Uuid) {
+        self.client_send("on_album_update", user_id.to_string(), album_id.to_string());
+    }
 }
 
 async fn auth_middleware<A: Adapter>(
