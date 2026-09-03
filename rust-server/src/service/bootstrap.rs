@@ -1,6 +1,7 @@
 use axum::middleware;
 use axum::Router;
 use config::{Case, Config};
+use sqlx::postgres::PgPoolOptions;
 
 use crate::app_state::AppState;
 use crate::middleware::{cors, telemetry, user_agent};
@@ -127,13 +128,68 @@ async fn shutdown_signal() {
     println!("Shutdown signal received, stopping HTTP server...");
 }
 
-pub fn resolve_server_mode(settings: &EnvDto, argv_mode: Option<&str>) -> ServerMode {
+pub async fn resolve_server_mode(settings: &EnvDto, argv_mode: Option<&str>) -> ServerMode {
     if argv_mode == Some("maintenance") {
         return ServerMode::Maintenance;
     }
     if workers::is_maintenance_worker(settings) {
-        ServerMode::Maintenance
-    } else {
-        ServerMode::Api
+        return ServerMode::Maintenance;
+    }
+
+    // Mirror TS `main.ts` Workers.bootstrap: DB maintenance-mode flag selects worker.
+    match db_is_maintenance_mode(settings).await {
+        Ok(true) => {
+            println!("maintenance-mode metadata set; starting maintenance worker");
+            ServerMode::Maintenance
+        }
+        Ok(false) => ServerMode::Api,
+        Err(err) => {
+            eprintln!("failed to read maintenance-mode metadata ({err}); starting API");
+            ServerMode::Api
+        }
+    }
+}
+
+/// Read `system_metadata.maintenance-mode` without a full AppState bootstrap.
+async fn db_is_maintenance_mode(settings: &EnvDto) -> Result<bool, String> {
+    let db_connection_str = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        settings.db_username,
+        settings.db_password,
+        settings.db_url,
+        settings.db_port,
+        settings.db_database_name,
+    );
+
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect(&db_connection_str)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let result = sqlx::query_scalar::<_, Option<serde_json::Value>>(
+        r#"SELECT value FROM system_metadata WHERE key = 'maintenance-mode'"#,
+    )
+    .fetch_optional(&pool)
+    .await;
+
+    pool.close().await;
+
+    match result {
+        Ok(Some(Some(value))) => Ok(value
+            .get("isMaintenanceMode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)),
+        Ok(_) => Ok(false),
+        Err(err) => {
+            // Table missing (migrations not applied yet) — same as TS Postgres 42P01.
+            if let sqlx::Error::Database(db_err) = &err {
+                if db_err.code().as_deref() == Some("42P01") {
+                    return Ok(false);
+                }
+            }
+            Err(err.to_string())
+        }
     }
 }

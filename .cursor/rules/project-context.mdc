@@ -35,17 +35,18 @@ rust-server/src/
 | 维度 | 状态 |
 |------|------|
 | HTTP API（~191 端点） | ✅ 已完成 |
-| 66 个 JobName / 18 个队列 worker | ✅ 已完成（`search` 队列无 worker） |
+| 66 个 JobName / 19 个队列 worker | ✅ 已完成（`search` 为遗留空队列 no-op） |
 | 媒体 / 库 / 同步 / 搜索 API | ✅ 主体完成 |
 | WebSocket 客户端事件 | ✅ 含 `on_album_update` |
 | 工作流执行 | ⚠️ 仅 AssetV1 |
-| 单机可部署使用 | ✅ |
+| 单机可部署使用 | ✅ 默认单进程（API+workers）；HLS 进程内 |
 
 ## 优先待办（下一阶段）
 
-1. ~~伙伴资产媒体访问~~ / ~~`on_album_update`~~ — 已完成
-2. **P1**：多进程 HLS 协调；内部事件总线补齐（见 migration-checklist）
-3. 真实数据冒烟：上传 → 元数据 → 缩略图 → 搜索 → 同步
+1. ~~伙伴资产媒体访问~~ / ~~`on_album_update`~~ / ~~`search` no-op~~ — 已完成
+2. 真实数据冒烟：上传 → 元数据 → 缩略图 → 搜索 → 同步
+3. 若需 **API/worker 分进程**：HLS Redis 协调（P1-3）；否则保持单进程
+4. 按需：workflow 类型扩展（P2-5）、telemetry / 日志（P3）
 
 ## 详细文档
 

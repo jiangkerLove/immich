@@ -320,6 +320,7 @@ mod tests {
         assert_eq!(missing, None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn skips_unreadable_sidecar_candidates_when_not_root() {
         if unsafe { libc::geteuid() == 0 } {

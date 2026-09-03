@@ -12,8 +12,8 @@ use crate::utils::worker_concurrency::concurrency_for_queue;
 use crate::utils::workers::{
     QUEUE_BACKGROUND, QUEUE_BACKUP, QUEUE_DUPLICATE, QUEUE_EDITOR, QUEUE_FACE, QUEUE_FACIAL,
     QUEUE_INTEGRITY, QUEUE_LIBRARY, QUEUE_METADATA, QUEUE_MIGRATION, QUEUE_NOTIFICATIONS,
-    QUEUE_OCR, QUEUE_SIDECAR, QUEUE_SMART_SEARCH, QUEUE_STORAGE_TEMPLATE, QUEUE_THUMBNAIL,
-    QUEUE_VIDEO, QUEUE_WORKFLOW, enabled_worker_queues,
+    QUEUE_OCR, QUEUE_SEARCH, QUEUE_SIDECAR, QUEUE_SMART_SEARCH, QUEUE_STORAGE_TEMPLATE,
+    QUEUE_THUMBNAIL, QUEUE_VIDEO, QUEUE_WORKFLOW, enabled_worker_queues,
 };
 
 mod background_task;
@@ -29,6 +29,7 @@ mod metadata_extraction;
 mod migration;
 mod notifications;
 mod ocr;
+mod search;
 mod sidecar;
 mod smart_search;
 mod storage_template_migration;
@@ -173,6 +174,11 @@ async fn spawn_workers(ctx: &WorkerContext, config: &Value) {
                 ctx.redis_url.clone(),
                 ctx.env.clone(),
                 concurrency_for_queue(config, queue, 2),
+            ),
+            QUEUE_SEARCH => search::spawn(
+                ctx.env.clone(),
+                ctx.redis_url.clone(),
+                concurrency_for_queue(config, queue, 5),
             ),
             QUEUE_OCR => ocr::spawn(
                 ctx.pool.clone(),

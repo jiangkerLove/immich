@@ -16,6 +16,6 @@ async fn main() {
     }
 
     let settings = bootstrap::load_env();
-    let mode = bootstrap::resolve_server_mode(&settings, argv_mode);
+    let mode = bootstrap::resolve_server_mode(&settings, argv_mode).await;
     bootstrap::run(mode).await;
 }

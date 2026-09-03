@@ -5,7 +5,7 @@
 > 集成主线：`dev-rust`（你说的 rust-dev）  
 > 上游同步：`main`
 
-最后更新：`cursor/p0-partner-access-album-ws-4063`（P0 伙伴媒体访问 + `on_album_update`，2026-09）  
+最后更新：`cursor/search-noop-deploy-docs-4063`（search no-op worker + 单进程部署说明，2026-09）  
 Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ---
@@ -18,7 +18,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | 领域服务 | ~50 个 NestJS service | ~80 个 Rust service 模块 | ✅ **约 90%** |
 | 数据库访问 | 55 个 repository | `models/db/` 内联 SQL（54 模块） | ✅ **已完成**（架构不同） |
 | BullMQ 任务名 | 66 个 `JobName` | 66 个均有 worker 处理 | ✅ **已完成** |
-| BullMQ 队列 | 19 个 `QueueName` | 18 个有 worker；`search` 无 worker | ⚠️ **基本完成** |
+| BullMQ 队列 | 19 个 `QueueName` | 19 个均有 worker（`search` 为遗留空队列 no-op） | ✅ **已完成** |
 | WebSocket 客户端事件 | ~15 种 | 含 `on_album_update` | ✅ **已完成** |
 | 内部事件总线 | `EventRepository` ~30 种 |  mainly `ConfigUpdate` via Redis | ⚠️ **部分** |
 | 数据库迁移 | Kysely TS migrations | 仍调用 Node 脚本跑 Kysely | ⚠️ **混合方案** |
@@ -176,6 +176,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | `face_detection.rs` | 人脸检测 |
 | `facial_recognition.rs` | 人脸识别 QueueAll |
 | `smart_search.rs` | CLIP 编码 |
+| `search.rs` | 遗留 `search` 空队列（no-op → `skipped`） |
 | `duplicate_detection.rs` | 重复检测 |
 | `ocr.rs` | OCR |
 | `library.rs` | 库扫描 / 同步 / 删除 |
@@ -207,15 +208,15 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
-| 3 | **HLS 跨进程协调** | TS 用 Socket.IO server events（`HlsSegmentRequest` 等）；Rust 用进程内 `PendingEvents` | API 与转码分进程时会坏 | `service/transcoding.rs`, `service/hls.rs` |
-| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust  mainly `ConfigUpdate` Redis 广播 | 某些边界行为可能缺触发 | `service/server_events.rs` |
+| 3 | **HLS 跨进程协调** | TS 用 Socket.IO server events；Rust 用进程内 `PendingEvents` | **单进程部署可用**（见 §6 B-4）。仅 API/worker **分进程**时需 Redis 协调 | `service/transcoding.rs`, `service/hls.rs` |
+| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust mainly `ConfigUpdate` Redis 广播 | 单进程下多数副作用已内联；跨进程缺口主要是 HLS / `AppRestart` | `service/server_events.rs` |
 
 ### P2 — 工作流 / 插件细节
 
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
 | 5 | **工作流仅执行 AssetV1** | 其他 workflow 类型返回 `Skipped` | `service/workflow_execution.rs` |
-| 6 | **AssetV1 字段清空** | TS 对 description/lat/lon 显式 `null` 会清空；Rust 忽略 null | `workflow_execution.rs` `apply_asset_v1_changes` |
+| ~~6~~ | ~~AssetV1 字段清空~~ | 上游亦为 `TODO allow setting to null` + `?? undefined`；双方均忽略 JSON null | **无需改 Rust**；与 TS 行为一致 |
 | 7 | **PersonRecognized 触发** | TS 已注释，双方均未启用 | 可暂缓 |
 | 8 | **Plugin `allowedHosts` 管理 API** | 运行时校验有，公开管理 API 无 | 可暂缓 |
 
@@ -223,7 +224,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
-| 9 | **`search` 队列无 worker** | 队列列表里有，无消费者；若有遗留入队会积压 | `service/queue.rs`, `workers/mod.rs` |
+| ~~9~~ | ~~`search` 队列无 worker~~ | ✅ 已加 no-op worker（上游亦无 `@OnJob`，仅空 Worker） | `workers/search.rs` |
 | 10 | **数据库迁移依赖 Node** | 通过 `bin/run-kysely-migrations.cjs` 跑 Kysely | `service/database_migrations.rs`；需 `IMMICH_SERVER_PATH` 或构建 `server/` |
 | 11 | **Telemetry Io/Repo 指标** | TS 有 DB/IO prometheus；Rust 未接全 | `utils/telemetry.rs` |
 | 12 | **结构化日志** | TS `LoggingRepository`；Rust 多为 `println!` | 全库 |
@@ -272,7 +273,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | `AssetUploadReadyV2` / `AssetEditReadyV2` | ✓ | ✓ | ✅ |
 | `AppRestartV1` | ✓ | ✓ | ✅ |
 | **`on_album_update`** | ✓ | ✓ | ✅ |
-| HLS server events（跨进程） | ✓ | 进程内 only | ⚠️ |
+| HLS server events（跨进程） | ✓ | 进程内 only | ⚠️ 单进程 OK；分进程见 §6 B-5 |
 
 ---
 
@@ -286,18 +287,21 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ### 阶段 B — 部署模型清晰化
 
-4. 若只跑**单进程**（API+workers 一起）：文档写明即可，HLS 可暂不改  
-5. 若要 **API / worker 分离**：优先做 HLS Redis/Socket 协调（P1-3）
+4. **单进程部署（推荐默认）** ✅  
+   - 默认同时跑 API + 全部 BullMQ workers（未设 `IMMICH_WORKERS_INCLUDE=api` 单独拆分时）  
+   - HLS 实时转码在同一进程的 `HlsEngine`（`PendingEvents`），**无需** Redis/Socket 跨进程协调  
+   - 跨进程 `server_events` 目前仅广播 `ConfigUpdate`  
+5. 若要 **API / worker 分离**：优先做 HLS Redis pub/sub 协调（P1-3）；在此之前不要拆进程跑视频流
 
 ### 阶段 C — 工作流与插件
 
-6. AssetV1 null 清空（P2-6）  
+6. ~~AssetV1 null 清空（P2-6）~~ — 上游未实现，已从待办移除  
 7. 按需扩展 workflow 类型（P2-5）  
 8. Plugin host 边界测试
 
 ### 阶段 D — 工程与长期维护
 
-9. `search` 队列：实现 no-op worker 或从 `ALL_QUEUES` 移除（P3-9）  
+9. ~~`search` 队列 no-op worker（P3-9）~~ ✅  
 10. 补全 telemetry / 日志（P3-11/12）  
 11. 评估是否将 Kysely 迁移纯 Rust 化（P3-10，工作量大）  
 12. 定期 `main` → `dev-rust` 合并上游，解决 `rust-server` 冲突
@@ -352,12 +356,13 @@ cd rust-server && cargo +stable test --offline --lib
 | #11–#16 | Workflow 日志、plugin host、library/background 任务状态、R_OK、scan queue |
 | #17 | sync-main 全部合入 `dev-rust` |
 | #18 | Websocket 版本、UserDelete、ML QueueAll、Sidecar、integrity、dedup 等批量 parity |
-| （本切片） | P0：`require_asset_access` 伙伴/相册读权限；`on_album_update` websocket + 共享链接上传通知 |
+| （P0 切片） | `require_asset_access` 伙伴/相册读权限；`on_album_update` websocket + 共享链接上传通知 |
+| （本切片） | `search` 遗留队列 no-op worker；单进程部署/HLS 说明；纠正 P2-6（上游亦不清空 null） |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API 和后台任务主体已在 Rust，`dev-rust` 可支撑单机 Immich 使用；P0 伙伴媒体访问与相册 websocket 已对齐。  
-**还差：** 多进程 HLS、工作流细节、运维可观测性、与上游持续同步、真实数据冒烟。  
-**策略：** 按本文 §6 分阶段做小 PR，合并到 `dev-rust`，不必每个小点单独发版。
+**现在：** API 和后台任务主体已在 Rust，默认**单进程**可支撑日常使用；P0 与 `search` 队列消费者已对齐。  
+**还差：** 真实数据冒烟、分进程时的 HLS Redis、工作流类型扩展、运维可观测性、与上游持续同步。  
+**策略：** 按本文 §6 分阶段做小 PR，合并到 `dev-rust`；未准备好 HLS 跨进程前不要拆 API/worker。

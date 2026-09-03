@@ -179,6 +179,12 @@ impl MaintenanceService {
         .await?;
 
         self.websocket.emit_app_restart(true);
+        // Single-process: exit so the process manager restarts into Maintenance mode
+        // (boot reads maintenance-mode metadata). Matches TS AppRestart → process.exit.
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            std::process::exit(0);
+        });
 
         sign_maintenance_jwt(&secret, username)
     }

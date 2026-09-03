@@ -10,6 +10,7 @@ pub const QUEUE_METADATA: &str = "metadataExtraction";
 pub const QUEUE_STORAGE_TEMPLATE: &str = "storageTemplateMigration";
 pub const QUEUE_SIDECAR: &str = "sidecar";
 pub const QUEUE_SMART_SEARCH: &str = "smartSearch";
+pub const QUEUE_SEARCH: &str = "search";
 pub const QUEUE_OCR: &str = "ocr";
 pub const QUEUE_FACE: &str = "faceDetection";
 pub const QUEUE_FACIAL: &str = "facialRecognition";
@@ -27,6 +28,7 @@ const DEFAULT_RUST_QUEUES: &[&str] = &[
     QUEUE_STORAGE_TEMPLATE,
     QUEUE_SIDECAR,
     QUEUE_SMART_SEARCH,
+    QUEUE_SEARCH,
     QUEUE_OCR,
     QUEUE_FACE,
     QUEUE_FACIAL,
