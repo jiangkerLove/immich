@@ -1,16 +1,17 @@
 use axum::http::HeaderMap;
+use redis::RedisError;
 use serde::Serialize;
+use socketioxide::SocketIo;
+use socketioxide::TransportType;
 use socketioxide::adapter::Adapter;
 use socketioxide::adapter::Emitter;
 use socketioxide::extract::{Extension, HttpExtension, SocketRef, State};
 use socketioxide::handler::ConnectHandler;
 use socketioxide::layer::SocketIoLayer;
-use socketioxide::TransportType;
-use socketioxide::SocketIo;
-use redis::RedisError;
 use socketioxide_redis::{CustomRedisAdapter, RedisAdapterConfig, RedisAdapterCtr};
 
-use crate::service::websocket_redis::{connect_driver, ImmichRedisDriver};
+use crate::service::websocket_redis::{ImmichRedisDriver, connect_driver};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::dto::auth::AuthDto;
@@ -26,6 +27,12 @@ const WS_PATH: &str = "/api/socket.io";
 type AppSocketAdapter = CustomRedisAdapter<Emitter, ImmichRedisDriver>;
 type AppSocketIo = SocketIo<AppSocketAdapter>;
 pub type AppSocketIoLayer = SocketIoLayer<AppSocketAdapter>;
+
+#[derive(Clone)]
+pub struct WebsocketAppState {
+    pub auth: AuthService,
+    pub pool: PgPool,
+}
 
 #[derive(Clone)]
 pub struct WebSocketHub {
@@ -45,15 +52,20 @@ impl WebSocketHub {
 
     pub async fn build(
         auth: AuthService,
+        pool: PgPool,
         redis_url: &str,
     ) -> Result<(AppSocketIoLayer, Self), RedisError> {
         let driver = connect_driver(redis_url).await?;
         let adapter = RedisAdapterCtr::new_with_driver(driver, RedisAdapterConfig::default());
+        let app_state = WebsocketAppState {
+            auth: auth.clone(),
+            pool,
+        };
 
         let (layer, io) = SocketIo::builder()
             .req_path(WS_PATH)
             .transports([TransportType::Websocket])
-            .with_state(auth.clone())
+            .with_state(app_state)
             .with_adapter::<CustomRedisAdapter<_, _>>(adapter)
             .build_layer();
 
@@ -112,7 +124,10 @@ impl WebSocketHub {
         );
     }
 
-    pub fn emit_maintenance_status(&self, status: &crate::models::dto::maintenance::MaintenanceStatusResp) {
+    pub fn emit_maintenance_status(
+        &self,
+        status: &crate::models::dto::maintenance::MaintenanceStatusResp,
+    ) {
         self.client_send("MaintenanceStatusV1", "private", status.clone());
         let public = crate::service::maintenance::public_maintenance_status(status);
         self.client_send("MaintenanceStatusV1", "public", public);
@@ -132,11 +147,7 @@ impl WebSocketHub {
     }
 
     pub fn emit_asset_delete(&self, user_id: Uuid, asset_id: Uuid) {
-        self.client_send(
-            "on_asset_delete",
-            user_id.to_string(),
-            asset_id.to_string(),
-        );
+        self.client_send("on_asset_delete", user_id.to_string(), asset_id.to_string());
     }
 
     pub fn emit_asset_restore(&self, user_id: Uuid, asset_ids: Vec<String>) {
@@ -165,11 +176,7 @@ impl WebSocketHub {
     }
 
     pub fn emit_asset_hidden(&self, user_id: Uuid, asset_id: Uuid) {
-        self.client_send(
-            "on_asset_hidden",
-            user_id.to_string(),
-            asset_id.to_string(),
-        );
+        self.client_send("on_asset_hidden", user_id.to_string(), asset_id.to_string());
     }
 
     pub fn emit_asset_update(&self, user_id: Uuid, asset: AssetResponse) {
@@ -203,13 +210,14 @@ impl WebSocketHub {
 
 async fn auth_middleware<A: Adapter>(
     socket: SocketRef<A>,
-    State(auth): State<AuthService>,
+    State(app_state): State<WebsocketAppState>,
     HttpExtension(headers): HttpExtension<HeaderMap>,
 ) -> Result<(), &'static str> {
     let tokens = extract_auth_tokens(&headers, &Default::default());
     let shared_link_tokens = get_shared_link_tokens(&headers);
 
-    match auth
+    match app_state
+        .auth
         .authenticate(&tokens, WS_PATH, &shared_link_tokens)
         .await
     {
@@ -224,6 +232,7 @@ async fn auth_middleware<A: Adapter>(
 async fn on_connect<A: Adapter>(
     socket: SocketRef<A>,
     Extension(auth): Extension<AuthDto>,
+    State(app_state): State<WebsocketAppState>,
     io: SocketIo<A>,
 ) {
     let user_room = auth.user.id.to_string();
@@ -234,5 +243,23 @@ async fn on_connect<A: Adapter>(
     }
 
     let version = ServerService::version();
-    let _ = io.to(user_room).emit("on_server_version", &version).await;
+    let _ = io
+        .to(user_room.clone())
+        .emit("on_server_version", &version)
+        .await;
+
+    let pool = app_state.pool.clone();
+    let user_id = user_room.clone();
+    if let Err(err) =
+        crate::service::version_check::on_websocket_connect(&pool, |event, payload| {
+            let io = io.clone();
+            let user_id = user_id.clone();
+            tokio::spawn(async move {
+                let _ = io.to(user_id).emit(event, &payload).await;
+            });
+        })
+        .await
+    {
+        eprintln!("websocket version check notification failed: {err}");
+    }
 }

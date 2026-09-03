@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::models::dto::env::EnvDto;
 use crate::service::job::JobService;
-use crate::service::media::ocr::{OcrOutcome, OcrService};
+use crate::service::media::ocr::{OcrOutcome, OcrQueueAllOutcome, OcrService};
 
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_OCR: &str = "ocr";
@@ -49,8 +49,10 @@ impl OcrProcessor {
             "OcrQueueAll" => {
                 let job: QueueAllJobData =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.service.queue_all(job.force.unwrap_or(false)).await?;
-                Ok(JobWorkerStatus::Success)
+                match self.service.queue_all(job.force.unwrap_or(false)).await? {
+                    OcrQueueAllOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+                    OcrQueueAllOutcome::Success => Ok(JobWorkerStatus::Success),
+                }
             }
             other => {
                 eprintln!("ocr job {other} is not implemented in rust-server yet; skipping");

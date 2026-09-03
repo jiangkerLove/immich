@@ -21,6 +21,12 @@ pub enum FaceDetectionOutcome {
     Success,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceDetectionQueueAllOutcome {
+    Skipped,
+    Success,
+}
+
 #[derive(Clone)]
 pub struct FaceDetectionService {
     pool: PgPool,
@@ -32,15 +38,18 @@ impl FaceDetectionService {
         Self { pool, jobs }
     }
 
-    pub async fn queue_all(&self, force: Option<bool>) -> Result<(), String> {
+    pub async fn queue_all(
+        &self,
+        force: Option<bool>,
+    ) -> Result<FaceDetectionQueueAllOutcome, String> {
         let config = get_machine_learning_config(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         if !is_facial_recognition_enabled(&config) {
-            return Ok(());
+            return Ok(FaceDetectionQueueAllOutcome::Skipped);
         }
         if !crate::utils::vector::face_search_available(&self.pool).await {
-            return Ok(());
+            return Ok(FaceDetectionQueueAllOutcome::Skipped);
         }
 
         if force.unwrap_or(false) {
@@ -76,7 +85,7 @@ impl FaceDetectionService {
                 .map_err(|err| err.to_string())?;
         }
 
-        Ok(())
+        Ok(FaceDetectionQueueAllOutcome::Success)
     }
 
     pub async fn detect_asset(&self, asset_id: &Uuid) -> Result<FaceDetectionOutcome, String> {
@@ -96,6 +105,10 @@ impl FaceDetectionService {
         else {
             return Ok(FaceDetectionOutcome::Failed);
         };
+
+        if asset.preview_file_count != 1 {
+            return Ok(FaceDetectionOutcome::Failed);
+        }
 
         let Some(preview_path) = asset.preview_path else {
             return Ok(FaceDetectionOutcome::Failed);

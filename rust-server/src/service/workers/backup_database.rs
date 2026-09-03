@@ -49,9 +49,7 @@ pub fn spawn(
     concurrency: usize,
 ) {
     tokio::spawn(async move {
-        let processor = Arc::new(BackupDatabaseProcessor::new(
-            pool, storage, env, websocket,
-        ));
+        let processor = Arc::new(BackupDatabaseProcessor::new(pool, storage, env, websocket));
         let worker = WorkerBuilder::new(QUEUE_BACKUP)
             .prefix(BULL_PREFIX)
             .connection(RedisConnection::new(redis_url))
@@ -68,8 +66,8 @@ pub fn spawn(
                         match processor.process(&job_name).await {
                             Ok(()) => Ok("success"),
                             Err(err) if matches_unsupported_postgres(&err) => {
-                                eprintln!("database backup skipped: {err}");
-                                Ok("skipped")
+                                eprintln!("database backup failed: {err}");
+                                Ok("failed")
                             }
                             Err(err) => {
                                 crate::service::job_error::on_job_error(
@@ -101,6 +99,5 @@ pub fn spawn(
 }
 
 fn matches_unsupported_postgres(message: &str) -> bool {
-    message.contains("unsupported PostgreSQL version")
-        || message.contains("UnsupportedPostgres")
+    message.contains("unsupported PostgreSQL version") || message.contains("UnsupportedPostgres")
 }

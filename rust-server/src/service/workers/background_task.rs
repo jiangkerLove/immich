@@ -232,10 +232,15 @@ impl BackgroundTaskProcessor {
             &self.websocket,
             self.env.immich_env.as_ref(),
         )
-        .await?
+        .await
         {
-            version_check::VersionCheckOutcome::Success => Ok(JobWorkerStatus::Success),
-            version_check::VersionCheckOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+            Ok(version_check::VersionCheckOutcome::Success) => Ok(JobWorkerStatus::Success),
+            Ok(version_check::VersionCheckOutcome::Skipped) => Ok(JobWorkerStatus::Skipped),
+            Ok(version_check::VersionCheckOutcome::Failed) => Ok(JobWorkerStatus::Failed),
+            Err(err) => {
+                eprintln!("Unable to run version check: {err}");
+                Ok(JobWorkerStatus::Failed)
+            }
         }
     }
 
@@ -484,7 +489,7 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Ok(JobWorkerStatus::Success);
+            return Ok(JobWorkerStatus::Skipped);
         };
 
         if !force {
@@ -500,11 +505,11 @@ impl BackgroundTaskProcessor {
                 let ready_before = Utc::now() - Duration::days(delete_delay as i64);
                 if deleted_at > ready_before {
                     eprintln!("Skipped user not ready for deletion: id={}", job.id);
-                    return Ok(JobWorkerStatus::Success);
+                    return Ok(JobWorkerStatus::Skipped);
                 }
             } else {
                 eprintln!("Skipped user not ready for deletion: id={}", job.id);
-                return Ok(JobWorkerStatus::Success);
+                return Ok(JobWorkerStatus::Skipped);
             }
         }
 

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use reqwest::Url;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::Deserialize;
 use sqlx::PgPool;
 
@@ -18,6 +18,7 @@ const MIN_CHECK_INTERVAL_SECS: i64 = 50;
 pub enum VersionCheckOutcome {
     Success,
     Skipped,
+    Failed,
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,15 +27,58 @@ struct VersionResponse {
     published_at: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ReleaseEvent {
-    is_available: bool,
-    checked_at: String,
-    server_version: crate::service::server::ServerVersionResponse,
-    release_version: crate::service::server::ServerVersionResponse,
+pub struct ReleaseEvent {
+    pub is_available: bool,
+    pub checked_at: String,
+    pub server_version: crate::service::server::ServerVersionResponse,
+    pub release_version: crate::service::server::ServerVersionResponse,
     #[serde(rename = "type")]
-    release_type: Option<String>,
+    pub release_type: Option<String>,
+}
+
+pub fn build_release_event(channel: &str, metadata: &VersionCheckState) -> Option<ReleaseEvent> {
+    let release_version = metadata.release_version.as_deref()?;
+    let checked_at = metadata.checked_at.clone().unwrap_or_default();
+    let include_prerelease = channel == "releaseCandidate";
+    Some(ReleaseEvent {
+        is_available: is_newer_release(SERVER_VERSION, release_version, include_prerelease),
+        checked_at,
+        server_version: ServerService::version(),
+        release_version: parse_server_version(release_version),
+        release_type: diff_release_type(SERVER_VERSION, release_version),
+    })
+}
+
+pub async fn on_websocket_connect(
+    pool: &PgPool,
+    emit: impl FnOnce(&'static str, ReleaseEvent) + Send,
+) -> Result<(), String> {
+    let config = crate::utils::system_config::get_merged(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    let version_check = config.get("newVersionCheck");
+    let enabled = version_check
+        .and_then(|value| value.get("enabled"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
+    if !enabled {
+        return Ok(());
+    }
+
+    let channel = version_check
+        .and_then(|value| value.get("channel"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("stable");
+    let metadata = system_metadata::get_version_check_state(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    if let Some(event) = build_release_event(channel, &metadata) {
+        emit("on_new_release", event);
+    }
+
+    Ok(())
 }
 
 pub fn should_skip_version_check(enabled: bool, seconds_since_last_check: Option<i64>) -> bool {
@@ -87,33 +131,43 @@ pub async fn run_version_check(
         return Ok(VersionCheckOutcome::Skipped);
     }
 
-    let release = fetch_latest_release(env, channel).await?;
+    let release = match fetch_latest_release(env, channel).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Unable to run version check: {err}");
+            return Ok(VersionCheckOutcome::Failed);
+        }
+    };
     let checked_at = Utc::now().to_rfc3339();
     let metadata = VersionCheckState {
         checked_at: Some(checked_at.clone()),
         release_version: Some(release.version.clone()),
     };
-    system_metadata::set_json(
+    if let Err(err) = system_metadata::set_json(
         pool,
         "version-check-state",
         &serde_json::to_value(&metadata).unwrap_or_default(),
     )
     .await
-    .map_err(|err| err.to_string())?;
+    {
+        eprintln!("Unable to run version check: {err}");
+        return Ok(VersionCheckOutcome::Failed);
+    }
 
     if is_newer_release(SERVER_VERSION, &release.version, include_prerelease) {
         println!(
             "version check: found {} released at {}",
             release.version, release.published_at
         );
-        let payload = ReleaseEvent {
-            is_available: true,
-            checked_at,
-            server_version: ServerService::version(),
-            release_version: parse_server_version(&release.version),
-            release_type: diff_release_type(SERVER_VERSION, &release.version),
-        };
-        websocket.client_broadcast("on_new_release", payload);
+        if let Some(payload) = build_release_event(
+            channel,
+            &VersionCheckState {
+                checked_at: Some(checked_at),
+                release_version: Some(release.version.clone()),
+            },
+        ) {
+            websocket.client_broadcast("on_new_release", payload);
+        }
     }
 
     Ok(VersionCheckOutcome::Success)
@@ -178,11 +232,19 @@ fn is_newer_release(current: &str, release: &str, include_prerelease: bool) -> b
         return false;
     }
 
-    if !include_prerelease && !release_v.pre.is_empty() {
+    if include_prerelease {
+        return true;
+    }
+
+    if !release_v.pre.is_empty() {
         return false;
     }
 
-    true
+    let Ok(req) = VersionReq::parse(&format!(">{current_v}")) else {
+        return false;
+    };
+
+    req.matches(&release_v)
 }
 
 fn parse_server_version(value: &str) -> crate::service::server::ServerVersionResponse {
@@ -235,5 +297,32 @@ mod tests {
         assert!(should_skip_version_check(true, Some(49)));
         assert!(!should_skip_version_check(true, Some(50)));
         assert!(!should_skip_version_check(true, None));
+    }
+
+    #[test]
+    fn build_release_event_marks_older_release_unavailable() {
+        let metadata = VersionCheckState {
+            checked_at: Some("2024-01-01T00:00:00Z".to_string()),
+            release_version: Some("0.0.1".to_string()),
+        };
+        let event = build_release_event("stable", &metadata).expect("event");
+        assert!(!event.is_available);
+    }
+
+    #[test]
+    fn build_release_event_requires_release_version() {
+        let metadata = VersionCheckState {
+            checked_at: Some("2024-01-01T00:00:00Z".to_string()),
+            release_version: None,
+        };
+        assert!(build_release_event("stable", &metadata).is_none());
+    }
+
+    #[test]
+    fn newer_release_uses_version_requirement() {
+        assert!(is_newer_release("1.0.0", "1.1.0", false));
+        assert!(!is_newer_release("1.0.0", "1.0.0", false));
+        assert!(!is_newer_release("1.0.0", "1.1.0-rc.1", false));
+        assert!(is_newer_release("1.0.0", "1.1.0-rc.1", true));
     }
 }

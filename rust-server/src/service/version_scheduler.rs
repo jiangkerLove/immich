@@ -19,7 +19,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
     let bootstrap_jobs = jobs.clone();
     let bootstrap = Box::pin(async move {
         if let Err(err) = bootstrap_jobs
-            .queue_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
+            .queue_deduplicated_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
             .await
         {
             eprintln!("{SCHEDULER_NAME}: failed to queue initial VersionCheck: {err}");
@@ -46,7 +46,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                 }
 
                 if let Err(err) = jobs
-                    .queue_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
+                    .queue_deduplicated_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
                     .await
                 {
                     eprintln!("{SCHEDULER_NAME}: failed to queue VersionCheck: {err}");

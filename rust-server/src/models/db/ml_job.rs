@@ -289,6 +289,7 @@ pub struct DetectFacesAssetRow {
     pub id: Uuid,
     pub visibility: String,
     pub preview_path: Option<String>,
+    pub preview_file_count: i64,
     pub faces: Option<serde_json::Value>,
 }
 
@@ -309,6 +310,13 @@ pub async fn get_for_detect_faces(
                       AND asset_file."isEdited" = false
                     LIMIT 1
                 ) AS preview_path,
+                (
+                    SELECT COUNT(*)::bigint
+                    FROM asset_file
+                    WHERE asset_file."assetId" = asset.id
+                      AND asset_file.type = 'preview'
+                      AND asset_file."isEdited" = false
+                ) AS preview_file_count,
                 (
                     SELECT COALESCE(json_agg(af), '[]'::json)
                     FROM (
@@ -380,7 +388,10 @@ pub async fn stream_for_detect_faces(
     .await
 }
 
-pub async fn set_faces_recognized_at(pool: &Pool<Postgres>, asset_id: &Uuid) -> Result<(), sqlx::Error> {
+pub async fn set_faces_recognized_at(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
             INSERT INTO asset_job_status ("assetId", "facesRecognizedAt")

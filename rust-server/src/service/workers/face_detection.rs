@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use crate::models::dto::env::EnvDto;
 use crate::service::job::JobService;
-use crate::service::media::face_detection::{FaceDetectionOutcome, FaceDetectionService};
+use crate::service::media::face_detection::{
+    FaceDetectionOutcome, FaceDetectionQueueAllOutcome, FaceDetectionService,
+};
 
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_FACE: &str = "faceDetection";
@@ -49,8 +51,10 @@ impl FaceDetectionProcessor {
             "AssetDetectFacesQueueAll" => {
                 let job: QueueAllJobData =
                     serde_json::from_value(data.clone()).map_err(|err| err.to_string())?;
-                self.service.queue_all(job.force).await?;
-                Ok(JobWorkerStatus::Success)
+                match self.service.queue_all(job.force).await? {
+                    FaceDetectionQueueAllOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+                    FaceDetectionQueueAllOutcome::Success => Ok(JobWorkerStatus::Success),
+                }
             }
             other => {
                 eprintln!(

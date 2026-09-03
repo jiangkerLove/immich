@@ -30,6 +30,12 @@ pub fn walk_file_batches(
     batches
 }
 
+pub fn is_hidden_path(path: &Path) -> bool {
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|part| part.starts_with('.'))
+}
+
 fn walk_dir(
     dir: &Path,
     extensions: Option<&[String]>,
@@ -45,11 +51,18 @@ fn walk_dir(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            if is_hidden_path(&path) {
+                continue;
+            }
             walk_dir(&path, extensions, current, batch_size, batches);
             continue;
         }
 
         if !path.is_file() {
+            continue;
+        }
+
+        if is_hidden_path(&path) {
             continue;
         }
 
@@ -78,4 +91,30 @@ fn matches_extension(path: &Path, extensions: &[String]) -> bool {
     extensions
         .iter()
         .any(|ext| lower.ends_with(&ext.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_hidden_files_and_directories() {
+        let root = std::env::temp_dir().join(format!("immich-file-walk-{}", uuid::Uuid::new_v4()));
+        let visible_dir = root.join("photos");
+        let hidden_dir = root.join(".hidden");
+        let hidden_file = visible_dir.join(".secret.jpg");
+        let visible_file = visible_dir.join("photo.jpg");
+        std::fs::create_dir_all(&visible_dir).unwrap();
+        std::fs::create_dir_all(&hidden_dir).unwrap();
+        std::fs::write(&hidden_file, "x").unwrap();
+        std::fs::write(&visible_file, "x").unwrap();
+        std::fs::write(hidden_dir.join("nested.jpg"), "x").unwrap();
+
+        let batches = walk_file_batches(&[root.clone()], None, 10);
+        let paths: Vec<String> = batches.into_iter().flatten().collect();
+
+        assert_eq!(paths, vec![visible_file.to_string_lossy().into_owned()]);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

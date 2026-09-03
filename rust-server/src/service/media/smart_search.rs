@@ -5,9 +5,7 @@ use uuid::Uuid;
 
 use crate::models::db::smart_search;
 use crate::models::db::smart_search_job;
-use crate::models::db::system_metadata::{
-    get_machine_learning_config, is_smart_search_enabled,
-};
+use crate::models::db::system_metadata::{get_machine_learning_config, is_smart_search_enabled};
 use crate::service::job::{EntityJob, JobService};
 use crate::service::ml;
 use crate::utils::clip::get_clip_dim_size;
@@ -18,6 +16,12 @@ const JOBS_BATCH_SIZE: usize = 1000;
 pub enum SmartSearchOutcome {
     Skipped,
     Failed,
+    Success,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmartSearchQueueAllOutcome {
+    Skipped,
     Success,
 }
 
@@ -32,15 +36,15 @@ impl SmartSearchService {
         Self { pool, jobs }
     }
 
-    pub async fn queue_all(&self, force: bool) -> Result<(), String> {
+    pub async fn queue_all(&self, force: bool) -> Result<SmartSearchQueueAllOutcome, String> {
         let config = get_machine_learning_config(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         if !is_smart_search_enabled(&config) {
-            return Ok(());
+            return Ok(SmartSearchQueueAllOutcome::Skipped);
         }
         if !crate::utils::vector::smart_search_available(&self.pool).await {
-            return Ok(());
+            return Ok(SmartSearchQueueAllOutcome::Skipped);
         }
 
         if force {
@@ -61,7 +65,7 @@ impl SmartSearchService {
             }
         }
 
-        Ok(())
+        Ok(SmartSearchQueueAllOutcome::Success)
     }
 
     pub async fn encode_asset(
@@ -88,6 +92,10 @@ impl SmartSearchService {
         else {
             return Ok(SmartSearchOutcome::Failed);
         };
+
+        if asset.preview_file_count != 1 {
+            return Ok(SmartSearchOutcome::Failed);
+        }
 
         let Some(preview_path) = asset.preview_path else {
             return Ok(SmartSearchOutcome::Failed);

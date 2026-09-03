@@ -6,44 +6,34 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool as SqlPool, Postgres};
 
 use crate::models::dto::env::EnvDto;
-use crate::service::shared_link::SharedLinkService;
 use crate::service::asset::AssetService;
 use crate::service::asset_file::AssetFileService;
 use crate::service::asset_media::AssetMediaService;
 use crate::service::cluster_group::ClusterGroupService;
-use crate::service::oauth::OAuthService;
-use crate::service::search::SearchService;
-use crate::service::system_metadata::SystemMetadataService;
-use crate::service::trash::TrashService;
-use crate::service::timeline::TimelineService;
 use crate::service::job::JobService;
-use crate::service::{
-    album::AlbumService, api_key::ApiKeyService, auth::AuthService, session::SessionService,
-    tag::TagService, user::UserService, partner::PartnerService, stack::StackService,
-    person::PersonService, activity::ActivityService, map::MapService,
-    download::DownloadService,
-    view::ViewService,
-    user_admin::UserAdminService,
-    duplicate::DuplicateService,
-    system_config::SystemConfigService,
-    maintenance::MaintenanceService,
-    maintenance_worker::MaintenanceWorkerRuntime,
-    hls::HlsService,
-    queue::QueueService,
-    library::LibraryService,
-    integrity::IntegrityService,
-    database_backup::DatabaseBackupService,
-    plugin::PluginService,
-    workflow::WorkflowService,
-    auth_admin::AuthAdminService,
-};
 use crate::service::memory::MemoryService;
 use crate::service::notification::NotificationService;
-use crate::service::sync::SyncService;
+use crate::service::oauth::OAuthService;
+use crate::service::search::SearchService;
 use crate::service::server::{ServerBuildConfig, ServerService};
+use crate::service::shared_link::SharedLinkService;
+use crate::service::sync::SyncService;
+use crate::service::system_metadata::SystemMetadataService;
+use crate::service::timeline::TimelineService;
+use crate::service::trash::TrashService;
 use crate::service::websocket::{AppSocketIoLayer, WebSocketHub};
 use crate::service::websocket_jobs::WebSocketJobListener;
 use crate::service::workers::{self, WorkerContext};
+use crate::service::{
+    activity::ActivityService, album::AlbumService, api_key::ApiKeyService, auth::AuthService,
+    auth_admin::AuthAdminService, database_backup::DatabaseBackupService,
+    download::DownloadService, duplicate::DuplicateService, hls::HlsService,
+    integrity::IntegrityService, library::LibraryService, maintenance::MaintenanceService,
+    maintenance_worker::MaintenanceWorkerRuntime, map::MapService, partner::PartnerService,
+    person::PersonService, plugin::PluginService, queue::QueueService, session::SessionService,
+    stack::StackService, system_config::SystemConfigService, tag::TagService, user::UserService,
+    user_admin::UserAdminService, view::ViewService, workflow::WorkflowService,
+};
 use crate::utils::storage::StoragePaths;
 
 #[derive(Clone)]
@@ -149,7 +139,11 @@ impl Services {
             view: ViewService::new(pool.clone()),
             user_admin: UserAdminService::new(pool.clone(), websocket.clone(), jobs.clone()),
             duplicate: DuplicateService::new(pool.clone(), jobs.clone(), websocket.clone()),
-            system_config: SystemConfigService::new(pool.clone(), redis_url.clone(), websocket.clone()),
+            system_config: SystemConfigService::new(
+                pool.clone(),
+                redis_url.clone(),
+                websocket.clone(),
+            ),
             maintenance: MaintenanceService::new(pool.clone(), storage.clone(), websocket.clone()),
             hls: HlsService::new(pool.clone(), storage.clone(), hls_engine),
             queue: QueueService::new(jobs.clone()),
@@ -184,7 +178,10 @@ impl AppState {
                 settings.redis_port
             )
         } else {
-            format!("redis://{}:{}", settings.redis_hostname, settings.redis_port)
+            format!(
+                "redis://{}:{}",
+                settings.redis_hostname, settings.redis_port
+            )
         };
         let redis_client = RedisClient::open(redis_url.clone()).expect("invalid redis url");
         let redis_pool = bb8::Pool::builder()
@@ -210,7 +207,8 @@ impl AppState {
 
         crate::models::db::advisory_lock::wait_for_free_maintenance_lock(&sql_pool).await;
 
-        if let Err(err) = crate::service::database_bootstrap::on_startup(&sql_pool, &settings).await {
+        if let Err(err) = crate::service::database_bootstrap::on_startup(&sql_pool, &settings).await
+        {
             panic!("Database bootstrap failed: {err}");
         }
 
@@ -230,7 +228,7 @@ impl AppState {
         }
 
         let auth = AuthService::new(sql_pool.clone());
-        let (websocket_layer, websocket) = WebSocketHub::build(auth, &redis_url)
+        let (websocket_layer, websocket) = WebSocketHub::build(auth, sql_pool.clone(), &redis_url)
             .await
             .expect("failed to initialize websocket redis adapter");
 
@@ -255,10 +253,8 @@ impl AppState {
             crate::service::version_scheduler::spawn(sql_pool.clone(), jobs.clone());
         }
 
-        let hls_engine = crate::service::transcoding::HlsEngine::spawn(
-            sql_pool.clone(),
-            storage.clone(),
-        );
+        let hls_engine =
+            crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
         crate::service::config_bootstrap::run(&sql_pool, &settings, &jobs).await;
 
@@ -301,7 +297,10 @@ impl AppState {
                 settings.redis_port
             )
         } else {
-            format!("redis://{}:{}", settings.redis_hostname, settings.redis_port)
+            format!(
+                "redis://{}:{}",
+                settings.redis_hostname, settings.redis_port
+            )
         };
         let redis_client = RedisClient::open(redis_url.clone()).expect("invalid redis url");
         let redis_pool = bb8::Pool::builder()
@@ -333,11 +332,12 @@ impl AppState {
         }
 
         let auth = AuthService::new(sql_pool.clone());
-        let (websocket_layer, websocket) = WebSocketHub::build(auth, &redis_url)
+        let (websocket_layer, websocket) = WebSocketHub::build(auth, sql_pool.clone(), &redis_url)
             .await
             .expect("failed to initialize websocket redis adapter");
 
-        let hls_engine = crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
+        let hls_engine =
+            crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
 
         let maintenance_worker = MaintenanceWorkerRuntime::spawn(

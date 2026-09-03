@@ -13,7 +13,7 @@ use crate::models::db::assets::{self, NewLibraryAsset};
 use crate::models::db::library::{self, LibraryAssetSyncRow, LibraryRow};
 use crate::service::job::JobService;
 use crate::utils::checksum::sha1_bytes;
-use crate::utils::file_walk::walk_file_batches;
+use crate::utils::file_walk::{is_hidden_path, walk_file_batches};
 use crate::utils::fs_access::has_read_access;
 use crate::utils::glob::path_matches_exclusion;
 use crate::utils::mime_types::{is_video_path, supported_file_extensions};
@@ -148,7 +148,7 @@ impl LibraryProcessor {
                 .await
                 .map_err(|err| err.to_string())?;
             self.jobs
-                .queue_json_job(QUEUE_LIBRARY, "LibraryScanAssetsQueueAll", data)
+                .queue_json_job(QUEUE_LIBRARY, "LibrarySyncAssetsQueueAll", data)
                 .await
                 .map_err(|err| err.to_string())?;
         }
@@ -248,7 +248,7 @@ impl LibraryProcessor {
         for path_batch in batches {
             let filtered: Vec<String> = path_batch
                 .into_iter()
-                .filter(|path| !is_hidden_path(path))
+                .filter(|path| !is_hidden_path(Path::new(path)))
                 .filter(|path| !path_matches_exclusion(path, &library_row.exclusion_patterns))
                 .collect();
 
@@ -291,13 +291,20 @@ impl LibraryProcessor {
     }
 
     async fn handle_sync_files(&self, job: LibrarySyncFilesJob) -> Result<JobWorkerStatus, String> {
-        let Some(library_row) = library::get_by_id(&self.pool, &job.library_id)
+        let Some(library_row) = library::get_by_id_with_deleted(&self.pool, &job.library_id)
             .await
             .map_err(|err| err.to_string())?
         else {
             println!("Library {} not found, skipping file import", job.library_id);
             return Ok(sync_files_status(false));
         };
+        if library_row.deleted_at.is_some() {
+            println!(
+                "Library {} is deleted, won't import assets into it",
+                job.library_id
+            );
+            return Ok(JobWorkerStatus::Failed);
+        }
 
         let mut created_ids = Vec::new();
         for path in &job.paths {
@@ -670,13 +677,6 @@ fn queue_sync_assets_status(library_found: bool) -> JobWorkerStatus {
     } else {
         JobWorkerStatus::Skipped
     }
-}
-
-fn is_hidden_path(path: &str) -> bool {
-    Path::new(path)
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .any(|part| part.starts_with('.'))
 }
 
 fn import_progress_suffix(progress_counter: Option<u64>, total_assets: Option<u64>) -> String {

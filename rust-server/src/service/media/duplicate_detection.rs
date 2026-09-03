@@ -18,6 +18,12 @@ pub enum DuplicateDetectionOutcome {
     Success,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateDetectionQueueAllOutcome {
+    Skipped,
+    Success,
+}
+
 #[derive(Clone)]
 pub struct DuplicateDetectionService {
     pool: PgPool,
@@ -29,12 +35,15 @@ impl DuplicateDetectionService {
         Self { pool, jobs }
     }
 
-    pub async fn queue_all(&self, force: bool) -> Result<(), String> {
+    pub async fn queue_all(
+        &self,
+        force: bool,
+    ) -> Result<DuplicateDetectionQueueAllOutcome, String> {
         let config = get_machine_learning_config(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         if !is_duplicate_detection_enabled(&config) {
-            return Ok(());
+            return Ok(DuplicateDetectionQueueAllOutcome::Skipped);
         }
 
         let asset_ids = ml_job::stream_for_duplicate_search(&self.pool, force)
@@ -50,7 +59,7 @@ impl DuplicateDetectionService {
             }
         }
 
-        Ok(())
+        Ok(DuplicateDetectionQueueAllOutcome::Success)
     }
 
     pub async fn detect_asset(&self, asset_id: &Uuid) -> Result<DuplicateDetectionOutcome, String> {
@@ -93,9 +102,7 @@ impl DuplicateDetectionService {
 
         let mut asset_ids = vec![*asset_id];
         if !duplicate_assets.is_empty() {
-            asset_ids = self
-                .update_duplicates(&asset, &duplicate_assets)
-                .await?;
+            asset_ids = self.update_duplicates(&asset, &duplicate_assets).await?;
         } else if asset.duplicate_id.is_some() {
             ml_job::clear_duplicate_id(&self.pool, asset_id)
                 .await
@@ -119,9 +126,13 @@ impl DuplicateDetectionService {
             .filter_map(|row| row.duplicate_id)
             .collect();
 
-        let target_duplicate_id = asset
-            .duplicate_id
-            .unwrap_or_else(|| duplicate_ids.iter().copied().next().unwrap_or_else(Uuid::new_v4));
+        let target_duplicate_id = asset.duplicate_id.unwrap_or_else(|| {
+            duplicate_ids
+                .iter()
+                .copied()
+                .next()
+                .unwrap_or_else(Uuid::new_v4)
+        });
 
         let source_ids: Vec<Uuid> = if asset.duplicate_id.is_some() {
             duplicate_ids.into_iter().collect()

@@ -4,15 +4,15 @@ use std::sync::Arc;
 use bullmq_rs::{RedisConnection, WorkerBuilder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::assets;
 use crate::models::db::integrity::{
-    self, AssetPathItemRow, IntegrityReportDeleteRow, IntegrityReportInsert,
-    CHECKSUM_CHECKPOINT_KEY, JOBS_INTEGRITY_BATCH_SIZE, REPORT_TYPE_CHECKSUM,
-    REPORT_TYPE_MISSING, REPORT_TYPE_UNTRACKED,
+    self, AssetPathItemRow, CHECKSUM_CHECKPOINT_KEY, IntegrityReportDeleteRow,
+    IntegrityReportInsert, JOBS_INTEGRITY_BATCH_SIZE, REPORT_TYPE_CHECKSUM, REPORT_TYPE_MISSING,
+    REPORT_TYPE_UNTRACKED,
 };
 use crate::models::db::system_metadata::{get_json, set_json};
 use crate::service::job::JobService;
@@ -108,21 +108,21 @@ struct DeleteReportsJob {
 
 impl IntegrityProcessor {
     pub fn new(pool: PgPool, storage: StoragePaths, jobs: JobService) -> Self {
-        Self { pool, storage, jobs }
+        Self {
+            pool,
+            storage,
+            jobs,
+        }
     }
 
     pub async fn process(&self, name: &str, data: &Value) -> Result<(), String> {
         match name {
-            "IntegrityUntrackedFilesQueueAll" => {
-                self.handle_untracked_files_queue_all(data).await
-            }
+            "IntegrityUntrackedFilesQueueAll" => self.handle_untracked_files_queue_all(data).await,
             "IntegrityUntrackedFiles" => self.handle_untracked_files(data).await,
             "IntegrityUntrackedFilesRefresh" | "IntegrityUntrackedRefresh" => {
                 self.handle_untracked_refresh(data).await
             }
-            "IntegrityMissingFilesQueueAll" => {
-                self.handle_missing_files_queue_all(data).await
-            }
+            "IntegrityMissingFilesQueueAll" => self.handle_missing_files_queue_all(data).await,
             "IntegrityMissingFiles" => self.handle_missing_files(data).await,
             "IntegrityMissingFilesRefresh" => self.handle_missing_refresh(data).await,
             "IntegrityChecksumFiles" => self.handle_checksum_files(data).await,
@@ -137,8 +137,9 @@ impl IntegrityProcessor {
     }
 
     async fn handle_untracked_files_queue_all(&self, data: &Value) -> Result<(), String> {
-        let job: IntegrityJob =
-            serde_json::from_value(data.clone()).unwrap_or(IntegrityJob { refresh_only: false });
+        let job: IntegrityJob = serde_json::from_value(data.clone()).unwrap_or(IntegrityJob {
+            refresh_only: false,
+        });
 
         self.queue_refresh_all_untracked_files().await?;
 
@@ -159,7 +160,13 @@ impl IntegrityProcessor {
         let asset_batches = tokio::task::spawn_blocking({
             let roots = asset_roots.clone();
             let extensions = extensions.clone();
-            move || walk_file_batches(&roots, Some(&extensions), JOBS_INTEGRITY_BATCH_SIZE as usize)
+            move || {
+                walk_file_batches(
+                    &roots,
+                    Some(&extensions),
+                    JOBS_INTEGRITY_BATCH_SIZE as usize,
+                )
+            }
         })
         .await
         .map_err(|err| err.to_string())?;
@@ -205,9 +212,12 @@ impl IntegrityProcessor {
 
         let mut untracked: HashSet<String> = job.paths.into_iter().collect();
         if job.batch_type == "asset" {
-            let rows = integrity::get_asset_paths_by_paths(&self.pool, &untracked.iter().cloned().collect::<Vec<_>>())
-                .await
-                .map_err(|err| err.to_string())?;
+            let rows = integrity::get_asset_paths_by_paths(
+                &self.pool,
+                &untracked.iter().cloned().collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(|err| err.to_string())?;
             for row in rows {
                 untracked.remove(&row.original_path);
                 if let Some(path) = row.encoded_video_path {
@@ -287,8 +297,9 @@ impl IntegrityProcessor {
     }
 
     async fn handle_missing_files_queue_all(&self, data: &Value) -> Result<(), String> {
-        let job: IntegrityJob =
-            serde_json::from_value(data.clone()).unwrap_or(IntegrityJob { refresh_only: false });
+        let job: IntegrityJob = serde_json::from_value(data.clone()).unwrap_or(IntegrityJob {
+            refresh_only: false,
+        });
 
         if job.refresh_only {
             self.queue_refresh_all_missing_files().await?;
@@ -299,13 +310,10 @@ impl IntegrityProcessor {
         let mut offset = 0i64;
         let mut total = 0i64;
         loop {
-            let rows = integrity::stream_asset_paths_page(
-                &self.pool,
-                offset,
-                JOBS_INTEGRITY_BATCH_SIZE,
-            )
-            .await
-            .map_err(|err| err.to_string())?;
+            let rows =
+                integrity::stream_asset_paths_page(&self.pool, offset, JOBS_INTEGRITY_BATCH_SIZE)
+                    .await
+                    .map_err(|err| err.to_string())?;
             if rows.is_empty() {
                 break;
             }
@@ -379,8 +387,9 @@ impl IntegrityProcessor {
     }
 
     async fn handle_checksum_files(&self, data: &Value) -> Result<(), String> {
-        let job: IntegrityJob =
-            serde_json::from_value(data.clone()).unwrap_or(IntegrityJob { refresh_only: false });
+        let job: IntegrityJob = serde_json::from_value(data.clone()).unwrap_or(IntegrityJob {
+            refresh_only: false,
+        });
 
         if job.refresh_only {
             self.queue_refresh_all_checksum_files().await?;
@@ -492,10 +501,7 @@ impl IntegrityProcessor {
         Ok(())
     }
 
-    async fn check_asset_checksum(
-        &self,
-        row: &integrity::AssetChecksumRow,
-    ) -> Result<(), String> {
+    async fn check_asset_checksum(&self, row: &integrity::AssetChecksumRow) -> Result<(), String> {
         match tokio::fs::read(&row.original_path).await {
             Ok(bytes) => {
                 let hash = sha1_bytes(&bytes);
@@ -527,10 +533,7 @@ impl IntegrityProcessor {
                 }
             }
             Err(err) => {
-                eprintln!(
-                    "integrity: failed to checksum {}: {err}",
-                    row.original_path
-                );
+                eprintln!("integrity: failed to checksum {}: {err}", row.original_path);
                 integrity::create_reports(
                     &self.pool,
                     &[IntegrityReportInsert {
@@ -665,7 +668,10 @@ impl IntegrityProcessor {
             .filter(|report| report.asset_id.is_none() && report.file_asset_id.is_none())
             .collect();
         if !path_reports.is_empty() {
-            let paths: Vec<String> = path_reports.iter().map(|report| report.path.clone()).collect();
+            let paths: Vec<String> = path_reports
+                .iter()
+                .map(|report| report.path.clone())
+                .collect();
             let tracked_rows = integrity::get_tracked_paths(&self.pool, &paths)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -796,9 +802,7 @@ fn rows_to_delete_items(rows: Vec<IntegrityReportDeleteRow>) -> Vec<DeleteReport
         .collect()
 }
 
-async fn load_checksum_checkpoint(
-    pool: &PgPool,
-) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+async fn load_checksum_checkpoint(pool: &PgPool) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
     let value = get_json(pool, CHECKSUM_CHECKPOINT_KEY).await?;
     Ok(value.and_then(|json| {
         json.get("date")
@@ -818,7 +822,13 @@ async fn save_checksum_checkpoint(
     set_json(pool, CHECKSUM_CHECKPOINT_KEY, &value).await
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, jobs: JobService, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    storage: StoragePaths,
+    jobs: JobService,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let processor = Arc::new(IntegrityProcessor::new(pool, storage, jobs));
         let worker = WorkerBuilder::new(QUEUE_INTEGRITY)
@@ -832,11 +842,11 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, jobs: JobSe
                 let processor = processor.clone();
                 async move {
                     let job_name = job.name.clone();
-                    crate::service::workers::wrap_simple_job(QUEUE_INTEGRITY, &job_name, || async {
+                    crate::service::workers::wrap_status_job(QUEUE_INTEGRITY, &job_name, || async {
                         processor
                             .process(&job_name, &job.data)
                             .await
-                            .map_err(|err| err.to_string())
+                            .map(|_| "success")
                     })
                     .await
                 }

@@ -60,6 +60,7 @@ impl MetadataExtractionProcessor {
                     .await?
                 {
                     MetadataExtractOutcome::Success => Ok(JobWorkerStatus::Success),
+                    MetadataExtractOutcome::NotFound => Ok(JobWorkerStatus::Success),
                     MetadataExtractOutcome::Failed => Ok(JobWorkerStatus::Failed),
                 }
             }
