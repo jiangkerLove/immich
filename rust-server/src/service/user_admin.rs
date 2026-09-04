@@ -5,7 +5,7 @@ use crate::ext::bcrypt::hash_bcrypt;
 use crate::models::db::assets::{self, AssetStatsRow};
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{map_user_admin, map_user_admin_with_license, UserDb};
+use crate::models::db::users::{UserDb, map_user_admin, map_user_admin_with_license};
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::user::UserPreferencesUpdateReq;
 use crate::models::response::asset::AssetStatsResponse;
@@ -133,13 +133,13 @@ impl UserAdminService {
             }
         }
 
-        let password_hash = hash_bcrypt(&dto.password)
-            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        let password_hash =
+            hash_bcrypt(&dto.password).map_err(|err| ErrorResp::ServerError(err.to_string()))?;
 
         let pin_hash = match &dto.pin_code {
-            Some(Some(pin)) => Some(
-                hash_bcrypt(pin).map_err(|err| ErrorResp::ServerError(err.to_string()))?,
-            ),
+            Some(Some(pin)) => {
+                Some(hash_bcrypt(pin).map_err(|err| ErrorResp::ServerError(err.to_string()))?)
+            }
             Some(None) => None,
             None => None,
         };
@@ -221,9 +221,7 @@ impl UserAdminService {
         }
 
         let password_hash = if let Some(password) = &dto.password {
-            Some(
-                hash_bcrypt(password).map_err(|err| ErrorResp::ServerError(err.to_string()))?,
-            )
+            Some(hash_bcrypt(password).map_err(|err| ErrorResp::ServerError(err.to_string()))?)
         } else {
             None
         };
@@ -252,9 +250,9 @@ impl UserAdminService {
             dto.email.as_deref(),
             password_hash.as_deref(),
             dto.name.as_deref(),
-            dto.avatar_color.as_ref().map(|value| {
-                value.as_ref().map(|s| s.as_str())
-            }),
+            dto.avatar_color
+                .as_ref()
+                .map(|value| value.as_ref().map(|s| s.as_str())),
             pin_code.as_ref().map(|value| value.as_deref()),
             storage_label,
             dto.quota_size_in_bytes,
@@ -283,9 +281,13 @@ impl UserAdminService {
             ));
         }
 
-        let user = UserDb::admin_delete(&self.pool, id, dto.force.unwrap_or(false)).await?;
-        self.websocket.emit_user_delete(*id);
+        let force = dto.force.unwrap_or(false);
+        let user = UserDb::admin_delete(&self.pool, id, force).await?;
+        // Match TS: soft-delete emits UserTrash (telemetry only); on_user_delete comes from UserDelete job.
         crate::utils::telemetry::add_users_total(-1);
+        if force {
+            self.jobs.queue_user_delete(id, true).await?;
+        }
         Ok(map_user_admin_with_license(&self.pool, user).await?)
     }
 

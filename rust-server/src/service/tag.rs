@@ -3,6 +3,8 @@ use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::models::db::assets;
+use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
@@ -10,7 +12,6 @@ use crate::service::album::{BulkIdErrorReason, BulkIdResponse, BulkIdsReq};
 use crate::service::db::DbService;
 use crate::service::job::JobService;
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct TagService {
@@ -92,7 +93,11 @@ impl TagService {
         self.get_owned(auth, id).await
     }
 
-    pub async fn create(&self, auth: &AuthDto, dto: &TagCreateReq) -> Result<TagResponse, ErrorResp> {
+    pub async fn create(
+        &self,
+        auth: &AuthDto,
+        dto: &TagCreateReq,
+    ) -> Result<TagResponse, ErrorResp> {
         require_permission(auth, Permission::TagCreate)?;
 
         let value = if let Some(parent_id) = dto.parent_id {
@@ -102,13 +107,12 @@ impl TagService {
             dto.name.clone()
         };
 
-        let duplicate: Option<Uuid> = sqlx::query_scalar(
-            r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#,
-        )
-        .bind(auth.user.id)
-        .bind(&value)
-        .fetch_optional(&self.db.pool)
-        .await?;
+        let duplicate: Option<Uuid> =
+            sqlx::query_scalar(r#"SELECT id FROM tag WHERE "userId" = $1 AND value = $2"#)
+                .bind(auth.user.id)
+                .bind(&value)
+                .fetch_optional(&self.db.pool)
+                .await?;
 
         if duplicate.is_some() {
             return Err(ErrorResp::BadRequest(
@@ -203,7 +207,10 @@ impl TagService {
                 } else {
                     part.to_string()
                 };
-                parent = Some(self.upsert_value(auth, &value, parent.as_ref().map(|p| p.id)).await?);
+                parent = Some(
+                    self.upsert_value(auth, &value, parent.as_ref().map(|p| p.id))
+                        .await?,
+                );
             }
             if let Some(tag) = parent {
                 results.push(tag);
@@ -264,7 +271,9 @@ impl TagService {
 
         let mut results = Vec::new();
         for asset_id in &dto.ids {
-            match require_assets_access(&self.db.pool, auth, &[*asset_id], Permission::AssetUpdate).await {
+            match require_assets_access(&self.db.pool, auth, &[*asset_id], Permission::AssetUpdate)
+                .await
+            {
                 Ok(()) => {
                     let _ = sqlx::query(
                         r#"INSERT INTO tag_asset ("tagId", "assetId") VALUES ($1, $2) ON CONFLICT DO NOTHING"#,
@@ -303,7 +312,9 @@ impl TagService {
 
         let mut results = Vec::new();
         for asset_id in &dto.ids {
-            match require_assets_access(&self.db.pool, auth, &[*asset_id], Permission::AssetUpdate).await {
+            match require_assets_access(&self.db.pool, auth, &[*asset_id], Permission::AssetUpdate)
+                .await
+            {
                 Ok(()) => {
                     let _ = sqlx::query(
                         r#"DELETE FROM tag_asset WHERE "tagId" = $1 AND "assetId" = $2"#,
@@ -386,6 +397,8 @@ impl TagService {
             .bind(asset_id)
             .execute(&self.db.pool)
             .await;
+        // Match TS TagService.updateTags → updateLockedColumns({ tags }) append.
+        let _ = assets::append_locked_properties(&self.db.pool, &[*asset_id], &["tags"]).await;
         Ok(())
     }
 

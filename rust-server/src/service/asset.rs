@@ -359,9 +359,9 @@ impl AssetService {
         assets::trash_assets(&self.pool, &dto.ids, force).await?;
 
         if force {
-            for id in &dto.ids {
-                self.websocket.emit_asset_delete(auth.user.id, *id);
-            }
+            // Match TS AssetDeleteAll → TrashService.onAssetsDelete → AssetEmptyTrash.
+            // on_asset_delete is emitted later by the AssetDelete job.
+            self.jobs.queue_asset_empty_trash().await?;
         } else {
             let ids: Vec<String> = dto.ids.iter().map(|id| id.to_string()).collect();
             self.websocket.emit_asset_trash(auth.user.id, ids);

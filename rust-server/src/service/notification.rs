@@ -4,28 +4,29 @@ use uuid::Uuid;
 
 use crate::models::db::album;
 use crate::models::db::assets;
-use crate::models::db::notification::{
-    create_notification, delete_notification, delete_notifications, filter_owned_ids, get_notification,
-    search_notifications, update_notification, update_notifications, NotificationSearchFilter,
-};
-use crate::models::db::user_metadata::UserMetadataPO;
-use crate::service::job::{JobService, SendMailAttachmentJob, SendMailJob};
-use crate::utils::file_response::file_extension;
-use crate::utils::preferences::resolve_preferences;
 use crate::models::db::auth_permission::Permission;
+use crate::models::db::notification::{
+    NotificationSearchFilter, create_notification, delete_notification, delete_notifications,
+    filter_owned_ids, get_notification, search_notifications, update_notification,
+    update_notifications,
+};
 use crate::models::db::system_metadata::get_json;
+use crate::models::db::user_metadata::UserMetadataPO;
 use crate::models::db::users::UserDb;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::notification::{
-    format_datetime, format_optional_datetime, NotificationResponse,
+    NotificationResponse, format_datetime, format_optional_datetime,
 };
 use crate::models::response::response::ErrorResp;
 use crate::service::email::{
     AlbumInviteEmailData, AlbumUpdateEmailData, EmailService, EmailTemplate, SmtpConfig,
     TestEmailData, WelcomeEmailData,
 };
-use crate::utils::permission::{require_admin, require_permission};
+use crate::service::job::{JobService, SendMailAttachmentJob, SendMailJob};
 use crate::service::websocket::WebSocketHub;
+use crate::utils::file_response::file_extension;
+use crate::utils::permission::{require_admin, require_permission};
+use crate::utils::preferences::resolve_preferences;
 
 #[derive(Clone)]
 pub struct NotificationService {
@@ -106,11 +107,7 @@ impl NotificationService {
         self.search_rows(auth, query).await
     }
 
-    pub async fn get(
-        &self,
-        auth: &AuthDto,
-        id: &Uuid,
-    ) -> Result<NotificationResponse, ErrorResp> {
+    pub async fn get(&self, auth: &AuthDto, id: &Uuid) -> Result<NotificationResponse, ErrorResp> {
         require_permission(auth, Permission::NotificationRead)?;
         let row = get_notification(&self.pool, &auth.user.id, id)
             .await?
@@ -125,7 +122,8 @@ impl NotificationService {
         dto: &NotificationUpdateReq,
     ) -> Result<NotificationResponse, ErrorResp> {
         require_permission(auth, Permission::NotificationUpdate)?;
-        self.ensure_owned(auth, &[*id]).await?;
+        self.ensure_owned(auth, &[*id], Permission::NotificationUpdate)
+            .await?;
         let row = update_notification(&self.pool, &auth.user.id, id, dto.read_at)
             .await?
             .ok_or_else(|| ErrorResp::BadRequest("Notification not found".to_string()))?;
@@ -138,14 +136,16 @@ impl NotificationService {
         dto: &NotificationUpdateAllReq,
     ) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::NotificationUpdate)?;
-        self.ensure_owned(auth, &dto.ids).await?;
+        self.ensure_owned(auth, &dto.ids, Permission::NotificationUpdate)
+            .await?;
         update_notifications(&self.pool, &auth.user.id, &dto.ids, dto.read_at).await?;
         Ok(())
     }
 
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::NotificationDelete)?;
-        self.ensure_owned(auth, &[*id]).await?;
+        self.ensure_owned(auth, &[*id], Permission::NotificationDelete)
+            .await?;
         if !delete_notification(&self.pool, &auth.user.id, id).await? {
             return Err(ErrorResp::BadRequest("Notification not found".to_string()));
         }
@@ -158,7 +158,8 @@ impl NotificationService {
         dto: &NotificationDeleteAllReq,
     ) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::NotificationDelete)?;
-        self.ensure_owned(auth, &dto.ids).await?;
+        self.ensure_owned(auth, &dto.ids, Permission::NotificationDelete)
+            .await?;
         delete_notifications(&self.pool, &auth.user.id, &dto.ids).await?;
         Ok(())
     }
@@ -248,14 +249,16 @@ impl NotificationService {
         let defaults = get_email_templates(&self.pool).await?;
 
         let html = match template {
-            EmailTemplate::Test => EmailService::render_test(
-                &TestEmailData {
-                    base_url: base_url.clone(),
-                    display_name: "John Doe".to_string(),
-                },
-                "",
-            )
-            .html,
+            EmailTemplate::Test => {
+                EmailService::render_test(
+                    &TestEmailData {
+                        base_url: base_url.clone(),
+                        display_name: "John Doe".to_string(),
+                    },
+                    "",
+                )
+                .html
+            }
             EmailTemplate::Welcome => {
                 let custom = if dto.template.is_empty() {
                     defaults.welcome_template
@@ -334,13 +337,21 @@ impl NotificationService {
         Ok(rows.into_iter().map(map_row).collect())
     }
 
-    async fn ensure_owned(&self, auth: &AuthDto, ids: &[Uuid]) -> Result<(), ErrorResp> {
+    async fn ensure_owned(
+        &self,
+        auth: &AuthDto,
+        ids: &[Uuid],
+        permission: Permission,
+    ) -> Result<(), ErrorResp> {
         if ids.is_empty() {
             return Ok(());
         }
         let owned = filter_owned_ids(&self.pool, &auth.user.id, ids).await?;
         if owned.len() != ids.len() {
-            return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+            return Err(ErrorResp::BadRequest(format!(
+                "Not found or no {} access",
+                permission.as_str()
+            )));
         }
         Ok(())
     }
@@ -550,7 +561,10 @@ impl NotificationJobProcessor {
         self.jobs
             .queue_send_mail(SendMailJob {
                 to: recipient.email,
-                subject: format!("You have been added to a shared album - {}", album.album_name),
+                subject: format!(
+                    "You have been added to a shared album - {}",
+                    album.album_name
+                ),
                 html: rendered.html,
                 text: rendered.text,
                 image_attachments: attachment.map(|item| vec![item]),
@@ -611,7 +625,10 @@ impl NotificationJobProcessor {
         Ok(NotificationJobResult::Success)
     }
 
-    async fn handle_send_mail(&self, job: &SendMailJob) -> Result<NotificationJobResult, ErrorResp> {
+    async fn handle_send_mail(
+        &self,
+        job: &SendMailJob,
+    ) -> Result<NotificationJobResult, ErrorResp> {
         let smtp = get_smtp_config(&self.pool).await?;
         if !smtp.enabled {
             return Ok(NotificationJobResult::Skipped);

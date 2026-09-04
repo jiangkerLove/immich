@@ -5,7 +5,7 @@
 > 集成主线：`dev-rust`（你说的 rust-dev）  
 > 上游同步：`main`
 
-最后更新：`cursor/search-noop-deploy-docs-4063`（sqlx + baseline_lock 对标/启动自检，2026-09）  
+最后更新：`cursor/parity-memory-admin-partner-4063`（logging / profile image / smoke script，2026-09）  
 Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ---
@@ -209,8 +209,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
-| 3 | **HLS 跨进程协调** | TS 用 Socket.IO server events；Rust 用进程内 `PendingEvents` | **单进程部署可用**（见 §6 B-4）。仅 API/worker **分进程**时需 Redis 协调 | `service/transcoding.rs`, `service/hls.rs` |
-| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust mainly ConfigUpdate + **AppRestart** Redis | ✅ CLI enable/disable 经 Redis `AppRestart` 通知进程退出；单进程 UI 路径亦发 Redis + 本地 exit。HLS 仍仅进程内 | `server_events.rs`, `admin.rs`, `bootstrap.rs` |
+| ~~3~~ | ~~**HLS 跨进程协调**~~ | ✅ Redis pub/sub 六路事件（对标 Socket.IO `serverSideEmit`）；单进程仍走本地 `PendingEvents` | `hls_events.rs`, `transcoding.rs`, `workers.rs` |
+| ~~4~~ | ~~**内部事件总线不完整**~~ | ✅ ConfigUpdate + AppRestart + **HLS** Redis；CLI/UI 维护模式经 AppRestart | `server_events.rs`, `hls_events.rs` |
 
 ### P2 — 工作流 / 插件细节
 
@@ -228,7 +228,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | ~~9~~ | ~~`search` 队列无 worker~~ | ✅ 已加 no-op worker（上游亦无 `@OnJob`，仅空 Worker） | `workers/search.rs` |
 | ~~10~~ | ~~数据库迁移依赖 Node~~ | ✅ 单一 sqlx `1_baseline`（融合当前全部 Kysely）+ `baseline_lock`；**锁定后再**用 `2+` 追上游 | `migrations/`, `database_migrations.rs` |
 | ~~11~~ | ~~Telemetry Io/Repo 指标~~ | ✅ `repo`：sqlx pool gauges；`io`：Redis PING + publish 命令计数/耗时 | `utils/telemetry.rs`, `repo_metrics.rs`, `io_metrics.rs` |
-| 12 | **结构化日志** | TS `LoggingRepository`；Rust 多为 `println!` | 全库 |
+| ~~12~~ | ~~结构化日志~~ | ✅ `tracing` + Immich level reload（`utils/logging.rs`）；bootstrap/server_events/hls_events 已切换 | `logging.rs`, `bootstrap.rs` |
 | 13 | **`immich-admin` CLI** | 只移植了常用子命令 | `service/admin.rs` |
 
 ### P4 — 需实测验证（代码已有，parity 未证明）
@@ -284,7 +284,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 1. ~~修复伙伴/共享链接的**单资产媒体访问**（P0-1）~~ ✅
 2. ~~补上 **`on_album_update`**（P0-2）~~ ✅
-3. 用真实数据跑一遍：上传 → 元数据 → 缩略图 → 搜索 → 同步
+3. 用真实数据跑一遍：上传 → 元数据 → 缩略图 → 搜索 → 同步  
+   - 脚本：`rust-server/scripts/smoke.ps1`（需 `IMMICH_URL` / `IMMICH_EMAIL` / `IMMICH_PASSWORD`）
 
 ### 阶段 B — 部署模型清晰化
 
@@ -293,7 +294,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
    - HLS 实时转码在同一进程的 `HlsEngine`（`PendingEvents`），**无需** Redis/Socket 跨进程协调  
    - 跨进程 `server_events`：`ConfigUpdate` + **`AppRestart`**（CLI/UI 维护模式切换）  
    - **维护模式**：启动读 `system_metadata.maintenance-mode`；UI/CLI 进入或退出后发 Redis `AppRestart` 并 `process::exit(0)`，由进程管理器重启进对应 worker  
-5. 若要 **API / worker 分离**：优先做 HLS Redis pub/sub 协调（P1-3）；在此之前不要拆进程跑视频流
+5. 若要 **API / worker 分离**：✅ HLS Redis pub/sub（P1-3）；用 `IMMICH_WORKERS_INCLUDE=api` + 另一进程 `INCLUDE=microservices`，共享 PG/Redis/存储
 
 ### 阶段 C — 工作流与插件
 
@@ -307,7 +308,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 9b. ~~Windows `fs_access` / 跨平台磁盘用量~~ ✅（`sysinfo`，不再依赖 `df`）  
 10. ~~Kysely 迁移纯 Rust 化（P3-10）~~ ✅ — 单一 `1_baseline.sql` + `baseline_lock`（当前含 ClusterGroups 等全部已入库 Kysely）；**baseline 锁定投入使用后**，合上游再开 `migrations/2+`  
 11. ~~补全 telemetry Io/Repo（P3-11）~~ ✅ — `repo` pool gauges + `io` Redis ping/publish  
-12. 结构化日志（P3-12）  
+12. ~~结构化日志（P3-12）~~ ✅ 基础已落地；其余 `println!` 可逐步替换  
 13. 定期 `main` → `dev-rust`：看 cargo warning / `immich-admin migration-status` 的 `kysely_ahead_of_lock`
 
 ---
@@ -322,6 +323,9 @@ git fetch origin main dev-rust
 cd rust-server && cargo +stable test --offline --lib
 
 # 发布前冒烟（按你的 compose 调整）
+# $env:IMMICH_URL="http://127.0.0.1:2283"
+# $env:IMMICH_EMAIL="..."; $env:IMMICH_PASSWORD="..."
+# .\rust-server\scripts\smoke.ps1
 # - 登录 / 上传 / 缩略图 / 搜索 / 外部库扫描 / 备份 / 完整性
 ```
 
@@ -365,11 +369,15 @@ cd rust-server && cargo +stable test --offline --lib
 | （续） | 将树内已有 Kysely（含 ClusterGroups）折回 **单一** `1_baseline`；去掉 `init.sql` / 误开的 `2_` |
 | （续） | CLI/UI 维护：`immich:server:AppRestart` Redis；JWT `/maintenance?token=` 登录 URL |
 | （续） | Telemetry `repo`/`io`：DB pool gauges + Redis ping/publish metrics |
+| （本切片） | MemoryGenerate 阻塞锁；force-delete→AssetEmptyTrash；duplicate 尊重 trash.enabled；相册共享链接 AlbumShare(editor)；notification 访问错误；admin 重置密码默认清 session；Windows 路径分隔符 |
+| （续） | EXIF/tags `lockedProperties` append；UserAdmin force→`UserDelete`（WS 改由 job）；ClusterGroupRequest 通知+WS；download `archiveName` Content-Disposition |
+| （P1） | HLS Redis 六路跨进程协调；`INCLUDE=api` 不再误开 microservices；单进程仍本地 PendingEvents |
+| （续） | 结构化日志 `tracing`；头像缩略图流水线 + FileDelete；`scripts/smoke.ps1` 冒烟 |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API/任务/迁移均在 Rust；默认单进程可用；schema 仅 sqlx `1_baseline`；CLI 维护 Redis AppRestart；telemetry 含 api/host/job/**repo/io**。  
-**还差：** 真实数据冒烟、分进程 HLS Redis、结构化日志、合上游后再开 `2+`。  
-**策略：** 按本文 §6 分阶段做小 PR；未准备好 HLS 跨进程前不要拆 API/worker。
+**现在：** API/任务/迁移均在 Rust；默认单进程可用；HLS 可分进程；结构化日志基础；头像缩略图；冒烟脚本已备。  
+**还差：** 对真实 compose 跑通 smoke；其余 `println!` 逐步替换；合上游后再开 `2+`。  
+**策略：** 按本文 §6 分阶段做小 PR；分进程时 `INCLUDE=api` + `INCLUDE=microservices` 并共享存储。

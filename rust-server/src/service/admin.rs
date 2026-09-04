@@ -20,8 +20,13 @@ pub async fn run(args: &[String]) {
             }
         }
         "reset-admin-password" => {
-            let password = args.get(1).map(String::as_str);
-            if let Err(err) = reset_admin_password(&settings, password).await {
+            let password = args
+                .iter()
+                .skip(1)
+                .find(|arg| !arg.starts_with('-'))
+                .map(String::as_str);
+            let keep_sessions = args.iter().any(|arg| arg == "--keep-sessions");
+            if let Err(err) = reset_admin_password(&settings, password, !keep_sessions).await {
                 eprintln!("{err}");
             }
         }
@@ -136,7 +141,10 @@ Usage: rust-server immich-admin <command> [args]
 Commands:
   version                   Print server version
   list-users                List users
-  reset-admin-password [pw] Reset admin password (generates one if omitted)
+  reset-admin-password [pw] [--keep-sessions]
+                            Reset admin password (generates one if omitted).
+                            Invalidates sessions by default (TS prompt default).
+                            Pass --keep-sessions to retain existing sessions.
   grant-admin <email>       Grant admin privileges
   revoke-admin <email>      Revoke admin privileges
   schema-check              Verify schema tables vs sqlx 1_baseline.sql
@@ -190,7 +198,11 @@ async fn list_users(settings: &EnvDto) -> Result<(), String> {
     Ok(())
 }
 
-async fn reset_admin_password(settings: &EnvDto, password: Option<&str>) -> Result<(), String> {
+async fn reset_admin_password(
+    settings: &EnvDto,
+    password: Option<&str>,
+    invalidate_sessions: bool,
+) -> Result<(), String> {
     let pool = connect_pool(settings).await?;
     let admin: Option<(Uuid, String)> = sqlx::query_as(
         r#"
@@ -221,6 +233,12 @@ async fn reset_admin_password(settings: &EnvDto, password: Option<&str>) -> Resu
         .execute(&pool)
         .await
         .map_err(|err| err.to_string())?;
+
+    if invalidate_sessions {
+        crate::models::db::sessions::SessionPO::invalidate_all_except(&pool, &admin_id, None)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
 
     if generated {
         println!("The admin password has been updated to:\n{password}");

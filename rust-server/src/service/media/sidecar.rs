@@ -182,12 +182,17 @@ fn sidecar_candidates(original_path: &str, existing_sidecar: Option<&str>) -> Ve
         path.parent(),
         path.file_stem().and_then(|value| value.to_str()),
     ) {
-        candidates.push(
-            parent
-                .join(format!("{stem}.xmp"))
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let joined = parent
+            .join(format!("{stem}.xmp"))
+            .to_string_lossy()
+            .into_owned();
+        // Keep forward-slash style when the original path uses `/` (Immich/DB paths).
+        let joined = if original_path.contains('/') {
+            joined.replace('\\', "/")
+        } else {
+            joined
+        };
+        candidates.push(joined);
     }
 
     candidates

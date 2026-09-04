@@ -16,7 +16,10 @@ pub struct ZipEntry {
     pub name: String,
 }
 
-pub async fn zip_response(entries: Vec<ZipEntry>) -> Result<Response<Body>, ErrorResp> {
+pub async fn zip_response(
+    entries: Vec<ZipEntry>,
+    archive_name: Option<&str>,
+) -> Result<Response<Body>, ErrorResp> {
     let temp = tokio::task::spawn_blocking(move || build_zip_file(entries))
         .await
         .map_err(|err| ErrorResp::ServerError(err.to_string()))??;
@@ -30,8 +33,17 @@ pub async fn zip_response(entries: Vec<ZipEntry>) -> Result<Response<Body>, Erro
         _temp: temp,
     });
 
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/zip")
+    let mut builder = Response::builder().header(header::CONTENT_TYPE, "application/zip");
+    if let Some(name) = archive_name.filter(|value| !value.is_empty()) {
+        // Match TS: attachment; filename*=UTF-8''{encodeURIComponent(archiveName)}.zip
+        let disposition = format!(
+            "attachment; filename*=UTF-8''{}.zip",
+            urlencoding::encode(name)
+        );
+        builder = builder.header(header::CONTENT_DISPOSITION, disposition);
+    }
+
+    builder
         .body(body)
         .map_err(|err| ErrorResp::ServerError(err.to_string()))
 }

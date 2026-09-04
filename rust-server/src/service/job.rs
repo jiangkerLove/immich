@@ -563,6 +563,15 @@ impl JobService {
             .await
     }
 
+    pub async fn queue_user_delete(&self, user_id: &Uuid, force: bool) -> Result<(), ErrorResp> {
+        self.queue_json_job(
+            QUEUE_BACKGROUND,
+            "UserDelete",
+            serde_json::json!({ "id": user_id, "force": force }),
+        )
+        .await
+    }
+
     pub async fn queue_notify_album_invite(
         &self,
         album_id: &Uuid,

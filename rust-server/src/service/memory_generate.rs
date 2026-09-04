@@ -11,17 +11,14 @@ const DAYS: i64 = 3;
 const MEMORY_TYPE_ON_THIS_DAY: &str = "on_this_day";
 
 pub async fn run_memory_generate(pool: &PgPool) -> Result<(), String> {
-    let ran = advisory_lock::run_with_try_lock(pool, LOCK_MEMORY_CREATION, || async {
-        generate_memories(pool).await
+    // Match TS MemoryService.onMemoriesCreate: block on DatabaseLock.MemoryCreation.
+    let result = advisory_lock::run_with_lock(pool, LOCK_MEMORY_CREATION, || async {
+        generate_memories(pool).await.map_err(|err| err.to_string())
     })
     .await
     .map_err(|err| err.to_string())?;
 
-    if ran.is_none() {
-        println!("MemoryGenerate: another instance holds the lock, skipping");
-    }
-
-    Ok(())
+    result
 }
 
 async fn generate_memories(pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -119,8 +116,7 @@ fn end_of_day(date: NaiveDate) -> chrono::DateTime<Utc> {
 }
 
 fn memory_at_for_year(target: NaiveDate, year: i32) -> chrono::DateTime<Utc> {
-    let date = NaiveDate::from_ymd_opt(year, target.month(), target.day())
-        .unwrap_or(target);
+    let date = NaiveDate::from_ymd_opt(year, target.month(), target.day()).unwrap_or(target);
     start_and_time(date)
 }
 

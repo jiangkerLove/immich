@@ -4,18 +4,24 @@ use uuid::Uuid;
 
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::cluster_group::{self, ClusterGroupRequestRow, ClusterGroupUserRow};
+use crate::models::db::notification::create_notification;
 use crate::models::db::person;
 use crate::models::db::users::UserDb;
 use crate::models::dto::auth::AuthDto;
+use crate::models::response::notification::{
+    NotificationResponse, format_datetime, format_optional_datetime,
+};
 use crate::models::response::response::ErrorResp;
 use crate::models::response::user::UserResponse;
 use crate::service::job::JobService;
+use crate::service::websocket::WebSocketHub;
 use crate::utils::permission::require_permission;
 
 #[derive(Clone)]
 pub struct ClusterGroupService {
     pool: PgPool,
     jobs: JobService,
+    websocket: WebSocketHub,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -40,8 +46,12 @@ pub struct ClusterGroupRequestCreateReq {
 }
 
 impl ClusterGroupService {
-    pub fn new(pool: PgPool, jobs: JobService) -> Self {
-        Self { pool, jobs }
+    pub fn new(pool: PgPool, jobs: JobService, websocket: WebSocketHub) -> Self {
+        Self {
+            pool,
+            jobs,
+            websocket,
+        }
     }
 
     pub async fn get_requests(
@@ -65,12 +75,12 @@ impl ClusterGroupService {
     ) -> Result<Vec<ClusterGroupRequestResponse>, ErrorResp> {
         require_permission(auth, Permission::ClusterGroupRequestRead)?;
         self.require_tables().await?;
-        self.require_cluster_group_read(auth, cluster_group_id).await?;
+        self.require_cluster_group_read(auth, cluster_group_id)
+            .await?;
 
-        let rows =
-            cluster_group::search_requests(&self.pool, None, Some(cluster_group_id))
-                .await
-                .map_err(ErrorResp::from)?;
+        let rows = cluster_group::search_requests(&self.pool, None, Some(cluster_group_id))
+            .await
+            .map_err(ErrorResp::from)?;
 
         Ok(rows.into_iter().map(map_request).collect())
     }
@@ -82,7 +92,8 @@ impl ClusterGroupService {
     ) -> Result<Vec<UserResponse>, ErrorResp> {
         require_permission(auth, Permission::ClusterGroupRead)?;
         self.require_tables().await?;
-        self.require_cluster_group_read(auth, cluster_group_id).await?;
+        self.require_cluster_group_read(auth, cluster_group_id)
+            .await?;
 
         let rows = cluster_group::get_users(&self.pool, cluster_group_id, &auth.user.id)
             .await
@@ -99,7 +110,8 @@ impl ClusterGroupService {
     ) -> Result<ClusterGroupRequestCreateResult, ErrorResp> {
         require_permission(auth, Permission::ClusterGroupRequestCreate)?;
         self.require_tables().await?;
-        self.require_cluster_group_owner(auth, cluster_group_id).await?;
+        self.require_cluster_group_owner(auth, cluster_group_id)
+            .await?;
 
         if user_id == &auth.user.id {
             return Err(ErrorResp::BadRequest(
@@ -117,6 +129,35 @@ impl ClusterGroupService {
         let result = cluster_group::create_request(&self.pool, cluster_group_id, user_id)
             .await
             .map_err(ErrorResp::from)?;
+
+        if result.is_inserted {
+            let description = format!("{} asked you to join their cluster group", auth.user.name);
+            let data = serde_json::json!({ "clusterGroupId": cluster_group_id });
+            if let Ok(row) = create_notification(
+                &self.pool,
+                user_id,
+                "info",
+                "ClusterGroupRequest",
+                "Cluster Group Request",
+                Some(&description),
+                Some(data),
+                None,
+            )
+            .await
+            {
+                let response = NotificationResponse {
+                    id: row.id,
+                    created_at: format_datetime(&row.created_at),
+                    level: row.level,
+                    notification_type: row.notification_type,
+                    title: row.title,
+                    description: row.description,
+                    data: row.data,
+                    read_at: format_optional_datetime(&row.read_at),
+                };
+                self.websocket.emit_notification(*user_id, response);
+            }
+        }
 
         Ok(ClusterGroupRequestCreateResult {
             duplicate: !result.is_inserted,
@@ -166,7 +207,8 @@ impl ClusterGroupService {
     ) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::ClusterGroupRead)?;
         self.require_tables().await?;
-        self.require_cluster_group_read(auth, cluster_group_id).await?;
+        self.require_cluster_group_read(auth, cluster_group_id)
+            .await?;
 
         self.jobs
             .queue_facial_recognition_queue_all(true, Some(*cluster_group_id))
@@ -178,7 +220,8 @@ impl ClusterGroupService {
     pub async fn leave(&self, auth: &AuthDto, cluster_group_id: &Uuid) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::ClusterGroupLeave)?;
         self.require_tables().await?;
-        self.require_cluster_group_owner(auth, cluster_group_id).await?;
+        self.require_cluster_group_owner(auth, cluster_group_id)
+            .await?;
 
         if !cluster_group::has_other_members(&self.pool, cluster_group_id, &auth.user.id)
             .await

@@ -56,7 +56,16 @@ fn list_contains(list: Option<&str>, worker: &str) -> bool {
 }
 
 /// Whether this process should run BullMQ workers (microservices layer).
+///
+/// Matches Immich worker include semantics:
+/// - unset include → run workers
+/// - `INCLUDE=microservices` (optionally with `api`) → run workers
+/// - `INCLUDE=api` alone → API-only process (no job workers / HLS encoder)
 pub fn should_run_microservices_workers(env: &EnvDto) -> bool {
+    if is_maintenance_worker(env) {
+        return false;
+    }
+
     if list_contains(env.immich_workers_exclude.as_deref(), "microservices") {
         return false;
     }
@@ -66,10 +75,36 @@ pub fn should_run_microservices_workers(env: &EnvDto) -> bool {
         if workers.is_empty() {
             return true;
         }
-        return workers.iter().any(|w| w == "microservices" || w == "api");
+        return workers.iter().any(|w| w == "microservices");
     }
 
     true
+}
+
+/// Whether this process serves the HTTP API (including HLS waiters).
+pub fn should_run_api(env: &EnvDto) -> bool {
+    if is_maintenance_worker(env) {
+        return false;
+    }
+
+    if list_contains(env.immich_workers_exclude.as_deref(), "api") {
+        return false;
+    }
+
+    if let Some(include) = env.immich_workers_include.as_deref() {
+        let workers = parse_worker_list(include);
+        if workers.is_empty() {
+            return true;
+        }
+        return workers.iter().any(|w| w == "api");
+    }
+
+    true
+}
+
+/// HLS ffmpeg / session ownership side (microservices process).
+pub fn should_run_hls_worker(env: &EnvDto) -> bool {
+    should_run_microservices_workers(env)
 }
 
 pub fn enabled_worker_queues(env: &EnvDto) -> Vec<&'static str> {
@@ -78,6 +113,7 @@ pub fn enabled_worker_queues(env: &EnvDto) -> Vec<&'static str> {
     }
 
     if !should_run_microservices_workers(env) {
+        // API-only still drains notification queue for websocket-adjacent mail jobs when needed.
         return vec![QUEUE_NOTIFICATIONS];
     }
 
@@ -87,4 +123,48 @@ pub fn enabled_worker_queues(env: &EnvDto) -> Vec<&'static str> {
 pub fn is_maintenance_worker(env: &EnvDto) -> bool {
     list_contains(env.immich_workers_include.as_deref(), "maintenance")
         && !list_contains(env.immich_workers_include.as_deref(), "api")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::dto::env::EnvDto;
+
+    fn env_with(include: Option<&str>, exclude: Option<&str>) -> EnvDto {
+        let mut env = EnvDto::default();
+        env.immich_workers_include = include.map(str::to_string);
+        env.immich_workers_exclude = exclude.map(str::to_string);
+        env
+    }
+
+    #[test]
+    fn default_runs_both_api_and_workers() {
+        let env = env_with(None, None);
+        assert!(should_run_api(&env));
+        assert!(should_run_microservices_workers(&env));
+        assert!(should_run_hls_worker(&env));
+    }
+
+    #[test]
+    fn include_api_only_disables_hls_worker() {
+        let env = env_with(Some("api"), None);
+        assert!(should_run_api(&env));
+        assert!(!should_run_microservices_workers(&env));
+        assert!(!should_run_hls_worker(&env));
+    }
+
+    #[test]
+    fn include_microservices_only_disables_api_role() {
+        let env = env_with(Some("microservices"), None);
+        assert!(!should_run_api(&env));
+        assert!(should_run_microservices_workers(&env));
+        assert!(should_run_hls_worker(&env));
+    }
+
+    #[test]
+    fn exclude_microservices_keeps_api() {
+        let env = env_with(None, Some("microservices"));
+        assert!(should_run_api(&env));
+        assert!(!should_run_hls_worker(&env));
+    }
 }

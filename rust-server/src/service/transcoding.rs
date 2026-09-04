@@ -6,37 +6,57 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use notify::{EventKind, RecursiveMode, Watcher};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::process::Command;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use crate::models::db::system_metadata::get_json;
 use crate::models::db::video_stream::{self, VideoStreamAssetRow};
 use crate::models::response::response::ErrorResp;
-use crate::service::media::hls_encode::{build_hls_ffmpeg_args, HlsFfmpegSettings};
+use crate::service::hls_events::{
+    self, HlsHeartbeatMsg, HlsSegmentRequestMsg, HlsSegmentResultMsg, HlsSessionEndMsg,
+    HlsSessionRequestMsg, HlsSessionResultMsg,
+};
+use crate::service::media::hls_encode::{HlsFfmpegSettings, build_hls_ffmpeg_args};
 use crate::utils::hls::{
-    supported_codecs_for_accel, HLS_BACKPRESSURE_PAUSE_SEGMENTS, HLS_BACKPRESSURE_RESUME_SEGMENTS,
-    HLS_CLEANUP_INTERVAL_MS, HLS_INACTIVITY_TIMEOUT_MS, HLS_LEASE_DURATION_MS,
-    HLS_SEGMENT_DURATION, HLS_VARIANTS, HLS_VERSION,
+    HLS_BACKPRESSURE_PAUSE_SEGMENTS, HLS_BACKPRESSURE_RESUME_SEGMENTS, HLS_CLEANUP_INTERVAL_MS,
+    HLS_INACTIVITY_TIMEOUT_MS, HLS_LEASE_DURATION_MS, HLS_SEGMENT_DURATION, HLS_VARIANTS,
+    HLS_VERSION, supported_codecs_for_accel,
 };
 use crate::utils::pending_events::PendingEvents;
 use crate::utils::storage::StoragePaths;
 use crate::utils::system_config::json_str;
 use crate::utils::video_interfaces::detect_video_interfaces;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy)]
+pub struct HlsRoles {
+    pub api: bool,
+    pub worker: bool,
+}
+
+impl HlsRoles {
+    pub fn combined(self) -> bool {
+        self.api && self.worker
+    }
+
+    pub fn none(self) -> bool {
+        !self.api && !self.worker
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HlsSessionResult {
     pub session_id: Uuid,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HlsSegmentResult {
     pub session_id: Uuid,
@@ -86,10 +106,17 @@ pub struct HlsEngine {
     segment_regex: Regex,
     segment_ready_tx: mpsc::UnboundedSender<SegmentReady>,
     self_arc: Weak<HlsEngine>,
+    redis_url: Option<String>,
+    roles: HlsRoles,
 }
 
 impl HlsEngine {
-    pub fn spawn(pool: PgPool, storage: StoragePaths) -> Arc<Self> {
+    pub fn spawn(
+        pool: PgPool,
+        storage: StoragePaths,
+        redis_url: Option<String>,
+        roles: HlsRoles,
+    ) -> Arc<Self> {
         let (segment_ready_tx, mut segment_ready_rx) = mpsc::unbounded_channel();
 
         let engine = Arc::new_cyclic(|weak| Self {
@@ -103,41 +130,54 @@ impl HlsEngine {
                 .expect("valid segment regex"),
             segment_ready_tx,
             self_arc: weak.clone(),
+            redis_url,
+            roles,
         });
 
-        let completion_engine = engine.clone();
-        tokio::spawn(async move {
-            while let Some(event) = segment_ready_rx.recv().await {
-                completion_engine
-                    .on_segment_ready(event.session_id, event.variant_index, event.segment_index)
-                    .await;
-            }
-        });
+        if roles.worker {
+            let completion_engine = engine.clone();
+            tokio::spawn(async move {
+                while let Some(event) = segment_ready_rx.recv().await {
+                    completion_engine
+                        .on_segment_ready(
+                            event.session_id,
+                            event.variant_index,
+                            event.segment_index,
+                        )
+                        .await;
+                }
+            });
 
-        let cleanup = engine.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_millis(HLS_CLEANUP_INTERVAL_MS));
-            loop {
-                ticker.tick().await;
-                cleanup.remove_inactive_sessions().await;
+            let cleanup = engine.clone();
+            tokio::spawn(async move {
+                let mut ticker =
+                    tokio::time::interval(Duration::from_millis(HLS_CLEANUP_INTERVAL_MS));
+                loop {
+                    ticker.tick().await;
+                    cleanup.remove_inactive_sessions().await;
+                }
+            });
+        }
+
+        if !roles.combined() && !roles.none() {
+            if let Some(url) = engine.redis_url.clone() {
+                spawn_hls_redis_listener(engine.clone(), url);
             }
-        });
+        }
 
         engine
     }
 
-    pub async fn request_session(
-        &self,
-        asset_id: Uuid,
-        owner_id: Uuid,
-    ) -> Result<Uuid, ErrorResp> {
+    fn uses_redis(&self) -> bool {
+        self.redis_url.is_some() && !self.roles.combined() && !self.roles.none()
+    }
+
+    pub async fn request_session(&self, asset_id: Uuid, owner_id: Uuid) -> Result<Uuid, ErrorResp> {
         let session_id = Uuid::new_v4();
         let wait = self.pending_sessions.wait(session_id.to_string());
-        self.handle_session_request(session_id, asset_id, owner_id)
+        self.emit_session_request(session_id, asset_id, owner_id)
             .await;
-        let result = wait
-            .await
-            .map_err(ErrorResp::ServerError)?;
+        let result = wait.await.map_err(ErrorResp::ServerError)?;
         if let Some(error) = result.error {
             return Err(ErrorResp::ServerError(error));
         }
@@ -146,29 +186,40 @@ impl HlsEngine {
     }
 
     pub async fn end_session(&self, session_id: Uuid) {
-        self.handle_session_end(session_id).await;
+        if self.roles.worker {
+            self.handle_session_end(session_id).await;
+            // Worker-only: notify remote API waiters.
+            if self.uses_redis() && !self.roles.api {
+                if let Some(url) = &self.redis_url {
+                    hls_events::publish_session_end(url, &HlsSessionEndMsg { session_id }).await;
+                }
+            }
+        } else if self.roles.api {
+            self.clear_api_waiters(session_id).await;
+            if let Some(url) = &self.redis_url {
+                hls_events::publish_session_end(url, &HlsSessionEndMsg { session_id }).await;
+            }
+        }
     }
 
-    pub async fn heartbeat(&self, session_id: Uuid, segment_index: Option<i32>) {
-        let mut sessions = self.transcode_sessions.lock().await;
-        let Some(session) = sessions.get_mut(&session_id) else {
-            return;
-        };
-
-        session.last_activity = Utc::now();
-
-        if let Some(segment_index) = segment_index {
-            session.last_client_requested_segment = Some(segment_index);
-            apply_backpressure(session);
-        }
-
-        let remaining = session.expires_at - Utc::now();
-        if remaining.num_milliseconds() < (HLS_LEASE_DURATION_MS / 2) as i64 {
-            session.expires_at =
-                Utc::now() + chrono::Duration::milliseconds(HLS_LEASE_DURATION_MS as i64);
-            let expires_at = session.expires_at;
-            drop(sessions);
-            let _ = video_stream::extend_session(&self.pool, &session_id, expires_at).await;
+    pub async fn heartbeat(
+        &self,
+        session_id: Uuid,
+        segment_index: Option<i32>,
+        variant_index: Option<u32>,
+    ) {
+        if self.roles.worker {
+            self.handle_heartbeat(session_id, segment_index).await;
+        } else if let Some(url) = &self.redis_url {
+            hls_events::publish_heartbeat(
+                url,
+                &HlsHeartbeatMsg {
+                    session_id,
+                    variant_index,
+                    segment_index,
+                },
+            )
+            .await;
         }
     }
 
@@ -177,33 +228,45 @@ impl HlsEngine {
         session_id: Uuid,
         variant_index: u32,
         segment_index: i32,
-        _asset_id: Uuid,
+        asset_id: Uuid,
     ) -> Result<(), ErrorResp> {
-        let owner_id = self
-            .transcode_sessions
-            .lock()
-            .await
-            .get(&session_id)
-            .map(|session| session.owner_id);
-        let Some(owner_id) = owner_id else {
-            return Err(ErrorResp::NotFound("HLS session not found".to_string()));
-        };
+        if self.roles.worker {
+            let owner_id = self
+                .transcode_sessions
+                .lock()
+                .await
+                .get(&session_id)
+                .map(|session| session.owner_id);
+            let Some(owner_id) = owner_id else {
+                return Err(ErrorResp::NotFound("HLS session not found".to_string()));
+            };
 
-        if segment_file_exists(
-            &self.storage,
-            owner_id,
-            session_id,
-            variant_index,
-            segment_index,
-        )
-        .await
-        {
-            return Ok(());
+            if segment_file_exists(
+                &self.storage,
+                owner_id,
+                session_id,
+                variant_index,
+                segment_index,
+            )
+            .await
+            {
+                return Ok(());
+            }
+
+            self.ensure_transcode(session_id, variant_index, segment_index)
+                .await;
+
+            return self
+                .pending_segments
+                .wait(segment_key(session_id, variant_index, segment_index))
+                .await
+                .map(|_| ())
+                .map_err(ErrorResp::ServerError);
         }
 
-        self.ensure_transcode(session_id, variant_index, segment_index)
+        // API-only: request segment from remote worker.
+        self.emit_segment_request(session_id, asset_id, variant_index, segment_index)
             .await;
-
         self.pending_segments
             .wait(segment_key(session_id, variant_index, segment_index))
             .await
@@ -211,15 +274,21 @@ impl HlsEngine {
             .map_err(ErrorResp::ServerError)
     }
 
-    pub async fn track_api_session(&self, session_id: Uuid, variant_index: Option<u32>) -> ApiSession {
+    pub async fn track_api_session(
+        &self,
+        session_id: Uuid,
+        variant_index: Option<u32>,
+    ) -> ApiSession {
         let mut sessions = self.api_sessions.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            if session.last_variant_index.is_some()
-                && session.last_variant_index != variant_index
-            {
+            if session.last_variant_index.is_some() && session.last_variant_index != variant_index {
                 self.pending_segments
                     .reject_by_prefix(
-                        &format!("{}:{}:", session_id, session.last_variant_index.unwrap_or(0)),
+                        &format!(
+                            "{}:{}:",
+                            session_id,
+                            session.last_variant_index.unwrap_or(0)
+                        ),
                         "Variant changed",
                     )
                     .await;
@@ -255,41 +324,58 @@ impl HlsEngine {
 
     pub async fn prewarm_variant(
         &self,
-        _asset_id: Uuid,
+        asset_id: Uuid,
         session_id: Uuid,
         variant_index: u32,
         hinted_segment: Option<i32>,
     ) {
-        let (owner_id, session) = {
-            let api_sessions = self.api_sessions.lock().await;
-            let transcode_sessions = self.transcode_sessions.lock().await;
-            let Some(api_session) = api_sessions.get(&session_id).cloned() else {
-                return;
+        if self.roles.worker {
+            let (owner_id, session) = {
+                let api_sessions = self.api_sessions.lock().await;
+                let transcode_sessions = self.transcode_sessions.lock().await;
+                let Some(api_session) = api_sessions.get(&session_id).cloned() else {
+                    return;
+                };
+                let Some(transcode_session) = transcode_sessions.get(&session_id) else {
+                    return;
+                };
+                (transcode_session.owner_id, api_session)
             };
-            let Some(transcode_session) = transcode_sessions.get(&session_id) else {
-                return;
-            };
-            (transcode_session.owner_id, api_session)
-        };
 
-        if session.last_variant_index == Some(variant_index) {
+            if session.last_variant_index == Some(variant_index) {
+                return;
+            }
+
+            let next_segment = session.last_requested_segment.map(|value| value + 1);
+            if let Some(segment_index) = hinted_segment.or(next_segment) {
+                if segment_file_exists(
+                    &self.storage,
+                    owner_id,
+                    session_id,
+                    variant_index,
+                    segment_index,
+                )
+                .await
+                {
+                    return;
+                }
+                self.ensure_transcode(session_id, variant_index, segment_index)
+                    .await;
+            }
             return;
         }
 
+        // API-only: fire-and-forget segment request (TS prewarmVariant).
+        let api_session = self.api_sessions.lock().await.get(&session_id).cloned();
+        let Some(session) = api_session else {
+            return;
+        };
+        if session.last_variant_index == Some(variant_index) {
+            return;
+        }
         let next_segment = session.last_requested_segment.map(|value| value + 1);
         if let Some(segment_index) = hinted_segment.or(next_segment) {
-            if segment_file_exists(
-                &self.storage,
-                owner_id,
-                session_id,
-                variant_index,
-                segment_index,
-            )
-            .await
-            {
-                return;
-            }
-            self.ensure_transcode(session_id, variant_index, segment_index)
+            self.emit_segment_request(session_id, asset_id, variant_index, segment_index)
                 .await;
         }
     }
@@ -392,6 +478,126 @@ impl HlsEngine {
         }
     }
 
+    async fn emit_session_request(&self, session_id: Uuid, asset_id: Uuid, owner_id: Uuid) {
+        if self.roles.worker {
+            self.handle_session_request(session_id, asset_id, owner_id)
+                .await;
+        } else if let Some(url) = &self.redis_url {
+            hls_events::publish_session_request(
+                url,
+                &HlsSessionRequestMsg {
+                    session_id,
+                    asset_id,
+                    owner_id,
+                },
+            )
+            .await;
+        }
+    }
+
+    async fn emit_segment_request(
+        &self,
+        session_id: Uuid,
+        asset_id: Uuid,
+        variant_index: u32,
+        segment_index: i32,
+    ) {
+        if self.roles.worker {
+            self.ensure_transcode(session_id, variant_index, segment_index)
+                .await;
+        } else if let Some(url) = &self.redis_url {
+            hls_events::publish_segment_request(
+                url,
+                &HlsSegmentRequestMsg {
+                    session_id,
+                    asset_id,
+                    variant_index,
+                    segment_index,
+                },
+            )
+            .await;
+        }
+    }
+
+    async fn deliver_session_result(&self, result: HlsSessionResult) {
+        if self.roles.api {
+            self.pending_sessions
+                .complete(&result.session_id.to_string(), result.clone())
+                .await;
+        }
+        if self.uses_redis() && self.roles.worker && !self.roles.api {
+            if let Some(url) = &self.redis_url {
+                hls_events::publish_session_result(
+                    url,
+                    &HlsSessionResultMsg {
+                        session_id: result.session_id,
+                        error: result.error,
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn deliver_segment_result(&self, result: HlsSegmentResult) {
+        if self.roles.api {
+            self.pending_segments
+                .complete(
+                    &segment_key(
+                        result.session_id,
+                        result.variant_index,
+                        result.segment_index,
+                    ),
+                    result.clone(),
+                )
+                .await;
+        }
+        if self.uses_redis() && self.roles.worker && !self.roles.api {
+            if let Some(url) = &self.redis_url {
+                hls_events::publish_segment_result(
+                    url,
+                    &HlsSegmentResultMsg {
+                        session_id: result.session_id,
+                        variant_index: result.variant_index,
+                        segment_index: result.segment_index,
+                        error: None,
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn clear_api_waiters(&self, session_id: Uuid) {
+        self.api_sessions.lock().await.remove(&session_id);
+        self.pending_segments
+            .reject_by_prefix(&format!("{session_id}:"), "Session ended")
+            .await;
+    }
+
+    async fn handle_heartbeat(&self, session_id: Uuid, segment_index: Option<i32>) {
+        let mut sessions = self.transcode_sessions.lock().await;
+        let Some(session) = sessions.get_mut(&session_id) else {
+            return;
+        };
+
+        session.last_activity = Utc::now();
+
+        if let Some(segment_index) = segment_index {
+            session.last_client_requested_segment = Some(segment_index);
+            apply_backpressure(session);
+        }
+
+        let remaining = session.expires_at - Utc::now();
+        if remaining.num_milliseconds() < (HLS_LEASE_DURATION_MS / 2) as i64 {
+            session.expires_at =
+                Utc::now() + chrono::Duration::milliseconds(HLS_LEASE_DURATION_MS as i64);
+            let expires_at = session.expires_at;
+            drop(sessions);
+            let _ = video_stream::extend_session(&self.pool, &session_id, expires_at).await;
+        }
+    }
+
     async fn handle_session_request(&self, session_id: Uuid, asset_id: Uuid, owner_id: Uuid) {
         let expires_at = Utc::now() + chrono::Duration::milliseconds(HLS_LEASE_DURATION_MS as i64);
         match video_stream::create_session(&self.pool, &session_id, &asset_id, expires_at).await {
@@ -412,37 +618,26 @@ impl HlsEngine {
                         process: None,
                     },
                 );
-                self.pending_sessions
-                    .complete(
-                        &session_id.to_string(),
-                        HlsSessionResult {
-                            session_id,
-                            error: None,
-                        },
-                    )
-                    .await;
+                self.deliver_session_result(HlsSessionResult {
+                    session_id,
+                    error: None,
+                })
+                .await;
             }
             Err(err) if is_unique_violation(&err) => {}
             Err(err) => {
                 eprintln!("Failed to create HLS session {session_id}: {err}");
-                self.pending_sessions
-                    .complete(
-                        &session_id.to_string(),
-                        HlsSessionResult {
-                            session_id,
-                            error: Some("Failed to create HLS session".to_string()),
-                        },
-                    )
-                    .await;
+                self.deliver_session_result(HlsSessionResult {
+                    session_id,
+                    error: Some("Failed to create HLS session".to_string()),
+                })
+                .await;
             }
         }
     }
 
     async fn handle_session_end(&self, session_id: Uuid) {
-        self.api_sessions.lock().await.remove(&session_id);
-        self.pending_segments
-            .reject_by_prefix(&format!("{session_id}:"), "Session ended")
-            .await;
+        self.clear_api_waiters(session_id).await;
 
         self.stop_transcode(session_id).await;
 
@@ -458,12 +653,59 @@ impl HlsEngine {
         let _ = video_stream::delete_session(&self.pool, &session_id).await;
     }
 
-    async fn ensure_transcode(
-        &self,
-        session_id: Uuid,
-        variant_index: u32,
-        segment_index: i32,
-    ) {
+    async fn on_remote_session_result(&self, msg: HlsSessionResultMsg) {
+        if !self.roles.api {
+            return;
+        }
+        self.pending_sessions
+            .complete(
+                &msg.session_id.to_string(),
+                HlsSessionResult {
+                    session_id: msg.session_id,
+                    error: msg.error.clone(),
+                },
+            )
+            .await;
+        if msg.error.is_some() {
+            self.clear_api_waiters(msg.session_id).await;
+        }
+    }
+
+    async fn on_remote_segment_result(&self, msg: HlsSegmentResultMsg) {
+        if !self.roles.api {
+            return;
+        }
+        if let Some(error) = msg.error {
+            self.pending_segments
+                .reject(
+                    &segment_key(msg.session_id, msg.variant_index, msg.segment_index),
+                    &error,
+                )
+                .await;
+            return;
+        }
+        self.pending_segments
+            .complete(
+                &segment_key(msg.session_id, msg.variant_index, msg.segment_index),
+                HlsSegmentResult {
+                    session_id: msg.session_id,
+                    variant_index: msg.variant_index,
+                    segment_index: msg.segment_index,
+                },
+            )
+            .await;
+    }
+
+    async fn on_remote_session_end(&self, session_id: Uuid) {
+        if self.roles.api && !self.roles.worker {
+            self.clear_api_waiters(session_id).await;
+        }
+        if self.roles.worker {
+            self.handle_session_end(session_id).await;
+        }
+    }
+
+    async fn ensure_transcode(&self, session_id: Uuid, variant_index: u32, segment_index: i32) {
         let (needs_stop, should_start) = {
             let mut sessions = self.transcode_sessions.lock().await;
             let Some(session) = sessions.get_mut(&session_id) else {
@@ -557,8 +799,8 @@ impl HlsEngine {
             .await
             .map_err(|err| err.to_string())?;
 
-        let fps =
-            (asset.packet_count as f64 * asset.time_base as f64) / asset.total_duration.max(1) as f64;
+        let fps = (asset.packet_count as f64 * asset.time_base as f64)
+            / asset.total_duration.max(1) as f64;
         let gop = (HLS_SEGMENT_DURATION * fps).ceil() as i32;
         let seek_seconds = if start_segment > 0 {
             (start_segment as f64 * gop as f64 - 0.5) / fps.max(0.001)
@@ -614,7 +856,9 @@ impl HlsEngine {
             .spawn()
             .map_err(|err| err.to_string())?;
 
-        let pid = child.id().ok_or_else(|| "ffmpeg process has no pid".to_string())?;
+        let pid = child
+            .id()
+            .ok_or_else(|| "ffmpeg process has no pid".to_string())?;
 
         let watcher_dir = variant_dir.clone();
         let watcher_handle = tokio::spawn(async move {
@@ -684,12 +928,7 @@ impl HlsEngine {
         Ok(())
     }
 
-    async fn on_segment_ready(
-        &self,
-        session_id: Uuid,
-        variant_index: u32,
-        segment_index: i32,
-    ) {
+    async fn on_segment_ready(&self, session_id: Uuid, variant_index: u32, segment_index: i32) {
         let expected = {
             let mut sessions = self.transcode_sessions.lock().await;
             let Some(session) = sessions.get_mut(&session_id) else {
@@ -714,16 +953,12 @@ impl HlsEngine {
         };
 
         let _ = expected;
-        self.pending_segments
-            .complete(
-                &segment_key(session_id, variant_index, segment_index),
-                HlsSegmentResult {
-                    session_id,
-                    variant_index,
-                    segment_index,
-                },
-            )
-            .await;
+        self.deliver_segment_result(HlsSegmentResult {
+            session_id,
+            variant_index,
+            segment_index,
+        })
+        .await;
     }
 
     async fn on_process_exit(
@@ -794,16 +1029,17 @@ impl HlsEngine {
     }
 
     async fn fail_session(&self, session_id: Uuid, error: String) {
-        self.pending_sessions
-            .complete(
-                &session_id.to_string(),
-                HlsSessionResult {
-                    session_id,
-                    error: Some(error),
-                },
-            )
-            .await;
+        self.deliver_session_result(HlsSessionResult {
+            session_id,
+            error: Some(error),
+        })
+        .await;
         self.handle_session_end(session_id).await;
+        if self.uses_redis() && self.roles.worker && !self.roles.api {
+            if let Some(url) = &self.redis_url {
+                hls_events::publish_session_end(url, &HlsSessionEndMsg { session_id }).await;
+            }
+        }
     }
 
     async fn remove_inactive_sessions(&self) {
@@ -819,6 +1055,11 @@ impl HlsEngine {
 
         for session_id in inactive {
             self.handle_session_end(session_id).await;
+            if self.uses_redis() && !self.roles.api {
+                if let Some(url) = &self.redis_url {
+                    hls_events::publish_session_end(url, &HlsSessionEndMsg { session_id }).await;
+                }
+            }
         }
     }
 }
@@ -953,4 +1194,99 @@ fn is_unique_violation(err: &sqlx::Error) -> bool {
         err,
         sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")
     )
+}
+
+fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
+    let roles = engine.roles;
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+
+        let client = match redis::Client::open(redis_url.as_str()) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("hls events: redis connect failed: {err}");
+                return;
+            }
+        };
+
+        let mut pubsub = match client.get_async_pubsub().await {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("hls events: pubsub connect failed: {err}");
+                return;
+            }
+        };
+
+        for channel in hls_events::HLS_CHANNELS {
+            if let Err(err) = pubsub.subscribe(*channel).await {
+                eprintln!("hls events: subscribe {channel} failed: {err}");
+                return;
+            }
+        }
+
+        println!(
+            "hls events: listening (api={}, worker={})",
+            roles.api, roles.worker
+        );
+
+        let mut stream = pubsub.into_on_message();
+        while let Some(msg) = stream.next().await {
+            let channel: String = match msg.get_channel() {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("hls events: channel error: {err}");
+                    continue;
+                }
+            };
+            let payload: String = match msg.get_payload() {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("hls events: payload error: {err}");
+                    continue;
+                }
+            };
+
+            match channel.as_str() {
+                hls_events::HLS_SESSION_REQUEST if roles.worker => {
+                    if let Ok(req) = serde_json::from_str::<HlsSessionRequestMsg>(&payload) {
+                        engine
+                            .handle_session_request(req.session_id, req.asset_id, req.owner_id)
+                            .await;
+                    }
+                }
+                hls_events::HLS_SEGMENT_REQUEST if roles.worker => {
+                    if let Ok(req) = serde_json::from_str::<HlsSegmentRequestMsg>(&payload) {
+                        engine
+                            .ensure_transcode(req.session_id, req.variant_index, req.segment_index)
+                            .await;
+                    }
+                }
+                hls_events::HLS_HEARTBEAT if roles.worker => {
+                    if let Ok(req) = serde_json::from_str::<HlsHeartbeatMsg>(&payload) {
+                        engine
+                            .handle_heartbeat(req.session_id, req.segment_index)
+                            .await;
+                    }
+                }
+                hls_events::HLS_SESSION_RESULT if roles.api => {
+                    if let Ok(result) = serde_json::from_str::<HlsSessionResultMsg>(&payload) {
+                        engine.on_remote_session_result(result).await;
+                    }
+                }
+                hls_events::HLS_SEGMENT_RESULT if roles.api => {
+                    if let Ok(result) = serde_json::from_str::<HlsSegmentResultMsg>(&payload) {
+                        engine.on_remote_segment_result(result).await;
+                    }
+                }
+                hls_events::HLS_SESSION_END => {
+                    if let Ok(msg) = serde_json::from_str::<HlsSessionEndMsg>(&payload) {
+                        engine.on_remote_session_end(msg.session_id).await;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        eprintln!("hls events: listener ended");
+    });
 }

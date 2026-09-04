@@ -77,6 +77,8 @@ tower-http = { version = "0.6", features = ["fs"] }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 sysinfo = "0.33"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [build-dependencies]
 serde_json = "1.0"

@@ -11,8 +11,9 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::asset::map_assets;
 use crate::models::response::response::ErrorResp;
 use crate::models::response::shared_link::{
-    encode_key, map_shared_link, SharedLinkAlbumResponse, SharedLinkResponse,
+    SharedLinkAlbumResponse, SharedLinkResponse, encode_key, map_shared_link,
 };
+use crate::service::access::require_album_access;
 use crate::service::album::AlbumService;
 use crate::utils::crypto::{random_bytes, shared_link_login_token};
 use crate::utils::permission::require_permission;
@@ -50,13 +51,25 @@ pub struct SharedLinkCreateReq {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedLinkEditReq {
-    #[serde(default, deserialize_with = "crate::utils::serde::deserialize_patch_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
     pub description: Option<Option<String>>,
-    #[serde(default, deserialize_with = "crate::utils::serde::deserialize_patch_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
     pub password: Option<Option<String>>,
-    #[serde(default, deserialize_with = "crate::utils::serde::deserialize_patch_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
     pub slug: Option<Option<String>>,
-    #[serde(default, deserialize_with = "crate::utils::serde::deserialize_patch_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::utils::serde::deserialize_patch_option"
+    )]
     pub expires_at: Option<Option<DateTime<Utc>>>,
     pub allow_upload: Option<bool>,
     pub allow_download: Option<bool>,
@@ -129,9 +142,7 @@ impl SharedLinkService {
 
         let link_id = Uuid::parse_str(&shared_link.id)
             .map_err(|_| ErrorResp::ServerError("Invalid shared link".to_string()))?;
-        let row = self
-            .find_or_fail(&auth.user.id, &link_id)
-            .await?;
+        let row = self.find_or_fail(&auth.user.id, &link_id).await?;
 
         self.build_response(&row, auth, !row.show_exif, None).await
     }
@@ -148,21 +159,20 @@ impl SharedLinkService {
 
         let link_id = Uuid::parse_str(&shared_link.id)
             .map_err(|_| ErrorResp::ServerError("Invalid shared link".to_string()))?;
-        let row = self
-            .find_or_fail(&auth.user.id, &link_id)
-            .await?;
+        let row = self.find_or_fail(&auth.user.id, &link_id).await?;
 
-        let password = row
-            .password
-            .as_deref()
-            .ok_or_else(|| ErrorResp::BadRequest("Shared link is not password protected".to_string()))?;
+        let password = row.password.as_deref().ok_or_else(|| {
+            ErrorResp::BadRequest("Shared link is not password protected".to_string())
+        })?;
 
         if password != dto.password {
             return Err(ErrorResp::Unauthorized("Invalid password".to_string()));
         }
 
         let token = shared_link_login_token(&row.id, password);
-        let response = self.build_response(&row, auth, !row.show_exif, None).await?;
+        let response = self
+            .build_response(&row, auth, !row.show_exif, None)
+            .await?;
         Ok((response, token))
     }
 
@@ -181,12 +191,8 @@ impl SharedLinkService {
                 if dto.asset_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
                     return Err(ErrorResp::BadRequest("Invalid assetIds".to_string()));
                 }
-                require_permission(auth, Permission::AlbumShare)?;
-                if !shared_links::user_owns_album(&self.pool, &auth.user.id, &album_id).await? {
-                    return Err(ErrorResp::BadRequest(
-                        "Not found or no album.share access".to_string(),
-                    ));
-                }
+                // Match TS Permission.AlbumShare: album owner or editor.
+                require_album_access(&self.pool, auth, &album_id, Permission::AlbumShare).await?;
             }
             "INDIVIDUAL" => {
                 let asset_ids = dto
@@ -197,7 +203,9 @@ impl SharedLinkService {
                 self.require_asset_share(auth, asset_ids).await?;
             }
             _ => {
-                return Err(ErrorResp::BadRequest("Invalid shared link type".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "Invalid shared link type".to_string(),
+                ));
             }
         }
 
@@ -245,10 +253,7 @@ impl SharedLinkService {
             &auth.user.id,
             id,
             UpdateSharedLink {
-                description: dto
-                    .description
-                    .as_ref()
-                    .map(|value| value.as_deref()),
+                description: dto.description.as_ref().map(|value| value.as_deref()),
                 password: dto.password.as_ref().map(|value| value.as_deref()),
                 slug: dto.slug.as_ref().map(|value| value.as_deref()),
                 expires_at: dto.expires_at,
@@ -281,7 +286,9 @@ impl SharedLinkService {
         let row = self.find_or_fail(&auth.user.id, id).await?;
 
         if row.link_type != "INDIVIDUAL" {
-            return Err(ErrorResp::BadRequest("Invalid shared link type".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "Invalid shared link type".to_string(),
+            ));
         }
 
         let existing = shared_links::list_asset_ids(&self.pool, &row.id, None).await?;
@@ -341,7 +348,9 @@ impl SharedLinkService {
         let row = self.find_or_fail(&auth.user.id, id).await?;
 
         if row.link_type != "INDIVIDUAL" {
-            return Err(ErrorResp::BadRequest("Invalid shared link type".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "Invalid shared link type".to_string(),
+            ));
         }
 
         let removed = shared_links::remove_assets(&self.pool, &row.id, &dto.asset_ids).await?;
@@ -463,9 +472,9 @@ impl SharedLinkService {
 
         Ok(Some(OpenGraphTags {
             title: album_name.unwrap_or_else(|| "Public Share".to_string()),
-            description: row.description.unwrap_or_else(|| {
-                format!("{asset_count} shared photos & videos")
-            }),
+            description: row
+                .description
+                .unwrap_or_else(|| format!("{asset_count} shared photos & videos")),
             image_url: Some(image_url),
         }))
     }
@@ -501,10 +510,7 @@ impl SharedLinkService {
         auth: &AuthDto,
         album_id: &Uuid,
     ) -> Result<SharedLinkAlbumResponse, ErrorResp> {
-        let album = self
-            .albums
-            .map_for_viewer(&auth.user.id, album_id)
-            .await?;
+        let album = self.albums.map_for_viewer(&auth.user.id, album_id).await?;
 
         Ok(SharedLinkAlbumResponse {
             album,
@@ -513,7 +519,11 @@ impl SharedLinkService {
         })
     }
 
-    async fn require_asset_share(&self, auth: &AuthDto, asset_ids: &[Uuid]) -> Result<(), ErrorResp> {
+    async fn require_asset_share(
+        &self,
+        auth: &AuthDto,
+        asset_ids: &[Uuid],
+    ) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::AssetShare)?;
         let allowed = assets::filter_asset_share_ids(&self.pool, &auth.user.id, asset_ids).await?;
         if allowed.len() != asset_ids.len() {
@@ -546,7 +556,10 @@ pub fn merge_shared_link_tokens(existing: &[String], token: &str) -> String {
 
 fn map_shared_link_error(err: sqlx::Error) -> ErrorResp {
     if let sqlx::Error::Database(db_err) = &err {
-        if db_err.constraint().is_some_and(|c| c.contains("shared_link_slug")) {
+        if db_err
+            .constraint()
+            .is_some_and(|c| c.contains("shared_link_slug"))
+        {
             return ErrorResp::BadRequest("Failed to save shared link".to_string());
         }
     }

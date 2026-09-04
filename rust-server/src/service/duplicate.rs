@@ -5,10 +5,10 @@ use uuid::Uuid;
 
 use crate::models::db::album;
 use crate::models::db::assets::{self, ExifUpdateFields};
-use crate::models::db::duplicate;
 use crate::models::db::auth_permission::Permission;
+use crate::models::db::duplicate;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_assets, AssetResponse};
+use crate::models::response::asset::{AssetResponse, map_assets};
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::service::album::{BulkIdErrorReason, BulkIdResponse, BulkIdsReq};
@@ -16,6 +16,7 @@ use crate::service::job::JobService;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::duplicate::suggest_duplicate_keep_asset_ids;
 use crate::utils::permission::require_permission;
+use crate::utils::system_config::get_merged;
 
 #[derive(Clone)]
 pub struct DuplicateService {
@@ -85,7 +86,9 @@ impl DuplicateService {
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::DuplicateDelete)?;
         if !duplicate::duplicate_group_exists(&self.pool, id).await? {
-            return Err(ErrorResp::BadRequest("Duplicate group not found".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "Duplicate group not found".to_string(),
+            ));
         }
         duplicate::clear_duplicate_group(&self.pool, &auth.user.id, id).await?;
         Ok(())
@@ -118,18 +121,17 @@ impl DuplicateService {
     ) -> BulkIdResponse {
         let duplicate_id = group.duplicate_id;
 
-        let asset_ids = match duplicate::list_asset_ids_by_duplicate_id(&self.pool, &duplicate_id)
-            .await
-        {
-            Ok(ids) if !ids.is_empty() => ids,
-            _ => {
-                return BulkIdResponse {
-                    id: duplicate_id,
-                    success: false,
-                    error: Some(BulkIdErrorReason::NotFound),
-                };
-            }
-        };
+        let asset_ids =
+            match duplicate::list_asset_ids_by_duplicate_id(&self.pool, &duplicate_id).await {
+                Ok(ids) if !ids.is_empty() => ids,
+                _ => {
+                    return BulkIdResponse {
+                        id: duplicate_id,
+                        success: false,
+                        error: Some(BulkIdErrorReason::NotFound),
+                    };
+                }
+            };
 
         let group_asset_ids: HashSet<Uuid> = asset_ids.iter().copied().collect();
         let ids_to_keep: Vec<Uuid> = group
@@ -214,7 +216,8 @@ impl DuplicateService {
                     || merge.exif.rating.is_some()
                     || merge.exif.latitude.is_some();
                 if has_exif {
-                    let _ = assets::update_all_exif_fields(&self.pool, &ids_to_keep, &merge.exif).await;
+                    let _ =
+                        assets::update_all_exif_fields(&self.pool, &ids_to_keep, &merge.exif).await;
                 }
 
                 if has_exif || !merge.tag_ids.is_empty() {
@@ -231,28 +234,36 @@ impl DuplicateService {
                 .await;
             }
         } else if !ids_to_keep.is_empty() {
-            let _ = assets::update_all_asset_fields(
-                &self.pool,
-                &ids_to_keep,
-                None,
-                None,
-                Some(None),
-            )
-            .await;
+            let _ =
+                assets::update_all_asset_fields(&self.pool, &ids_to_keep, None, None, Some(None))
+                    .await;
         }
 
         if !ids_to_trash.is_empty() {
-            let _ = assets::update_all_asset_fields(
-                &self.pool,
-                &ids_to_trash,
-                None,
-                None,
-                Some(None),
-            )
-            .await;
-            let _ = assets::trash_assets(&self.pool, &ids_to_trash, false).await;
-            let ids: Vec<String> = ids_to_trash.iter().map(|id| id.to_string()).collect();
-            self.websocket.emit_asset_trash(auth.user.id, ids);
+            let _ =
+                assets::update_all_asset_fields(&self.pool, &ids_to_trash, None, None, Some(None))
+                    .await;
+
+            // Match TS DuplicateService.resolveGroup: force when trash is disabled.
+            let trash_enabled = get_merged(&self.pool)
+                .await
+                .ok()
+                .and_then(|config| {
+                    config
+                        .get("trash")
+                        .and_then(|value| value.get("enabled"))
+                        .and_then(|value| value.as_bool())
+                })
+                .unwrap_or(true);
+            let is_force = !trash_enabled;
+
+            let _ = assets::trash_assets(&self.pool, &ids_to_trash, is_force).await;
+            if is_force {
+                let _ = self.jobs.queue_asset_empty_trash().await;
+            } else {
+                let ids: Vec<String> = ids_to_trash.iter().map(|id| id.to_string()).collect();
+                self.websocket.emit_asset_trash(auth.user.id, ids);
+            }
         }
 
         BulkIdResponse {
@@ -402,11 +413,9 @@ async fn update_exif_tags(pool: &PgPool, asset_ids: &[Uuid], tag_values: &[Strin
     if asset_ids.is_empty() {
         return;
     }
-    let _ = sqlx::query(
-        r#"UPDATE asset_exif SET tags = $1 WHERE "assetId" = ANY($2)"#,
-    )
-    .bind(tag_values)
-    .bind(asset_ids)
-    .execute(pool)
-    .await;
+    let _ = sqlx::query(r#"UPDATE asset_exif SET tags = $1 WHERE "assetId" = ANY($2)"#)
+        .bind(tag_values)
+        .bind(asset_ids)
+        .execute(pool)
+        .await;
 }

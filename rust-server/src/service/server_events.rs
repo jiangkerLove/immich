@@ -43,7 +43,7 @@ pub fn spawn_listener(pool: PgPool, redis_url: String) {
         let client = match redis::Client::open(redis_url.as_str()) {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("server events: redis connect failed: {err}");
+                tracing::error!("server events: redis connect failed: {err}");
                 return;
             }
         };
@@ -51,35 +51,35 @@ pub fn spawn_listener(pool: PgPool, redis_url: String) {
         let mut pubsub = match client.get_async_pubsub().await {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("server events: pubsub connect failed: {err}");
+                tracing::error!("server events: pubsub connect failed: {err}");
                 return;
             }
         };
 
         if let Err(err) = pubsub.subscribe(CONFIG_UPDATE_CHANNEL).await {
-            eprintln!("server events: subscribe ConfigUpdate failed: {err}");
+            tracing::error!("server events: subscribe ConfigUpdate failed: {err}");
             return;
         }
         if let Err(err) = pubsub.subscribe(APP_RESTART_CHANNEL).await {
-            eprintln!("server events: subscribe AppRestart failed: {err}");
+            tracing::error!("server events: subscribe AppRestart failed: {err}");
             return;
         }
 
-        println!("server events: listening for ConfigUpdate + AppRestart");
+        tracing::info!("server events: listening for ConfigUpdate + AppRestart");
 
         let mut stream = pubsub.into_on_message();
         while let Some(msg) = stream.next().await {
             let channel: String = match msg.get_channel() {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!("server events: channel error: {err}");
+                    tracing::warn!("server events: channel error: {err}");
                     continue;
                 }
             };
             let payload: String = match msg.get_payload() {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!("server events: payload error: {err}");
+                    tracing::warn!("server events: payload error: {err}");
                     continue;
                 }
             };
@@ -92,12 +92,12 @@ pub fn spawn_listener(pool: PgPool, redis_url: String) {
                     handle_app_restart(&self_id, &payload);
                 }
                 other => {
-                    eprintln!("server events: unexpected channel {other}");
+                    tracing::warn!("server events: unexpected channel {other}");
                 }
             }
         }
 
-        eprintln!("server events: listener ended");
+        tracing::warn!("server events: listener ended");
     });
 }
 
@@ -105,7 +105,7 @@ async fn handle_config_update(pool: &PgPool, self_id: &str, payload: &str) {
     let message: ConfigUpdateMessage = match serde_json::from_str(payload) {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("server events: ConfigUpdate parse error: {err}");
+            tracing::error!("server events: ConfigUpdate parse error: {err}");
             return;
         }
     };
@@ -114,7 +114,7 @@ async fn handle_config_update(pool: &PgPool, self_id: &str, payload: &str) {
         return;
     }
 
-    println!("server events: received ConfigUpdate from peer");
+    tracing::info!("server events: received ConfigUpdate from peer");
     crate::service::config_bootstrap::on_config_update(pool, message.old_config.as_ref()).await;
 }
 
@@ -122,7 +122,7 @@ fn handle_app_restart(self_id: &str, payload: &str) {
     let message: AppRestartMessage = match serde_json::from_str(payload) {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("server events: AppRestart parse error: {err}");
+            tracing::error!("server events: AppRestart parse error: {err}");
             return;
         }
     };
@@ -131,7 +131,7 @@ fn handle_app_restart(self_id: &str, payload: &str) {
         return;
     }
 
-    println!(
+    tracing::info!(
         "server events: received AppRestart (isMaintenanceMode={}); exiting",
         message.is_maintenance_mode
     );
@@ -149,7 +149,7 @@ pub async fn publish_config_update(redis_url: &str, old_config: Option<Value>) {
     };
 
     if let Err(err) = publish_json(redis_url, CONFIG_UPDATE_CHANNEL, &message).await {
-        eprintln!("server events: ConfigUpdate publish failed: {err}");
+        tracing::error!("server events: ConfigUpdate publish failed: {err}");
     }
 }
 

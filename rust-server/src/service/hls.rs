@@ -29,24 +29,22 @@ impl HlsService {
         }
     }
 
-    pub async fn get_main_playlist(&self, auth: &AuthDto, asset_id: Uuid) -> Result<String, ErrorResp> {
+    pub async fn get_main_playlist(
+        &self,
+        auth: &AuthDto,
+        asset_id: Uuid,
+    ) -> Result<String, ErrorResp> {
         require_asset_access(&self.pool, auth, &asset_id, Permission::AssetView).await?;
         self.ensure_realtime_enabled().await?;
 
-        let Some(asset) = video_stream::get_for_main_playlist(&self.pool, &asset_id).await?
-        else {
+        let Some(asset) = video_stream::get_for_main_playlist(&self.pool, &asset_id).await? else {
             return Err(ErrorResp::NotFound(
                 "Asset metadata is not yet ready for streaming".to_string(),
             ));
         };
 
-        let session_id = self
-            .engine
-            .request_session(asset_id, auth.user.id)
-            .await?;
-        self.engine
-            .generate_main_playlist(session_id, &asset)
-            .await
+        let session_id = self.engine.request_session(asset_id, auth.user.id).await?;
+        self.engine.generate_main_playlist(session_id, &asset).await
     }
 
     pub async fn get_media_playlist(
@@ -59,16 +57,15 @@ impl HlsService {
     ) -> Result<String, ErrorResp> {
         require_asset_access(&self.pool, auth, &asset_id, Permission::AssetView).await?;
 
-        let Some(asset) = video_stream::get_for_media_playlist(&self.pool, &asset_id, &session_id)
-            .await?
+        let Some(asset) =
+            video_stream::get_for_media_playlist(&self.pool, &asset_id, &session_id).await?
         else {
             return Err(ErrorResp::NotFound(
                 "Asset not found or metadata not yet ready for streaming".to_string(),
             ));
         };
 
-        let hinted_segment =
-            position.map(|value| HlsEngine::position_to_segment(&asset, value));
+        let hinted_segment = position.map(|value| HlsEngine::position_to_segment(&asset, value));
         self.engine
             .prewarm_variant(asset_id, session_id, variant_index, hinted_segment)
             .await;
@@ -95,14 +92,12 @@ impl HlsService {
             .engine
             .track_api_session(session_id, Some(variant_index))
             .await;
-        let segment_index = self.engine.segment_index_from_filename(
-            &mut api_session,
-            filename,
-            init_segment,
-        );
+        let segment_index =
+            self.engine
+                .segment_index_from_filename(&mut api_session, filename, init_segment);
 
         self.engine
-            .heartbeat(session_id, Some(segment_index))
+            .heartbeat(session_id, Some(segment_index), Some(variant_index))
             .await;
 
         let path = self

@@ -4,11 +4,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::album;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::partner::{self, PartnerDirection, PartnerRow};
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct PartnerService {
@@ -56,9 +56,8 @@ impl PartnerService {
         query: &PartnerSearchQuery,
     ) -> Result<Vec<PartnerResponse>, ErrorResp> {
         require_permission(auth, Permission::PartnerRead)?;
-        let direction = PartnerDirection::parse(&query.direction).ok_or_else(|| {
-            ErrorResp::BadRequest("Invalid partner direction".to_string())
-        })?;
+        let direction = PartnerDirection::parse(&query.direction)
+            .ok_or_else(|| ErrorResp::BadRequest("Invalid partner direction".to_string()))?;
 
         let rows = partner::get_all(&self.pool, &auth.user.id).await?;
         Ok(rows
@@ -79,11 +78,13 @@ impl PartnerService {
         require_permission(auth, Permission::PartnerCreate)?;
 
         if dto.shared_with_id == auth.user.id {
-            return Err(ErrorResp::BadRequest("Cannot share with yourself".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "Cannot share with yourself".to_string(),
+            ));
         }
 
         if !album::user_exists(&self.pool, &dto.shared_with_id).await? {
-            return Err(ErrorResp::BadRequest("User not found".to_string()));
+            return Err(ErrorResp::BadRequest("Invalid user".to_string()));
         }
 
         if partner::get(&self.pool, &auth.user.id, &dto.shared_with_id)
@@ -102,8 +103,13 @@ impl PartnerService {
         auth: &AuthDto,
         shared_with_id: &Uuid,
     ) -> Result<PartnerResponse, ErrorResp> {
-        self.create(auth, &PartnerCreateReq { shared_with_id: *shared_with_id })
-            .await
+        self.create(
+            auth,
+            &PartnerCreateReq {
+                shared_with_id: *shared_with_id,
+            },
+        )
+        .await
     }
 
     pub async fn update(
@@ -120,13 +126,9 @@ impl PartnerService {
             ));
         }
 
-        let row = partner::update_in_timeline(
-            &self.pool,
-            shared_by_id,
-            &auth.user.id,
-            dto.in_timeline,
-        )
-        .await?;
+        let row =
+            partner::update_in_timeline(&self.pool, shared_by_id, &auth.user.id, dto.in_timeline)
+                .await?;
         Ok(map_partner(row))
     }
 

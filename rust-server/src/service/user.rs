@@ -1,25 +1,26 @@
-use std::path::Path;
-
 use uuid::Uuid;
 
+use crate::ext::bcrypt::hash_bcrypt;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{map_user, map_user_admin, map_user_admin_with_license, UserDb};
+use crate::models::db::users::{UserDb, map_user, map_user_admin, map_user_admin_with_license};
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::user::{UpdateUserMeReq, UserPreferencesUpdateReq};
 use crate::models::response::response::ErrorResp;
 use crate::models::response::user::{UserAdminResponse, UserResponse};
 use crate::service::db::DbService;
-use crate::ext::bcrypt::hash_bcrypt;
+use crate::service::job::JobService;
+use crate::utils::file_response::{FileResponse, file_response, guess_mime};
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 use crate::utils::preferences::{merge_preferences, resolve_preferences};
-use crate::utils::file_response::{file_response, guess_mime, FileResponse};
+use crate::utils::profile_image;
 use crate::utils::storage::StoragePaths;
 
 #[derive(Clone)]
 pub struct UserService {
     db: DbService,
     storage: StoragePaths,
+    jobs: JobService,
 }
 
 #[derive(serde::Serialize)]
@@ -31,10 +32,11 @@ pub struct CreateProfileImageResponse {
 }
 
 impl UserService {
-    pub fn new(pool: sqlx::PgPool, storage: StoragePaths) -> Self {
+    pub fn new(pool: sqlx::PgPool, storage: StoragePaths, jobs: JobService) -> Self {
         Self {
             db: DbService::new(pool),
             storage,
+            jobs,
         }
     }
 
@@ -46,10 +48,7 @@ impl UserService {
         Ok(map_user_admin_with_license(&self.db.pool, user).await?)
     }
 
-    pub async fn get_me_preferences(
-        &self,
-        auth: &AuthDto,
-    ) -> Result<serde_json::Value, ErrorResp> {
+    pub async fn get_me_preferences(&self, auth: &AuthDto) -> Result<serde_json::Value, ErrorResp> {
         require_permission(auth, Permission::UserPreferenceRead)?;
         let stored = UserMetadataPO::get_preferences_json(&self.db.pool, &auth.user.id).await?;
         Ok(resolve_preferences(stored))
@@ -71,17 +70,15 @@ impl UserService {
         }
 
         let password_hash = if let Some(password) = &dto.password {
-            Some(
-                hash_bcrypt(password)
-                    .map_err(|err| ErrorResp::ServerError(err.to_string()))?,
-            )
+            Some(hash_bcrypt(password).map_err(|err| ErrorResp::ServerError(err.to_string()))?)
         } else {
             None
         };
 
-        let avatar_color = dto.avatar_color.as_ref().map(|value| {
-            value.as_ref().map(|color| color.as_str())
-        });
+        let avatar_color = dto
+            .avatar_color
+            .as_ref()
+            .map(|value| value.as_ref().map(|color| color.as_str()));
 
         let user = UserDb::update_me(
             &self.db.pool,
@@ -125,12 +122,8 @@ impl UserService {
         query: &crate::utils::calendar_heatmap::CalendarHeatmapQuery,
     ) -> Result<crate::utils::calendar_heatmap::CalendarHeatmapResponse, ErrorResp> {
         require_permission(auth, Permission::UserRead)?;
-        crate::utils::calendar_heatmap::build_calendar_heatmap(
-            &self.db.pool,
-            &auth.user.id,
-            query,
-        )
-        .await
+        crate::utils::calendar_heatmap::build_calendar_heatmap(&self.db.pool, &auth.user.id, query)
+            .await
     }
 
     pub async fn search(&self, auth: &AuthDto) -> Result<Vec<UserAdminResponse>, ErrorResp> {
@@ -154,7 +147,10 @@ impl UserService {
         .fetch_all(&self.db.pool)
         .await?;
 
-        Ok(users.into_iter().map(|user| map_user_admin(user, None)).collect())
+        Ok(users
+            .into_iter()
+            .map(|user| map_user_admin(user, None))
+            .collect())
     }
 
     pub async fn get_my_onboarding(
@@ -236,7 +232,7 @@ impl UserService {
         &self,
         auth: &AuthDto,
         file_bytes: Vec<u8>,
-        original_name: &str,
+        _original_name: &str,
     ) -> Result<CreateProfileImageResponse, ErrorResp> {
         require_permission(auth, Permission::UserProfileImageUpdate)?;
 
@@ -245,29 +241,21 @@ impl UserService {
             .ok_or_else(|| ErrorResp::BadRequest("User not found".to_string()))?;
         let old_path = current.profile_image_path.clone();
 
-        let file_id = uuid::Uuid::new_v4().to_string();
-        let extension = Path::new(original_name)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("jpg");
-        let profile_path = self
-            .storage
-            .profile_image_path(&auth.user.id, &file_id, extension);
-        if let Some(parent) = profile_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
-        }
-        tokio::fs::write(&profile_path, file_bytes)
-            .await
-            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        let profile_path = profile_image::generate_profile_image(
+            &self.db.pool,
+            &self.storage,
+            &auth.user.id,
+            &file_bytes,
+        )
+        .await
+        .map_err(|_| ErrorResp::BadRequest("Unable to process profile image".to_string()))?;
 
         let profile_path_str = profile_path.to_string_lossy().to_string();
-        let user = UserDb::update_profile_image(&self.db.pool, &auth.user.id, &profile_path_str)
-            .await?;
+        let user =
+            UserDb::update_profile_image(&self.db.pool, &auth.user.id, &profile_path_str).await?;
 
         if !old_path.is_empty() {
-            let _ = tokio::fs::remove_file(old_path).await;
+            self.jobs.queue_file_delete(&[old_path]).await?;
         }
 
         Ok(CreateProfileImageResponse {
@@ -291,7 +279,7 @@ impl UserService {
 
         let old_path = current.profile_image_path.clone();
         UserDb::clear_profile_image(&self.db.pool, &auth.user.id).await?;
-        let _ = tokio::fs::remove_file(old_path).await;
+        self.jobs.queue_file_delete(&[old_path]).await?;
         Ok(())
     }
 

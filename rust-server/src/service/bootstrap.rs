@@ -1,17 +1,17 @@
-use axum::middleware;
 use axum::Router;
+use axum::middleware;
 use config::{Case, Config};
 use sqlx::postgres::PgPoolOptions;
 
 use crate::app_state::AppState;
 use crate::middleware::{cors, telemetry, user_agent};
 use crate::models::dto::env::EnvDto;
-use crate::routes::{maintenance_worker, public_router, protected_router, static_web};
+use crate::routes::{maintenance_worker, protected_router, public_router, static_web};
 use crate::service::lifecycle;
-use crate::utils::telemetry as telemetry_util;
-use crate::utils::workers;
 use crate::utils::host_metrics;
 use crate::utils::storage::StoragePaths;
+use crate::utils::telemetry as telemetry_util;
+use crate::utils::workers;
 
 pub enum ServerMode {
     Api,
@@ -29,6 +29,7 @@ pub fn load_env() -> EnvDto {
 }
 
 pub async fn run(mode: ServerMode) {
+    crate::utils::logging::init();
     let settings = load_env();
     let telemetry = telemetry_util::init(&settings);
     if telemetry_util::metrics_enabled() {

@@ -12,7 +12,7 @@ use crate::models::response::response::ErrorResp;
 use crate::service::access::{require_album_access, require_assets_access};
 use crate::utils::permission::require_permission;
 use crate::utils::preferences::resolve_preferences;
-use crate::utils::zip_archive::{archive_entry_name, zip_response, ZipEntry};
+use crate::utils::zip_archive::{ZipEntry, archive_entry_name, zip_response};
 
 const DEFAULT_ARCHIVE_SIZE: i64 = 4 * 1024 * 1024 * 1024;
 
@@ -35,6 +35,7 @@ pub struct DownloadInfoReq {
 pub struct DownloadArchiveReq {
     pub asset_ids: Vec<Uuid>,
     pub edited: Option<bool>,
+    pub archive_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,12 +90,19 @@ impl DownloadService {
             if let Some(motion_id) = asset.live_photo_video_id {
                 motion_ids.insert(motion_id);
             }
-            push_asset(&mut archives, &mut archive, asset.id, asset.size.unwrap_or(0), target_size);
+            push_asset(
+                &mut archives,
+                &mut archive,
+                asset.id,
+                asset.size.unwrap_or(0),
+                target_size,
+            );
         }
 
         if !motion_ids.is_empty() {
             let motion_ids: Vec<Uuid> = motion_ids.into_iter().collect();
-            let motion_assets = download::download_motion_asset_ids(&self.pool, &motion_ids).await?;
+            let motion_assets =
+                download::download_motion_asset_ids(&self.pool, &motion_ids).await?;
             for motion in motion_assets {
                 if is_android_motion_path(&motion.original_path)
                     && !preferences.include_embedded_videos
@@ -155,7 +163,7 @@ impl DownloadService {
             });
         }
 
-        zip_response(entries).await
+        zip_response(entries, dto.archive_name.as_deref()).await
     }
 
     async fn load_download_preferences(&self, user_id: &Uuid) -> Result<DownloadPO, ErrorResp> {

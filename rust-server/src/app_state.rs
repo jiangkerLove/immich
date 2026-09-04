@@ -104,7 +104,7 @@ impl Services {
         let albums = AlbumService::new(pool.clone(), jobs.clone(), websocket.clone());
         Self {
             auth: AuthService::with_websocket(pool.clone(), websocket.clone()),
-            user: UserService::new(pool.clone(), storage.clone()),
+            user: UserService::new(pool.clone(), storage.clone(), jobs.clone()),
             server: ServerService::new(
                 pool.clone(),
                 ServerBuildConfig::from_env(env),
@@ -137,7 +137,7 @@ impl Services {
             partner: PartnerService::new(pool.clone()),
             stack: StackService::new(pool.clone(), websocket.clone()),
             person: PersonService::new(pool.clone(), jobs.clone()),
-            cluster_group: ClusterGroupService::new(pool.clone(), jobs.clone()),
+            cluster_group: ClusterGroupService::new(pool.clone(), jobs.clone(), websocket.clone()),
             activity: ActivityService::new(pool.clone()),
             map: MapService::new(pool.clone()),
             download: DownloadService::new(pool.clone()),
@@ -266,8 +266,21 @@ impl AppState {
             crate::service::version_scheduler::spawn(sql_pool.clone(), jobs.clone());
         }
 
-        let hls_engine =
-            crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
+        let hls_roles = crate::service::transcoding::HlsRoles {
+            api: crate::utils::workers::should_run_api(&settings),
+            worker: crate::utils::workers::should_run_hls_worker(&settings),
+        };
+        let hls_redis = if hls_roles.combined() || hls_roles.none() {
+            None
+        } else {
+            Some(redis_url.clone())
+        };
+        let hls_engine = crate::service::transcoding::HlsEngine::spawn(
+            sql_pool.clone(),
+            storage.clone(),
+            hls_redis,
+            hls_roles,
+        );
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
         crate::service::config_bootstrap::run(&sql_pool, &settings, &jobs).await;
 
@@ -355,8 +368,15 @@ impl AppState {
         // Maintenance worker must hear CLI disable → AppRestart.
         crate::service::server_events::spawn_listener(sql_pool.clone(), redis_url.clone());
 
-        let hls_engine =
-            crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());
+        let hls_engine = crate::service::transcoding::HlsEngine::spawn(
+            sql_pool.clone(),
+            storage.clone(),
+            None,
+            crate::service::transcoding::HlsRoles {
+                api: false,
+                worker: false,
+            },
+        );
         crate::service::lifecycle::register_hls_engine(hls_engine.clone());
 
         let maintenance_worker = MaintenanceWorkerRuntime::spawn(

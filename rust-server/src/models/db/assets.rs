@@ -913,6 +913,65 @@ impl ExifUpdateFields {
             || self.longitude.is_some()
             || self.rating.is_some()
     }
+
+    /// Lockable property names matching TS `LockableProperty` / `updateLockedColumns`.
+    pub fn locked_property_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.description.is_some() {
+            names.push("description");
+        }
+        if self.date_time_original.is_some() {
+            names.push("dateTimeOriginal");
+        }
+        if self.time_zone.is_some() {
+            names.push("timeZone");
+        }
+        if self.latitude.is_some() {
+            names.push("latitude");
+        }
+        if self.longitude.is_some() {
+            names.push("longitude");
+        }
+        if self.rating.is_some() {
+            names.push("rating");
+        }
+        names
+    }
+}
+
+/// Append distinct lockable property names (TS `distinctLocked` / append behavior).
+pub async fn append_locked_properties(
+    pool: &Pool<Postgres>,
+    asset_ids: &[Uuid],
+    properties: &[&str],
+) -> Result<(), sqlx::Error> {
+    if asset_ids.is_empty() || properties.is_empty() {
+        return Ok(());
+    }
+
+    let props: Vec<String> = properties
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect();
+    sqlx::query(
+        r#"
+            UPDATE asset_exif
+            SET "lockedProperties" = nullif(
+                array(
+                    SELECT DISTINCT unnest(
+                        coalesce("lockedProperties", '{}'::text[]) || $1::text[]
+                    )
+                ),
+                '{}'
+            )
+            WHERE "assetId" = ANY($2::uuid[])
+        "#,
+    )
+    .bind(&props)
+    .bind(asset_ids)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[derive(Debug, FromRow)]
@@ -988,6 +1047,9 @@ pub async fn update_date_time_relative(
     query.push_bind(asset_ids);
     query.push("::uuid[])");
     query.build().execute(pool).await?;
+
+    // Match TS updateDateTimeOriginal: always lock both columns when relative update runs.
+    append_locked_properties(pool, asset_ids, &["dateTimeOriginal", "timeZone"]).await?;
     Ok(())
 }
 
@@ -1042,6 +1104,11 @@ pub async fn update_exif_fields(
     query.push(r#" WHERE "assetId" = "#);
     query.push_bind(*asset_id);
     query.build().execute(pool).await?;
+
+    let locked = fields.locked_property_names();
+    if !locked.is_empty() {
+        append_locked_properties(pool, &[*asset_id], &locked).await?;
+    }
     Ok(())
 }
 
@@ -1086,6 +1153,11 @@ pub async fn update_all_exif_fields(
     query.push_bind(asset_ids);
     query.push("::uuid[])");
     query.build().execute(pool).await?;
+
+    let locked = fields.locked_property_names();
+    if !locked.is_empty() {
+        append_locked_properties(pool, asset_ids, &locked).await?;
+    }
     Ok(())
 }
 
