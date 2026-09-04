@@ -6,7 +6,7 @@
 > 上游同步：`main`
 
 最后更新：2026-09 全面审计（P0–P3 代码项完成；切流阻塞改为真实冒烟 / schema 锁定）  
-Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`  
+Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只写本文，rules 不重复抄表**）  
 交互审计面板：Cursor canvas `rust-migration-audit`
 
 ---

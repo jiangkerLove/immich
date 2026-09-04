@@ -1,5 +1,5 @@
 ---
-description: Immich fork 项目背景与 rust-server 迁移总览
+description: Immich fork 项目背景（分支与代码地图；进度计划见 checklist）
 alwaysApply: true
 ---
 
@@ -30,29 +30,10 @@ rust-server/src/
   models/db/         → SQL（≈ repositories）
 ```
 
-## 迁移进度（摘要）
+## 进度与计划（唯一来源）
 
-| 维度 | 状态 |
-|------|------|
-| HTTP API（全领域） | ✅ 已完成（~45 TS controller → ~42 Rust route 模块） |
-| 66 个 JobName / 19 个队列 worker | ✅ 已完成（`search` 为遗留空队列 no-op） |
-| 媒体 / 库 / 同步 / 搜索 API | ✅ 主体完成 |
-| WebSocket + HLS Redis + ConfigUpdate/AppRestart | ✅ 已完成 |
-| 工作流执行 | ✅ 仅 AssetV1（与上游一致） |
-| sqlx baseline + immich-admin CLI | ✅ 已完成 |
-| 单机可部署 | ✅ 默认单进程；overlay：`docker/docker-compose.rust.yml` |
+**完成度、差距、切流 Cutover、P4、暂缓项、路线图** 只维护在：
 
-## 优先待办（下一阶段 = 无缝切流）
+**`.cursor/docs/migration-checklist.md`**
 
-1. ~~P0–P3 代码缺口（伙伴媒体 / album WS / HLS Redis / baseline / telemetry / logging / CLI）~~ — 已完成
-2. **Cutover C1**：真实 compose 冒烟（`scripts/smoke.ps1` + 保留 ML 容器）
-3. **Cutover C2**：现有库 `migration-status` / `schema-check`，确认无 `kysely_ahead_of_lock`
-4. **Cutover C3**：维护模式 AppRestart 后进程管理器能重启
-5. **P4 实测**（可选加深）：Search / Sync / ML QueueAll / Integrity / 伙伴共享 E2E
-6. **baseline 锁定后**合上游：再写 `migrations/2+` 并更新 lock
-
-## 详细文档
-
-规划、已完成模块、差距清单、切流路线图见：**`.cursor/docs/migration-checklist.md`**
-
-新会话做迁移/规划时，应先阅读该文件。
+新会话做迁移 / 规划 / 切流时先读该文件（§0 → §3）。不要在本规则或其他规则里再抄一份进度表。

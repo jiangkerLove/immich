@@ -24,18 +24,7 @@ alwaysApply: true
 - 优先：job 状态（Success/Skipped/Failed）、websocket 事件、错误消息、缺失检查
 - 对比文件：`server/src/services/*.ts` ↔ `rust-server/src/service/`
 - 对比 worker：`server/src/enum.ts` JobName ↔ `rust-server/src/service/workers/`
-
-## 当前优先（切流，非再补 API）
-
-- 真库 `migration-status` / `schema-check` → compose + `smoke.ps1` → 维护模式重启
-- 细节见 `.cursor/docs/migration-checklist.md` §0 / §3 Cutover
-
-## 暂缓（不要塞进普通 PR）
-
-- ML/OCR/face/duplicate **算法**重写（保留调 ML 容器即可）
-- Search v3 / sync **协议级**重写
-- Public plugin `allowedHosts` API
-- EXIF → AssetTagged、AssetV1 write-null、PersonRecognized（上游也弱/无）
+- **当前该做什么 / 暂缓什么**：只看 `.cursor/docs/migration-checklist.md`（§0 / §3 / §4），勿在 PR 里塞 §4 暂缓大块
 
 ## 上游同步
 
