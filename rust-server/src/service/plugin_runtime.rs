@@ -77,10 +77,10 @@ impl PluginRuntime {
                 } else {
                     format!("{}@{}", row.name, row.version)
                 };
-                println!("Loaded workflow plugin: {label}");
+                tracing::info!("Loaded workflow plugin: {label}");
             }
             Err(err) => {
-                eprintln!(
+                tracing::error!(
                     "Unable to load plugin {}@{} (host_functions={host_functions}): {err}",
                     row.name, row.version
                 );

@@ -25,7 +25,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                 let config = match get_merged(&pool).await {
                     Ok(value) => value,
                     Err(err) => {
-                        eprintln!("{SCHEDULER_NAME}: failed to load config: {err}");
+                        tracing::error!("{SCHEDULER_NAME}: failed to load config: {err}");
                         return;
                     }
                 };
@@ -61,9 +61,9 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                     .queue_json_job_empty(QUEUE_LIBRARY, "LibraryScanQueueAll")
                     .await
                 {
-                    eprintln!("{SCHEDULER_NAME}: failed to queue LibraryScanQueueAll: {err}");
+                    tracing::error!("{SCHEDULER_NAME}: failed to queue LibraryScanQueueAll: {err}");
                 } else {
-                    println!("{SCHEDULER_NAME}: queued LibraryScanQueueAll");
+                    tracing::info!("{SCHEDULER_NAME}: queued LibraryScanQueueAll");
                     mark_ran(&last_run, JOB_ID, now);
                 }
             })

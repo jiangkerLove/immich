@@ -34,7 +34,7 @@ pub fn nightly_tasks_cron_expression(config: &Value) -> String {
 pub fn should_run_cron(expression: &str, now: DateTime<Local>, since: DateTime<Local>) -> bool {
     let normalized = normalize_cron_expression(expression);
     let Ok(schedule) = Schedule::from_str(&normalized) else {
-        eprintln!("cron: invalid expression '{expression}'");
+        tracing::error!("cron: invalid expression '{expression}'");
         return false;
     };
 

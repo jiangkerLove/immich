@@ -118,7 +118,7 @@ async fn import_folder(pool: &PgPool, folder: &Path, force: bool) -> Result<(), 
     let contents = match tokio::fs::read_to_string(&manifest_path).await {
         Ok(contents) => contents,
         Err(err) => {
-            eprintln!("Failed to import plugin from {}: {err}", folder.display());
+            tracing::error!("Failed to import plugin from {}: {err}", folder.display());
             return Ok(());
         }
     };
@@ -138,7 +138,7 @@ async fn import_folder(pool: &PgPool, folder: &Path, force: bool) -> Result<(), 
     let manifest: PluginManifest = match serde_json::from_str(&contents) {
         Ok(manifest) => manifest,
         Err(err) => {
-            eprintln!(
+            tracing::error!(
                 "Invalid plugin manifest at {}: {err}",
                 manifest_path.display()
             );
@@ -198,13 +198,13 @@ async fn import_folder(pool: &PgPool, folder: &Path, force: bool) -> Result<(), 
 
     if was_update {
         if let Some(existing) = existing {
-            println!(
+            tracing::info!(
                 "Upgraded plugin {} from {} to {} ({plugin_id})",
                 manifest.name, existing.version, manifest.version
             );
         }
     } else {
-        println!(
+        tracing::info!(
             "Imported plugin {}@{} ({} methods) from {}",
             manifest.name,
             manifest.version,

@@ -89,7 +89,7 @@ impl DatabaseBackupRunner {
             .await;
 
         if let Err(err) = result {
-            eprintln!("database restore failed, rolling back: {err}");
+            tracing::error!("database restore failed, rolling back: {err}");
             if let Ok(mut cb) = progress.lock() {
                 cb("rollback", 0);
             }

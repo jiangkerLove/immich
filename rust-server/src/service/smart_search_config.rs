@@ -27,7 +27,7 @@ pub async fn sync_on_config_change(
     {
         Some(()) => Ok(()),
         None => {
-            eprintln!("smart search config: could not acquire CLIP dimension lock, skipping sync");
+            tracing::error!("smart search config: could not acquire CLIP dimension lock, skipping sync");
             Ok(())
         }
     }
@@ -62,7 +62,7 @@ async fn sync_clip_dimensions(
     }
 
     if dim_size_change {
-        println!(
+        tracing::info!(
             "Updating database CLIP dimension size from {db_dim_size} to {dim_size} for model {model_name}"
         );
         set_dimension_size(pool, dim_size, None)

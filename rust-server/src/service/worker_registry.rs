@@ -22,13 +22,13 @@ pub async fn shutdown_all() {
         return;
     }
 
-    println!("Shutting down {} worker(s)...", handles.len());
+    tracing::info!("Shutting down {} worker(s)...", handles.len());
     for handle in &handles {
         handle.shutdown();
     }
     for handle in handles {
         if let Err(err) = handle.wait().await {
-            eprintln!("worker shutdown error: {err}");
+            tracing::error!("worker shutdown error: {err}");
         }
     }
 }

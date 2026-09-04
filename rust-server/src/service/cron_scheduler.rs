@@ -35,17 +35,17 @@ pub fn spawn_locked<F>(
         let lock = match advisory_lock::try_acquire(&pool, lock_id).await {
             Ok(Some(value)) => value,
             Ok(None) => {
-                println!("{name}: another instance holds the lock, skipping");
+                tracing::info!("{name}: another instance holds the lock, skipping");
                 return;
             }
             Err(err) => {
-                eprintln!("{name}: failed to acquire lock: {err}");
+                tracing::error!("{name}: failed to acquire lock: {err}");
                 return;
             }
         };
         let _lock = lock;
 
-        println!("{name}: started");
+        tracing::info!("{name}: started");
 
         if let Some(task) = bootstrap {
             task.await;

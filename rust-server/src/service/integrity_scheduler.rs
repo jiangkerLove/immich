@@ -36,17 +36,17 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
         let lock = match advisory_lock::try_acquire(&pool, LOCK_INTEGRITY_CHECK).await {
             Ok(Some(value)) => value,
             Ok(None) => {
-                println!("integrity scheduler: another instance holds the lock, skipping");
+                tracing::info!("integrity scheduler: another instance holds the lock, skipping");
                 return;
             }
             Err(err) => {
-                eprintln!("integrity scheduler: failed to acquire lock: {err}");
+                tracing::error!("integrity scheduler: failed to acquire lock: {err}");
                 return;
             }
         };
         let _lock = lock;
 
-        println!("integrity scheduler: started");
+        tracing::info!("integrity scheduler: started");
         let mut last_run: HashMap<&'static str, chrono::DateTime<Local>> = HashMap::new();
 
         loop {
@@ -55,7 +55,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
             let config = match get_merged(&pool).await {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!("integrity scheduler: failed to load config: {err}");
+                    tracing::error!("integrity scheduler: failed to load config: {err}");
                     continue;
                 }
             };
@@ -102,12 +102,12 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                     .queue_json_job_empty(QUEUE_INTEGRITY, job.job_name)
                     .await
                 {
-                    eprintln!(
+                    tracing::error!(
                         "integrity scheduler: failed to queue {}: {err}",
                         job.job_name
                     );
                 } else {
-                    println!("integrity scheduler: queued {}", job.job_name);
+                    tracing::info!("integrity scheduler: queued {}", job.job_name);
                     last_run.insert(job.config_key, now);
                 }
             }

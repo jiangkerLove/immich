@@ -66,7 +66,7 @@ pub fn spawn(
                         match processor.process(&job_name).await {
                             Ok(()) => Ok("success"),
                             Err(err) if matches_unsupported_postgres(&err) => {
-                                eprintln!("database backup failed: {err}");
+                                tracing::error!("database backup failed: {err}");
                                 Ok("failed")
                             }
                             Err(err) => {
@@ -92,7 +92,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("backupDatabase worker failed to start: {err}");
+                tracing::error!("backupDatabase worker failed to start: {err}");
             }
         }
     });

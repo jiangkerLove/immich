@@ -240,17 +240,10 @@ impl HostContext {
             Ok(value) => value,
             Err(value) => return value,
         };
-        let parsed_url = match url::Url::parse(&url) {
+        let parsed_url = match validate_http_request_url(&url, allowed_hosts) {
             Ok(value) => value,
-            Err(err) => return host_error(500, err.to_string()),
+            Err(value) => return value,
         };
-        let hostname = parsed_url.host_str().unwrap_or_default();
-        if !hostname_matches_allowed_hosts(hostname, allowed_hosts) {
-            return host_error(
-                500,
-                "Hostname did not match any listed in methods[].allowedHosts in the plugin manifest",
-            );
-        }
 
         let options: HttpRequestOptions = match input.args.get(1) {
             None | Some(Value::Null) => HttpRequestOptions::default(),
@@ -304,10 +297,7 @@ fn host_function(
     drop(state);
 
     let output = if stubs {
-        host_error(
-            400,
-            "Calling host functions is not allowed without setting methods[].hostFunctions=true in the plugin manifest",
-        )
+        stubs_disabled_error()
     } else {
         let handle = plugin
             .memory_from_val(&params[0])
@@ -366,4 +356,117 @@ fn parse_args<T: for<'de> Deserialize<'de>>(args: Value, index: usize) -> Result
         .cloned()
         .ok_or_else(|| host_error(400, "Missing host function argument"))?;
     serde_json::from_value(value).map_err(|err| host_error(400, err.to_string()))
+}
+
+fn validate_http_request_url(url: &str, allowed_hosts: &[String]) -> Result<url::Url, Value> {
+    let parsed_url = url::Url::parse(url).map_err(|err| host_error(500, err.to_string()))?;
+    let hostname = parsed_url.host_str().unwrap_or_default();
+    if !hostname_matches_allowed_hosts(hostname, allowed_hosts) {
+        return Err(host_error(
+            500,
+            "Hostname did not match any listed in methods[].allowedHosts in the plugin manifest",
+        ));
+    }
+    Ok(parsed_url)
+}
+
+fn stubs_disabled_error() -> Value {
+    host_error(
+        400,
+        "Calling host functions is not allowed without setting methods[].hostFunctions=true in the plugin manifest",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_args_requires_index() {
+        let err = parse_args::<String>(json!([]), 0).unwrap_err();
+        assert_eq!(err["success"], false);
+        assert_eq!(err["status"], 400);
+        assert_eq!(err["message"], "Missing host function argument");
+    }
+
+    #[test]
+    fn parse_args_rejects_wrong_type() {
+        let err = parse_args::<u64>(json!(["not-a-number"]), 0).unwrap_err();
+        assert_eq!(err["success"], false);
+        assert_eq!(err["status"], 400);
+    }
+
+    #[test]
+    fn parse_args_reads_indexed_value() {
+        let value: String =
+            parse_args(json!(["https://example.com", {"method":"GET"}]), 0).unwrap();
+        assert_eq!(value, "https://example.com");
+    }
+
+    #[test]
+    fn stubs_disabled_returns_manifest_message() {
+        let err = stubs_disabled_error();
+        assert_eq!(err["success"], false);
+        assert_eq!(err["status"], 400);
+        assert!(
+            err["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hostFunctions=true")
+        );
+    }
+
+    #[test]
+    fn http_request_rejects_disallowed_host() {
+        let err = validate_http_request_url("https://evil.example/x", &["api.example.com".into()])
+            .unwrap_err();
+        assert_eq!(err["success"], false);
+        assert_eq!(err["status"], 500);
+        assert!(
+            err["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("allowedHosts")
+        );
+    }
+
+    #[test]
+    fn http_request_allows_listed_host() {
+        let url =
+            validate_http_request_url("https://api.example.com/v1", &["api.example.com".into()])
+                .unwrap();
+        assert_eq!(url.host_str(), Some("api.example.com"));
+    }
+
+    #[test]
+    fn http_request_rejects_empty_allowlist() {
+        let err = validate_http_request_url("https://api.example.com/v1", &[]).unwrap_err();
+        assert_eq!(err["status"], 500);
+    }
+
+    #[test]
+    fn unknown_host_function_envelope() {
+        let err = host_error(400, "Unknown host function: nope");
+        assert_eq!(
+            err,
+            json!({
+                "success": false,
+                "status": 400,
+                "message": "Unknown host function: nope",
+            })
+        );
+    }
+
+    #[test]
+    fn host_success_envelope() {
+        let ok = host_success(json!({"albums": []}));
+        assert_eq!(
+            ok,
+            json!({
+                "success": true,
+                "response": {"albums": []},
+            })
+        );
+    }
 }

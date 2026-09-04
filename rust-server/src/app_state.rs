@@ -222,7 +222,13 @@ impl AppState {
 
         if let Err(err) = crate::service::database_bootstrap::on_startup(&sql_pool, &settings).await
         {
-            panic!("Database bootstrap failed: {err}");
+            panic!(
+                "Database bootstrap failed: {err}\n\
+                 Connected to postgres://{}:***@{}:{}/{} — Immich needs the official vector image \
+                 (e.g. ghcr.io/immich-app/postgres:*-vectorchord*), not plain PostgreSQL. \
+                 Verify with: SELECT name FROM pg_available_extensions WHERE name IN ('vchord','vector','vectors');",
+                settings.db_username, settings.db_url, settings.db_port, settings.db_database_name
+            );
         }
 
         if let Err(err) = crate::service::database_migrations::run(&sql_pool, &settings).await {
@@ -287,7 +293,7 @@ impl AppState {
         if crate::utils::telemetry::api_metrics_enabled() {
             match crate::models::db::users::UserDb::count_active(&sql_pool).await {
                 Ok(count) => crate::utils::telemetry::set_users_total(count),
-                Err(err) => eprintln!("telemetry: failed to load user count: {err}"),
+                Err(err) => tracing::error!("telemetry: failed to load user count: {err}"),
             }
         }
 

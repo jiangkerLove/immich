@@ -134,7 +134,7 @@ pub async fn run_version_check(
     let release = match fetch_latest_release(env, channel).await {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("Unable to run version check: {err}");
+            tracing::error!("Unable to run version check: {err}");
             return Ok(VersionCheckOutcome::Failed);
         }
     };
@@ -150,12 +150,12 @@ pub async fn run_version_check(
     )
     .await
     {
-        eprintln!("Unable to run version check: {err}");
+        tracing::error!("Unable to run version check: {err}");
         return Ok(VersionCheckOutcome::Failed);
     }
 
     if is_newer_release(SERVER_VERSION, &release.version, include_prerelease) {
-        println!(
+        tracing::info!(
             "version check: found {} released at {}",
             release.version, release.published_at
         );

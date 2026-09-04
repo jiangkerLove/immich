@@ -19,12 +19,12 @@ pub async fn on_job_error(
         Ok(Some(user)) => user,
         Ok(None) => return,
         Err(err) => {
-            eprintln!("job error: failed to load admin user: {err}");
+            tracing::error!("job error: failed to load admin user: {err}");
             return;
         }
     };
 
-    eprintln!("Unable to run job handler ({job_name}): {error}");
+    tracing::error!("Unable to run job handler ({job_name}): {error}");
     crate::utils::telemetry::record_job_status(job_name, "failed");
 
     let description = format!("Job {job_name} failed with error: {error}");
@@ -42,7 +42,7 @@ pub async fn on_job_error(
     {
         Ok(row) => row,
         Err(err) => {
-            eprintln!("job error: failed to create admin notification: {err}");
+            tracing::error!("job error: failed to create admin notification: {err}");
             return;
         }
     };

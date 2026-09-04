@@ -57,7 +57,7 @@ impl FaceDetectionProcessor {
                 }
             }
             other => {
-                eprintln!(
+                tracing::warn!(
                     "faceDetection job {other} is not implemented in rust-server yet; skipping"
                 );
                 Ok(JobWorkerStatus::Skipped)
@@ -116,7 +116,7 @@ pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto, concurrency: usize) 
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("faceDetection worker failed to start: {err}");
+                tracing::error!("faceDetection worker failed to start: {err}");
             }
         }
     });

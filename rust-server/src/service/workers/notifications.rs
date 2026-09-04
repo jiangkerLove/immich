@@ -1,4 +1,4 @@
-use bullmq_rs::{WorkerBuilder, RedisConnection};
+use bullmq_rs::{RedisConnection, WorkerBuilder};
 use serde_json::Value;
 use sqlx::PgPool;
 
@@ -9,7 +9,13 @@ use crate::service::websocket::WebSocketHub;
 const BULL_PREFIX: &str = "immich_bull";
 const QUEUE_NOTIFICATION: &str = "notifications";
 
-pub fn spawn(pool: PgPool, redis_url: String, websocket: WebSocketHub, jobs: JobService, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    websocket: WebSocketHub,
+    jobs: JobService,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let processor = NotificationJobProcessor::with_jobs(pool, websocket, jobs);
         let worker = WorkerBuilder::new(QUEUE_NOTIFICATION)
@@ -23,16 +29,20 @@ pub fn spawn(pool: PgPool, redis_url: String, websocket: WebSocketHub, jobs: Job
                 let processor = processor.clone();
                 async move {
                     let job_name = job.name.clone();
-                    crate::service::workers::wrap_status_job(QUEUE_NOTIFICATION, &job_name, || async {
-                        processor
-                            .process(&job_name, &job.data)
-                            .await
-                            .map(|result| match result {
-                                NotificationJobResult::Success => "success",
-                                NotificationJobResult::Skipped => "skipped",
-                            })
-                            .map_err(|err| err.to_string())
-                    })
+                    crate::service::workers::wrap_status_job(
+                        QUEUE_NOTIFICATION,
+                        &job_name,
+                        || async {
+                            processor
+                                .process(&job_name, &job.data)
+                                .await
+                                .map(|result| match result {
+                                    NotificationJobResult::Success => "success",
+                                    NotificationJobResult::Skipped => "skipped",
+                                })
+                                .map_err(|err| err.to_string())
+                        },
+                    )
                     .await
                 }
             })
@@ -44,7 +54,7 @@ pub fn spawn(pool: PgPool, redis_url: String, websocket: WebSocketHub, jobs: Job
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("notification job worker failed to start: {err}");
+                tracing::error!("notification job worker failed to start: {err}");
             }
         }
     });

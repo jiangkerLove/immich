@@ -43,25 +43,19 @@ impl StorageTemplateMigrationProcessor {
                     source: job.source,
                     notify: job.notify,
                 };
-                match self
-                    .service
-                    .migrate_single(&job.id, &entity_job)
-                    .await?
-                {
+                match self.service.migrate_single(&job.id, &entity_job).await? {
                     StorageTemplateOutcome::Success => Ok(JobWorkerStatus::Success),
                     StorageTemplateOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
                     StorageTemplateOutcome::Failed => Ok(JobWorkerStatus::Failed),
                 }
             }
-            "StorageTemplateMigration" => {
-                match self.service.migrate_all().await? {
-                    StorageTemplateOutcome::Success => Ok(JobWorkerStatus::Success),
-                    StorageTemplateOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
-                    StorageTemplateOutcome::Failed => Ok(JobWorkerStatus::Failed),
-                }
-            }
+            "StorageTemplateMigration" => match self.service.migrate_all().await? {
+                StorageTemplateOutcome::Success => Ok(JobWorkerStatus::Success),
+                StorageTemplateOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
+                StorageTemplateOutcome::Failed => Ok(JobWorkerStatus::Failed),
+            },
             other => {
-                eprintln!(
+                tracing::warn!(
                     "storageTemplateMigration job {other} is not implemented in rust-server yet; skipping"
                 );
                 Ok(JobWorkerStatus::Skipped)
@@ -87,7 +81,13 @@ impl JobWorkerStatus {
     }
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDto, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    storage: StoragePaths,
+    _env: EnvDto,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let jobs = JobService::new(redis_url.clone());
         let processor = Arc::new(StorageTemplateMigrationProcessor::new(pool, storage, jobs));
@@ -103,12 +103,16 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDt
                 let processor = processor.clone();
                 async move {
                     let job_name = job.name.clone();
-                    crate::service::workers::wrap_status_job(QUEUE_STORAGE_TEMPLATE, &job_name, || async {
-                        processor
-                            .process(&job_name, &job.data)
-                            .await
-                            .map(|status| status.as_str())
-                    })
+                    crate::service::workers::wrap_status_job(
+                        QUEUE_STORAGE_TEMPLATE,
+                        &job_name,
+                        || async {
+                            processor
+                                .process(&job_name, &job.data)
+                                .await
+                                .map(|status| status.as_str())
+                        },
+                    )
                     .await
                 }
             })
@@ -120,7 +124,7 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDt
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("storageTemplateMigration worker failed to start: {err}");
+                tracing::error!("storageTemplateMigration worker failed to start: {err}");
             }
         }
     });

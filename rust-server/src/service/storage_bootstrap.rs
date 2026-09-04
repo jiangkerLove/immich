@@ -74,7 +74,7 @@ async fn verify_mounts(
             .map_err(|err| err.to_string())?
             .unwrap_or_default();
 
-        println!(
+        tracing::info!(
             "storage bootstrap: verifying mount folder checks, current state: {}",
             serde_json::to_string(&flags).unwrap_or_else(|_| "{}".into())
         );
@@ -86,15 +86,15 @@ async fn verify_mounts(
                     system_metadata::set_system_flags(pool, &flags)
                         .await
                         .map_err(|err| err.to_string())?;
-                    println!("storage bootstrap: successfully enabled system mount folder checks");
+                    tracing::info!("storage bootstrap: successfully enabled system mount folder checks");
                 }
-                println!("storage bootstrap: successfully verified system mount folder checks");
+                tracing::info!("storage bootstrap: successfully verified system mount folder checks");
                 Ok(())
             }
             Err(err) => {
                 if settings.immich_ignore_mount_check_errors.unwrap_or(false) {
-                    eprintln!("storage bootstrap: {err}");
-                    eprintln!("storage bootstrap: ignoring mount folder errors");
+                    tracing::error!("storage bootstrap: {err}");
+                    tracing::error!("storage bootstrap: ignoring mount folder errors");
                     Ok(())
                 } else {
                     Err(err)
@@ -116,7 +116,7 @@ async fn run_mount_checks(storage: &StoragePaths, flags: &mut SystemFlags) -> Re
     for folder in STORAGE_FOLDERS {
         let already_checked = flags.mount_checks.get(*folder).copied().unwrap_or(false);
         if !already_checked {
-            println!("storage bootstrap: writing initial mount file for the {folder} folder");
+            tracing::info!("storage bootstrap: writing initial mount file for the {folder} folder");
             create_mount_file(storage, folder).await?;
         }
 
@@ -157,7 +157,7 @@ async fn create_mount_file(storage: &StoragePaths, folder: &str) -> Result<(), S
             Ok(())
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            eprintln!("storage bootstrap: found existing mount file, skipping creation");
+            tracing::error!("storage bootstrap: found existing mount file, skipping creation");
             Ok(())
         }
         Err(err) => Err(format!(
@@ -170,7 +170,7 @@ async fn verify_read_access(storage: &StoragePaths, folder: &str) -> Result<(), 
     let internal_path = storage.media_location().join(folder).join(".immich");
     let external_path = format!("<UPLOAD_LOCATION>/{folder}/.immich");
     tokio::fs::read(&internal_path).await.map_err(|err| {
-        eprintln!("storage bootstrap: failed to read ({}): {err}", internal_path.display());
+        tracing::error!("storage bootstrap: failed to read ({}): {err}", internal_path.display());
         format!(
             "Failed to read: \"{external_path} ({}) - {DOCS_MESSAGE}\"",
             internal_path.display()
@@ -185,7 +185,7 @@ async fn verify_write_access(storage: &StoragePaths, folder: &str) -> Result<(),
     tokio::fs::write(&internal_path, now_millis().as_bytes())
         .await
         .map_err(|err| {
-            eprintln!(
+            tracing::error!(
                 "storage bootstrap: failed to write {}: {err}",
                 internal_path.display()
             );
@@ -234,18 +234,18 @@ async fn sync_media_location(
 
             let previous = normalize_location(&previous);
             if previous != current {
-                println!("storage bootstrap: media location changed (from={previous}, to={current})");
+                tracing::info!("storage bootstrap: media location changed (from={previous}, to={current})");
                 if !path.starts_with(&previous) {
                     return Err(INCONSISTENT_MEDIA_LOCATION.to_string());
                 }
 
-                eprintln!(
+                tracing::error!(
                     "storage bootstrap: detected a change to media location, performing an automatic migration of file paths from {previous} to {current}"
                 );
                 let updated = media_location::migrate_file_paths(pool, &previous, &current)
                     .await
                     .map_err(|err| err.to_string())?;
-                println!("storage bootstrap: migrated {updated} path rows");
+                tracing::info!("storage bootstrap: migrated {updated} path rows");
             }
         }
 
@@ -258,7 +258,7 @@ async fn sync_media_location(
             )
             .await
             .map_err(|err| err.to_string())?;
-            println!("storage bootstrap: saved MediaLocation={current}");
+            tracing::info!("storage bootstrap: saved MediaLocation={current}");
         }
 
         Ok(())

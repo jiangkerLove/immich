@@ -55,7 +55,7 @@ impl OcrProcessor {
                 }
             }
             other => {
-                eprintln!("ocr job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!("ocr job {other} is not implemented in rust-server yet; skipping");
                 Ok(JobWorkerStatus::Skipped)
             }
         }
@@ -112,7 +112,7 @@ pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto, concurrency: usize) 
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("ocr worker failed to start: {err}");
+                tracing::error!("ocr worker failed to start: {err}");
             }
         }
     });

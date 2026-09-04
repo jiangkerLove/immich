@@ -56,7 +56,9 @@ impl VideoConversionProcessor {
                 Ok(JobWorkerStatus::Success)
             }
             other => {
-                eprintln!("videoConversion job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!(
+                    "videoConversion job {other} is not implemented in rust-server yet; skipping"
+                );
                 Ok(JobWorkerStatus::Skipped)
             }
         }
@@ -80,7 +82,13 @@ impl JobWorkerStatus {
     }
 }
 
-pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDto, concurrency: usize) {
+pub fn spawn(
+    pool: PgPool,
+    redis_url: String,
+    storage: StoragePaths,
+    _env: EnvDto,
+    concurrency: usize,
+) {
     tokio::spawn(async move {
         let jobs = JobService::new(redis_url.clone());
         let processor = Arc::new(VideoConversionProcessor::new(pool, storage, jobs));
@@ -113,7 +121,7 @@ pub fn spawn(pool: PgPool, redis_url: String, storage: StoragePaths, _env: EnvDt
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("videoConversion worker failed to start: {err}");
+                tracing::error!("videoConversion worker failed to start: {err}");
             }
         }
     });

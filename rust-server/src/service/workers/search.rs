@@ -25,7 +25,7 @@ pub fn spawn(_env: EnvDto, redis_url: String, concurrency: usize) {
                 let job_name = job.name.clone();
                 async move {
                     crate::service::workers::wrap_status_job(QUEUE_SEARCH, &job_name, || async {
-                        eprintln!(
+                        tracing::error!(
                             "search queue job {job_name} has no handler (legacy empty queue); skipping"
                         );
                         Ok::<_, String>("skipped")
@@ -41,7 +41,7 @@ pub fn spawn(_env: EnvDto, redis_url: String, concurrency: usize) {
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("search worker failed to start: {err}");
+                tracing::error!("search worker failed to start: {err}");
             }
         }
     });

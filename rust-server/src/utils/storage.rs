@@ -197,7 +197,7 @@ async fn remove_empty_dirs_inner(directory: &Path, remove_self: bool) -> Result<
         {
             if let Err(err) = tokio::fs::remove_dir(directory).await {
                 if !matches!(err.raw_os_error(), Some(39) | Some(66)) {
-                    eprintln!("attempted to remove directory {directory:?}, but failed: {err}");
+                    tracing::error!("attempted to remove directory {directory:?}, but failed: {err}");
                 }
             }
         }

@@ -122,7 +122,7 @@ pub fn spawn_prometheus_exporter(port: u16) {
             .with_http_listener(([0, 0, 0, 0], port))
             .install()
         {
-            eprintln!("prometheus metrics exporter failed on port {port}: {err}");
+            tracing::error!("prometheus metrics exporter failed on port {port}: {err}");
         }
     });
 }

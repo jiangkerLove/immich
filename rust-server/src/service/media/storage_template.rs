@@ -246,7 +246,7 @@ impl StorageTemplateService {
         }
 
         let Some(file_size) = asset.file_size_in_byte else {
-            eprintln!(
+            tracing::error!(
                 "storage template: asset {} missing file size, skipping migration",
                 asset.id
             );
@@ -400,7 +400,7 @@ impl StorageTemplateService {
         let full_path_str = normalize_path_string(&full_path);
 
         if !full_path_str.starts_with(&root_path_str) {
-            eprintln!(
+            tracing::error!(
                 "storage template: invalid path {full_path_str}, expected prefix {root_path_str}"
             );
             return Ok(asset.original_path.clone());

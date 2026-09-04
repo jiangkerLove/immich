@@ -80,7 +80,7 @@ impl ThumbnailGenerationProcessor {
                 Ok(JobWorkerStatus::Success)
             }
             other => {
-                eprintln!(
+                tracing::warn!(
                     "thumbnailGeneration job {other} is not implemented in rust-server yet; skipping"
                 );
                 Ok(JobWorkerStatus::Skipped)
@@ -145,7 +145,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("thumbnailGeneration worker failed to start: {err}");
+                tracing::error!("thumbnailGeneration worker failed to start: {err}");
             }
         }
     });

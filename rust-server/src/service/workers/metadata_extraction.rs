@@ -73,7 +73,7 @@ impl MetadataExtractionProcessor {
                 Ok(JobWorkerStatus::Success)
             }
             other => {
-                eprintln!(
+                tracing::warn!(
                     "metadataExtraction job {other} is not implemented in rust-server yet; skipping"
                 );
                 Ok(JobWorkerStatus::Skipped)
@@ -141,7 +141,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("metadataExtraction worker failed to start: {err}");
+                tracing::error!("metadataExtraction worker failed to start: {err}");
             }
         }
     });

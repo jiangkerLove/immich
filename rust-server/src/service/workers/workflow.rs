@@ -59,7 +59,7 @@ impl WorkflowProcessor {
                 }
             }
             other => {
-                eprintln!("workflow job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!("workflow job {other} is not implemented in rust-server yet; skipping");
                 Ok(JobWorkerStatus::Skipped)
             }
         }
@@ -106,7 +106,7 @@ pub fn spawn(
         let loader = WorkflowExecutionService::new(pool, runtime, jobs, websocket);
 
         if let Err(err) = loader.load_plugins().await {
-            eprintln!("workflow plugin load failed: {err}");
+            tracing::error!("workflow plugin load failed: {err}");
         }
 
         let worker = WorkerBuilder::new(QUEUE_WORKFLOW)
@@ -137,7 +137,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("workflow worker failed to start: {err}");
+                tracing::error!("workflow worker failed to start: {err}");
             }
         }
     });

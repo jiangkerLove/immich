@@ -39,7 +39,7 @@ impl WebSocketJobListener {
             let websocket = websocket.clone();
             tokio::spawn(async move {
                 if let Err(err) = listen_queue(pool, redis_url, websocket, queue_name).await {
-                    eprintln!("websocket job listener ({queue_name}): {err}");
+                    tracing::error!("websocket job listener ({queue_name}): {err}");
                 }
             });
         }

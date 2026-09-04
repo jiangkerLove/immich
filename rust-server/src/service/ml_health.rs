@@ -20,7 +20,7 @@ pub async fn setup(pool: &PgPool) {
     let config = match get_merged(pool).await {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("ml health: failed to load config: {err}");
+            tracing::error!("ml health: failed to load config: {err}");
             return;
         }
     };
@@ -71,7 +71,7 @@ pub async fn setup(pool: &PgPool) {
         state.lock().expect("ml health mutex poisoned").interval_handle = Some(handle);
     }
 
-    println!(
+    tracing::info!(
         "ml health: started availability checks for {} url(s)",
         urls.len()
     );
@@ -114,7 +114,7 @@ async fn tick(urls: &[String], timeout_ms: u64, state: &Arc<Mutex<MlHealthState>
         if let Ok(mut guard) = state.lock() {
             let previous = guard.healthy.insert(url.clone(), healthy);
             if previous != Some(healthy) {
-                println!(
+                tracing::info!(
                     "ml health: {url} is {}",
                     if healthy { "healthy" } else { "unhealthy" }
                 );

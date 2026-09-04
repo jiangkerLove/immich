@@ -18,7 +18,10 @@ pub fn end_job_with_status(queue: &'static str, job_name: &str, status: &str) {
 }
 
 pub fn worker_error(message: impl Into<String>) -> Box<dyn std::error::Error + Send + Sync> {
-    Box::new(std::io::Error::new(std::io::ErrorKind::Other, message.into()))
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        message.into(),
+    ))
 }
 
 pub async fn wrap_status_job<F, Fut>(
@@ -79,7 +82,10 @@ pub fn finish_failed(
     Err(worker_error(message))
 }
 
-pub fn finish_ok(queue: &'static str, job_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn finish_ok(
+    queue: &'static str,
+    job_name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     begin_job(queue, job_name);
     end_job(queue, job_name, true);
     Ok(())

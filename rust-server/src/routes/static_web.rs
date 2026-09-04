@@ -17,7 +17,7 @@ pub fn resolve_web_root(env: &crate::models::dto::env::EnvDto) -> Option<PathBuf
         if path.join("index.html").is_file() {
             return Some(path);
         }
-        eprintln!(
+        tracing::error!(
             "IMMICH_WEB_ROOT={} has no index.html; static web UI disabled",
             root
         );

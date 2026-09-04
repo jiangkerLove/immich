@@ -68,7 +68,7 @@ impl SidecarProcessor {
                 Ok(JobWorkerStatus::Success)
             }
             other => {
-                eprintln!("sidecar job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!("sidecar job {other} is not implemented in rust-server yet; skipping");
                 Ok(JobWorkerStatus::Skipped)
             }
         }
@@ -150,7 +150,7 @@ pub fn spawn(pool: PgPool, redis_url: String, _env: EnvDto, concurrency: usize) 
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("sidecar worker failed to start: {err}");
+                tracing::error!("sidecar worker failed to start: {err}");
             }
         }
     });

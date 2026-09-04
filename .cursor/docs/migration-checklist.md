@@ -18,7 +18,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | **代码面** | HTTP 全领域、66 JobName、19 队列、媒体/库/同步/搜索 API、WS、HLS、sqlx baseline、CLI — **已到位** |
 | **切流路径** | **默认单进程** + 保留 `immich-machine-learning`；overlay：`docker/docker-compose.rust.yml` |
 | **真正阻塞** | 不是缺 API，而是：**真实 compose 冒烟未跑通**、**现有库 baseline 未验证锁定**、**维护模式 AppRestart 重启链路未在你的部署上确认** |
-| **下一步** | §3 **Cutover** 三项 → §3 **P4** 实测 → 长期合上游开 `migrations/2+` |
+| **下一步** | **仅剩 Cutover（需本机 compose/DB）**：C2 → C1 → C3；可选 P4。代码侧可迁移项已清空。 |
 
 ---
 
@@ -141,7 +141,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | ~~6~~ | AssetV1 写 null | 上游亦未实现 | 无需改 |
 | 7 | PersonRecognized 触发 | TS 已注释 | 暂缓 |
 | 8 | Plugin `allowedHosts` 管理 API | 运行时有校验，公开管理 API 无 | 暂缓 |
-| — | Plugin host 边界测试 | 加固用 | 可选，不挡切流 |
+| — | ~~Plugin host 边界测试~~ | ✅ 单元测试：stubs / parse_args / allowedHosts deny | 已完成 |
 
 ### P4 — 代码已有，parity 未用真库证明
 
@@ -158,8 +158,9 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 
 | 项 | 说明 |
 |----|------|
-| 其余 `println!` → `tracing` | 逐步替换 |
-| checklist / 规则文档 | 随审计已更新；之后改代码时同步勾选 |
+| ~~启动 / worker / media `println!` → `tracing`~~ | ✅ 服务热路径已换；保留 `admin` / `schema_check` / `database_migrations` / `logging` 的 CLI/早期输出 |
+| ~~Plugin host 边界测试~~ | ✅ `plugin_host.rs` 单元测试 |
+| ~~缩略图 / profile JPEG quality~~ | ✅ `profile_image` + `media/thumbnail` fallback `write_resized` |
 
 ---
 
@@ -207,14 +208,15 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 ### 阶段 C — 工作流 / 插件
 
 7. ~~AssetV1 null / 扩展类型~~ — 上游无缺口  
-8. 可选：Plugin host 边界测试  
+8. ~~Plugin host 边界测试~~ ✅  
+9. ~~启动路径 tracing + profile quality~~ ✅  
 
 ### 阶段 D — 长期维护
 
-9. ~~P3 工程项（search no-op / baseline / telemetry / logging / CLI）~~ ✅  
-10. P4 真库验证（Search / Sync / ML / Integrity）  
-11. 定期 `main` → `dev-rust`；baseline 锁定后有 Kysely 增量再写 `migrations/2+`  
-12. 逐步 `println!` → `tracing`  
+10. ~~P3 工程项（search no-op / baseline / telemetry / logging / CLI）~~ ✅  
+11. P4 真库验证（Search / Sync / ML / Integrity）  
+12. 定期 `main` → `dev-rust`；baseline 锁定后有 Kysely 增量再写 `migrations/2+`  
+13. ~~其余 worker/`media` 内 `println!` → `tracing`~~ ✅（CLI 面保留 stdout）
 
 ---
 
@@ -274,12 +276,14 @@ cd rust-server && cargo +stable test --offline --lib
 | P1 | HLS Redis；`INCLUDE=api` 不再误开 microservices |
 | 运维 | telemetry `repo`/`io`；tracing；头像缩略图；`smoke.ps1` |
 | P3 | `immich-admin` CLI 行为对齐（list-users / reset / grant / externalDomain / ConfigUpdate） |
+| （续） | Plugin host 边界单测；bootstrap/workers/media 等热路径 `println!`→`tracing`；profile/thumbnail JPEG quality |
 | 其他 parity | MemoryGenerate 锁、trash/duplicate、ClusterGroup、download Content-Disposition、lockedProperties 等 |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API / 66 Job / 迁移 / HLS 分进程 / CLI / 日志指标均在 Rust；**默认单进程即可替换 Node server（代码层面）。**  
-**还差（切流）：** 真库 `migration-status` → compose + `smoke.ps1` → 维护模式重启确认 →（可选）P4 深度实测。  
+**现在：** API / 66 Job / 迁移 / HLS / CLI / 日志指标 / plugin 边界测试均在 Rust；服务热路径已用 tracing。  
+**还差（切流，需本机 compose/DB）：** C2 `migration-status` → C1 `smoke.ps1` → C3 维护重启 →（可选）P4。  
+**本环境限制：** 无 Docker / 无 Immich 凭据时无法代跑 Cutover；代码侧可迁移项已清空。  
 **策略：** 单进程 + ML sidecar 先切；合上游后开 `2+`；大块算法/协议重写继续暂缓。

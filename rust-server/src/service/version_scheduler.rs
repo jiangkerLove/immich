@@ -22,9 +22,9 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
             .queue_deduplicated_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
             .await
         {
-            eprintln!("{SCHEDULER_NAME}: failed to queue initial VersionCheck: {err}");
+            tracing::error!("{SCHEDULER_NAME}: failed to queue initial VersionCheck: {err}");
         } else {
-            println!("{SCHEDULER_NAME}: queued initial VersionCheck");
+            tracing::info!("{SCHEDULER_NAME}: queued initial VersionCheck");
         }
     });
 
@@ -49,9 +49,9 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                     .queue_deduplicated_json_job_empty(QUEUE_BACKGROUND, "VersionCheck")
                     .await
                 {
-                    eprintln!("{SCHEDULER_NAME}: failed to queue VersionCheck: {err}");
+                    tracing::error!("{SCHEDULER_NAME}: failed to queue VersionCheck: {err}");
                 } else {
-                    println!("{SCHEDULER_NAME}: queued VersionCheck");
+                    tracing::info!("{SCHEDULER_NAME}: queued VersionCheck");
                     mark_ran(&last_run, JOB_ID, now);
                 }
             })

@@ -112,7 +112,7 @@ impl WorkflowExecutionService {
                     return Ok(WorkflowExecutionOutcome::Success);
                 }
                 Err(err) => {
-                    eprintln!(
+                    tracing::error!(
                         "Error executing workflow {} run {}: {err}",
                         workflow.id, run_id
                     );

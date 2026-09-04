@@ -61,13 +61,13 @@ impl MaintenanceWorkerRuntime {
                 .and_then(|json| serde_json::from_value::<MaintenanceModeState>(json).ok())
                 .filter(|state| state.is_maintenance_mode),
             Err(err) => {
-                eprintln!("maintenance worker init failed: {err}");
+                tracing::error!("maintenance worker init failed: {err}");
                 return;
             }
         };
 
         let Some(state) = state else {
-            eprintln!("maintenance worker started without maintenance-mode metadata");
+            tracing::error!("maintenance worker started without maintenance-mode metadata");
             return;
         };
 
@@ -210,7 +210,7 @@ impl MaintenanceWorkerRuntime {
             .await;
 
         if let Err(err) = result {
-            eprintln!("maintenance restore failed: {err}");
+            tracing::error!("maintenance restore failed: {err}");
             self.set_status(MaintenanceStatusResp {
                 active: true,
                 action: MaintenanceAction::RestoreDatabase,
@@ -259,7 +259,7 @@ impl MaintenanceWorkerRuntime {
         let host = self.env.immich_host.as_deref().unwrap_or("localhost");
         let port = self.env.immich_port.unwrap_or(2283);
         if let Ok(jwt) = sign_maintenance_jwt(secret, "immich-admin") {
-            println!(
+            tracing::info!(
                 "\n\n🚧 Immich is in maintenance mode, you can log in using the following URL:\nhttp://{host}:{port}/maintenance?token={jwt}\n"
             );
         }

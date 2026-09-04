@@ -12,7 +12,7 @@ pub async fn smart_search_available(pool: &Pool<Postgres>) -> bool {
     let available = table_exists(pool, "smart_search").await.unwrap_or(false);
     let _ = SMART_SEARCH_AVAILABLE.set(available);
     if !available {
-        eprintln!(
+        tracing::error!(
             "smart_search unavailable: pgvector tables missing (install vector extension; baseline creates smart_search when available)"
         );
     }
@@ -45,7 +45,7 @@ pub async fn get_dimension_size(pool: &Pool<Postgres>, table: &str, column: &str
     match dim_size {
         Some(size) if (1..=65536).contains(&size) => size,
         _ => {
-            eprintln!(
+            tracing::error!(
                 "Could not retrieve dimension size of column '{column}' in table '{table}', assuming 512"
             );
             512
@@ -61,26 +61,80 @@ pub async fn resolve_vector_extension(
         return Ok(ext);
     }
 
+    // Match upstream TS `VECTOR_EXTENSIONS`: prefer VectorChord (`vchord`), then pgvector.
+    // Note: `vchordrq` is an *index access method*, not the extension name.
     let available: Vec<String> = sqlx::query_scalar(
         r#"
         SELECT name
         FROM pg_available_extensions
-        WHERE name IN ('vector', 'vchordrq', 'vectors')
+        WHERE name IN ('vchord', 'vchordrq', 'vector', 'vectors')
         "#,
     )
     .fetch_all(pool)
     .await
     .map_err(|err| err.to_string())?;
 
-    let names: std::collections::HashSet<_> = available.into_iter().collect();
-    if names.contains("vchordrq") {
+    let names: std::collections::HashSet<_> = available.iter().cloned().collect();
+    if names.contains("vchord") || names.contains("vchordrq") {
         return Ok(DbVectorExtension::VectorChord);
     }
     if names.contains("vector") {
         return Ok(DbVectorExtension::PgVector);
     }
+    if names.contains("vectors") {
+        return Ok(DbVectorExtension::PgvectoRs);
+    }
 
-    Err("No vector extension found. Available extensions: vector, vchordrq".into())
+    Err(format!(
+        "No vector extension found in pg_available_extensions (looked for vchord, vector, vectors). Found: [{}]",
+        if available.is_empty() {
+            "none".to_string()
+        } else {
+            available.join(", ")
+        }
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pick_extension(names: &[&str]) -> Option<DbVectorExtension> {
+        let set: std::collections::HashSet<_> = names.iter().copied().collect();
+        if set.contains("vchord") || set.contains("vchordrq") {
+            Some(DbVectorExtension::VectorChord)
+        } else if set.contains("vector") {
+            Some(DbVectorExtension::PgVector)
+        } else if set.contains("vectors") {
+            Some(DbVectorExtension::PgvectoRs)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn prefers_vchord_extension_name_over_pgvector() {
+        assert!(matches!(
+            pick_extension(&["vector", "vchord"]),
+            Some(DbVectorExtension::VectorChord)
+        ));
+    }
+
+    #[test]
+    fn accepts_legacy_vchordrq_name_as_vectorchord() {
+        assert!(matches!(
+            pick_extension(&["vchordrq"]),
+            Some(DbVectorExtension::VectorChord)
+        ));
+    }
+
+    #[test]
+    fn falls_back_to_pgvector() {
+        assert!(matches!(
+            pick_extension(&["vector"]),
+            Some(DbVectorExtension::PgVector)
+        ));
+    }
 }
 
 fn clip_index_query(extension: &DbVectorExtension) -> String {

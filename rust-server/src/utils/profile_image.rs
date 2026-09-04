@@ -1,5 +1,8 @@
+use std::fs::File;
+use std::io::BufWriter;
 use std::path::PathBuf;
 
+use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use sqlx::PgPool;
@@ -72,7 +75,7 @@ async fn load_thumbnail_config(pool: &PgPool) -> Result<ThumbnailConfig, String>
             config.size = size as u32;
         }
         if let Some(quality) = thumbnail.get("quality").and_then(|v| v.as_u64()) {
-            config.quality = quality as u8;
+            config.quality = quality.clamp(1, 100) as u8;
         }
     }
     Ok(config)
@@ -83,7 +86,7 @@ fn write_resized(
     output: &PathBuf,
     size: u32,
     format: &str,
-    _quality: u8,
+    quality: u8,
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
     let (width, height) = image.dimensions();
@@ -105,13 +108,40 @@ fn write_resized(
         image.resize(new_w.max(1), new_h.max(1), FilterType::Lanczos3)
     };
 
-    let image_format = match format {
-        "webp" => ImageFormat::WebP,
-        "png" => ImageFormat::Png,
-        _ => ImageFormat::Jpeg,
-    };
+    match format {
+        "jpeg" | "jpg" => {
+            let file = File::create(output).map_err(|err| err.to_string())?;
+            let encoder = JpegEncoder::new_with_quality(BufWriter::new(file), quality);
+            resized
+                .write_with_encoder(encoder)
+                .map_err(|err| err.to_string())
+        }
+        "png" => resized
+            .save_with_format(output, ImageFormat::Png)
+            .map_err(|err| err.to_string()),
+        _ => {
+            // WebP encoder in `image` does not take a quality knob; still honor format.
+            let _ = quality;
+            resized
+                .save_with_format(output, ImageFormat::WebP)
+                .map_err(|err| err.to_string())
+        }
+    }
+}
 
-    resized
-        .save_with_format(output, image_format)
-        .map_err(|err| err.to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{ImageBuffer, Rgb};
+
+    #[test]
+    fn jpeg_write_uses_quality_without_error() {
+        let img = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(32, 32, Rgb([10, 20, 30])));
+        let dir = std::env::temp_dir().join(format!("immich-profile-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.jpeg");
+        write_resized(&img, &path, 250, "jpeg", 40).unwrap();
+        assert!(path.is_file());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -130,7 +130,7 @@ impl IntegrityProcessor {
             "IntegrityDeleteReportType" => self.handle_delete_report_type(data).await,
             "IntegrityDeleteReports" => self.handle_delete_reports(data).await,
             other => {
-                eprintln!("integrityCheck job {other} is not implemented; skipping");
+                tracing::warn!("integrityCheck job {other} is not implemented; skipping");
                 Ok(())
             }
         }
@@ -144,11 +144,11 @@ impl IntegrityProcessor {
         self.queue_refresh_all_untracked_files().await?;
 
         if job.refresh_only {
-            println!("integrity: untracked refresh complete");
+            tracing::info!("integrity: untracked refresh complete");
             return Ok(());
         }
 
-        println!("integrity: scanning for untracked files");
+        tracing::info!("integrity: scanning for untracked files");
         let extensions = supported_file_extensions();
         let asset_roots = vec![
             self.storage.encoded_video_base(),
@@ -180,7 +180,7 @@ impl IntegrityProcessor {
                 json!({ "type": "asset", "paths": batch }),
             )
             .await?;
-            println!("integrity: queued untracked check of {count} asset file(s) ({total} so far)");
+            tracing::info!("integrity: queued untracked check of {count} asset file(s) ({total} so far)");
         }
 
         let thumb_batches = tokio::task::spawn_blocking({
@@ -198,7 +198,7 @@ impl IntegrityProcessor {
                 json!({ "type": "asset_file", "paths": batch }),
             )
             .await?;
-            println!(
+            tracing::info!(
                 "integrity: queued untracked check of {count} thumbnail file(s) ({total} so far)"
             );
         }
@@ -306,7 +306,7 @@ impl IntegrityProcessor {
             return Ok(());
         }
 
-        println!("integrity: scanning for missing files");
+        tracing::info!("integrity: scanning for missing files");
         let mut offset = 0i64;
         let mut total = 0i64;
         loop {
@@ -325,7 +325,7 @@ impl IntegrityProcessor {
                 json!({ "items": rows_to_missing_items(rows) }),
             )
             .await?;
-            println!("integrity: queued missing check of {count} file(s) ({total} so far)");
+            tracing::info!("integrity: queued missing check of {count} file(s) ({total} so far)");
             if count < JOBS_INTEGRITY_BATCH_SIZE {
                 break;
             }
@@ -452,7 +452,7 @@ impl IntegrityProcessor {
                         } else {
                             100.0
                         };
-                        println!(
+                        tracing::info!(
                             "integrity: processed {processed} checksums (avg {avg} ms/asset, {progress:.2}% complete)"
                         );
                     }
@@ -464,7 +464,7 @@ impl IntegrityProcessor {
                         save_checksum_checkpoint(&self.pool, last_created_at)
                             .await
                             .map_err(|err| err.to_string())?;
-                        println!("integrity: reached checksum stop criteria");
+                        tracing::info!("integrity: reached checksum stop criteria");
                         return Ok(());
                     }
                 }
@@ -490,12 +490,12 @@ impl IntegrityProcessor {
             .map_err(|err| err.to_string())?;
 
         if last_created_at.is_some() {
-            println!(
+            tracing::info!(
                 "integrity: checksum job will continue from {:?}",
                 last_created_at
             );
         } else {
-            println!("integrity: checksum job covered all assets");
+            tracing::info!("integrity: checksum job covered all assets");
         }
 
         Ok(())
@@ -533,7 +533,7 @@ impl IntegrityProcessor {
                 }
             }
             Err(err) => {
-                eprintln!("integrity: failed to checksum {}: {err}", row.original_path);
+                tracing::error!("integrity: failed to checksum {}: {err}", row.original_path);
                 integrity::create_reports(
                     &self.pool,
                     &[IntegrityReportInsert {
@@ -859,7 +859,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("integrityCheck worker failed to start: {err}");
+                tracing::error!("integrityCheck worker failed to start: {err}");
             }
         }
     });

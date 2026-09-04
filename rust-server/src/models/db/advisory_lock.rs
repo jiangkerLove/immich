@@ -23,7 +23,7 @@ pub async fn wait_for_free_maintenance_lock(pool: &Pool<Postgres>) {
         {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("maintenance lock check failed: {err}");
+                tracing::error!("maintenance lock check failed: {err}");
                 false
             }
         };

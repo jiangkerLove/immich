@@ -27,7 +27,9 @@ pub async fn on_startup(pool: &PgPool, env: &EnvDto) -> Result<(), String> {
         .await
         .map_err(|err| err.to_string())?
     else {
-        println!("database bootstrap: migration lock held by another instance, skipping extension setup");
+        tracing::info!(
+            "database bootstrap: migration lock held by another instance, skipping extension setup"
+        );
         return Ok(());
     };
 
@@ -43,14 +45,14 @@ pub async fn log_schema_drift(pool: &PgPool) {
     match crate::models::db::schema_check::run(pool).await {
         Ok(report) => {
             if crate::models::db::schema_check::print_report(&report) {
-                eprintln!(
+                tracing::error!(
                     "database bootstrap: schema drift detected; run `immich-admin schema-check` for details"
                 );
             } else {
-                println!("database bootstrap: no schema drift detected");
+                tracing::info!("database bootstrap: no schema drift detected");
             }
         }
-        Err(err) => eprintln!("database bootstrap: schema drift check failed: {err}"),
+        Err(err) => tracing::error!("database bootstrap: schema drift check failed: {err}"),
     }
 }
 
@@ -77,12 +79,13 @@ async fn setup_vector_extension(pool: &PgPool, env: &EnvDto) -> Result<DbVectorE
     let current = versions
         .iter()
         .find(|item| item.name == extension_name)
-        .ok_or_else(|| format!("The {display_name} extension is not available in this Postgres instance."))?;
+        .ok_or_else(|| {
+            format!("The {display_name} extension is not available in this Postgres instance.")
+        })?;
 
-    let available_version = current
-        .available_version
-        .as_deref()
-        .ok_or_else(|| format!("The {display_name} extension is not available in this Postgres instance."))?;
+    let available_version = current.available_version.as_deref().ok_or_else(|| {
+        format!("The {display_name} extension is not available in this Postgres instance.")
+    })?;
 
     if is_nightly_version(available_version)
         || current
@@ -107,7 +110,7 @@ async fn setup_vector_extension(pool: &PgPool, env: &EnvDto) -> Result<DbVectorE
 
     if let Some(installed_version) = current.installed_version.as_deref() {
         if version_gt(available_version, installed_version) {
-            println!(
+            tracing::info!(
                 "database bootstrap: updating {display_name} extension to {available_version}"
             );
             drop_vector_indexes(pool).await?;
@@ -131,7 +134,7 @@ async fn create_extension(pool: &PgPool, extension: &DbVectorExtension) -> Resul
     let extension_name = extension_sql_name(extension);
     let display_name = extension_display_name(extension);
     let sql = format!("CREATE EXTENSION IF NOT EXISTS {extension_name} CASCADE");
-    println!("database bootstrap: creating {display_name} extension");
+    tracing::info!("database bootstrap: creating {display_name} extension");
     sqlx::query(&sql)
         .execute(pool)
         .await
@@ -173,7 +176,10 @@ async fn update_extension(
     Ok(())
 }
 
-async fn drop_unused_extensions(pool: &PgPool, extension: &DbVectorExtension) -> Result<(), String> {
+async fn drop_unused_extensions(
+    pool: &PgPool,
+    extension: &DbVectorExtension,
+) -> Result<(), String> {
     let active = extension_sql_name(extension);
     for item in get_extension_versions(pool).await? {
         let Some(installed_version) = item.installed_version else {
@@ -186,7 +192,7 @@ async fn drop_unused_extensions(pool: &PgPool, extension: &DbVectorExtension) ->
             continue;
         }
 
-        println!(
+        tracing::info!(
             "database bootstrap: dropping unused extension {} ({installed_version})",
             item.name
         );
@@ -194,7 +200,7 @@ async fn drop_unused_extensions(pool: &PgPool, extension: &DbVectorExtension) ->
             .execute(pool)
             .await
         {
-            eprintln!(
+            tracing::error!(
                 "database bootstrap: could not drop extension {}: {err}",
                 item.name
             );
@@ -204,7 +210,10 @@ async fn drop_unused_extensions(pool: &PgPool, extension: &DbVectorExtension) ->
     Ok(())
 }
 
-async fn prewarm_vector_indexes(pool: &PgPool, extension: &DbVectorExtension) -> Result<(), String> {
+async fn prewarm_vector_indexes(
+    pool: &PgPool,
+    extension: &DbVectorExtension,
+) -> Result<(), String> {
     if !matches!(extension, DbVectorExtension::VectorChord) {
         return Ok(());
     }
@@ -214,28 +223,33 @@ async fn prewarm_vector_indexes(pool: &PgPool, extension: &DbVectorExtension) ->
             .execute(pool)
             .await
         {
-            eprintln!("database bootstrap: prewarm {index_name} failed: {err}");
+            tracing::error!("database bootstrap: prewarm {index_name} failed: {err}");
         } else {
-            println!("database bootstrap: prewarmed {index_name}");
+            tracing::info!("database bootstrap: prewarmed {index_name}");
         }
     }
 
     Ok(())
 }
 
-async fn reindex_vectors_if_needed(pool: &PgPool, extension: &DbVectorExtension) -> Result<(), String> {
-    for (index_name, table) in [("clip_index", "smart_search"), ("face_index", "face_search")] {
+async fn reindex_vectors_if_needed(
+    pool: &PgPool,
+    extension: &DbVectorExtension,
+) -> Result<(), String> {
+    for (index_name, table) in [
+        ("clip_index", "smart_search"),
+        ("face_index", "face_search"),
+    ] {
         if !table_exists(pool, table).await? {
             continue;
         }
 
-        let indexdef: Option<String> = sqlx::query_scalar(
-            "SELECT indexdef FROM pg_indexes WHERE indexname = $1",
-        )
-        .bind(index_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|err| err.to_string())?;
+        let indexdef: Option<String> =
+            sqlx::query_scalar("SELECT indexdef FROM pg_indexes WHERE indexname = $1")
+                .bind(index_name)
+                .fetch_optional(pool)
+                .await
+                .map_err(|err| err.to_string())?;
 
         let needs_reindex = match indexdef {
             None => true,
@@ -298,7 +312,7 @@ async fn reindex_vector_index(
     table: &str,
     extension: &DbVectorExtension,
 ) -> Result<(), String> {
-    println!("database bootstrap: reindexing {index_name} (this may take a while)");
+    tracing::info!("database bootstrap: reindexing {index_name} (this may take a while)");
 
     let dim_size = get_dimension_size(pool, table, "embedding").await;
     let lists = if matches!(extension, DbVectorExtension::VectorChord) {
@@ -342,7 +356,7 @@ async fn reindex_vector_index(
         .execute(pool)
         .await;
 
-    println!("database bootstrap: reindexed {index_name}");
+    tracing::info!("database bootstrap: reindexed {index_name}");
     Ok(())
 }
 
@@ -374,14 +388,12 @@ fn vector_index_sql(index_name: &str, extension: &DbVectorExtension, lists: u64)
             $$)
             "#
         ),
-        ("clip_index", DbVectorExtension::PgVector | DbVectorExtension::PgvectoRs) => {
-            r#"
+        ("clip_index", DbVectorExtension::PgVector | DbVectorExtension::PgvectoRs) => r#"
             CREATE INDEX IF NOT EXISTS clip_index ON smart_search
             USING hnsw (embedding vector_cosine_ops)
             WITH (ef_construction = 300, m = 16)
             "#
-            .to_string()
-        }
+        .to_string(),
         _ => r#"
             CREATE INDEX IF NOT EXISTS face_index ON face_search
             USING hnsw (embedding vector_cosine_ops)
@@ -418,11 +430,13 @@ async fn get_extension_versions(pool: &PgPool) -> Result<Vec<ExtensionVersion>, 
 
     Ok(rows
         .into_iter()
-        .map(|(name, available_version, installed_version)| ExtensionVersion {
-            name,
-            available_version,
-            installed_version,
-        })
+        .map(
+            |(name, available_version, installed_version)| ExtensionVersion {
+                name,
+                available_version,
+                installed_version,
+            },
+        )
         .collect())
 }
 
@@ -446,13 +460,18 @@ async fn table_exists(pool: &PgPool, table: &str) -> Result<bool, String> {
 
 fn should_keep_extension(installed_name: &str, active_name: &str) -> bool {
     installed_name == active_name
-        || (installed_name == "vector" && (active_name == "vchordrq" || active_name == "vchord"))
+        || (installed_name == "vector"
+            && (active_name == "vchord" || active_name == "vchordrq"))
+        // Legacy mis-name: some builds listed the access method as an extension candidate.
+        || (installed_name == "vchordrq" && active_name == "vchord")
+        || (installed_name == "vchord" && active_name == "vchordrq")
 }
 
 fn extension_sql_name(extension: &DbVectorExtension) -> &'static str {
     match extension {
         DbVectorExtension::PgVector => "vector",
-        DbVectorExtension::VectorChord => "vchordrq",
+        // Upstream Immich / VectorChord: CREATE EXTENSION vchord; indexes use USING vchordrq.
+        DbVectorExtension::VectorChord => "vchord",
         DbVectorExtension::PgvectoRs => "vectors",
     }
 }

@@ -107,7 +107,7 @@ impl VideoEncodeService {
         };
 
         if asset.video_width <= 0 || asset.video_height <= 0 {
-            eprintln!(
+            tracing::error!(
                 "skipped video encoding for {}: missing video dimensions",
                 asset.id
             );
@@ -176,9 +176,9 @@ impl VideoEncodeService {
             )?;
 
             if attempt.accel == "disabled" {
-                eprintln!("Transcoding video {} without hardware acceleration", asset.id);
+                tracing::error!("Transcoding video {} without hardware acceleration", asset.id);
             } else {
-                eprintln!(
+                tracing::error!(
                     "Transcoding video {} with {}-accelerated encoding and{} decoding",
                     asset.id,
                     attempt.accel.to_uppercase(),
@@ -189,9 +189,9 @@ impl VideoEncodeService {
             match run_ffmpeg(&args).await {
                 Ok(()) => return Ok(()),
                 Err(err) if attempt.accel != "disabled" => {
-                    eprintln!("Error occurred during transcoding for {}: {err}", asset.id);
+                    tracing::error!("Error occurred during transcoding for {}: {err}", asset.id);
                     if attempt.accel_decode && !tried_sw_decode {
-                        eprintln!(
+                        tracing::error!(
                             "Retrying {} with {}-accelerated encoding and software decoding",
                             asset.id,
                             attempt.accel.to_uppercase()
@@ -200,7 +200,7 @@ impl VideoEncodeService {
                         tried_sw_decode = true;
                         continue;
                     }
-                    eprintln!(
+                    tracing::error!(
                         "Retrying {} with hardware acceleration disabled",
                         asset.id
                     );
@@ -234,7 +234,7 @@ impl VideoEncodeService {
         asset: &VideoConversionJob,
     ) -> Result<VideoEncodeOutcome, String> {
         if let Some(encoded) = find_encoded_video_file(&asset.files) {
-            eprintln!(
+            tracing::error!(
                 "encoded video exists for {} but is no longer required; deleting",
                 asset.id
             );

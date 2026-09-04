@@ -132,7 +132,7 @@ impl BackgroundTaskProcessor {
                 .await
                 .map(|_| JobWorkerStatus::Success),
             other => {
-                eprintln!(
+                tracing::warn!(
                     "backgroundTask job {other} is not implemented in rust-server yet; skipping"
                 );
                 Ok(JobWorkerStatus::Skipped)
@@ -148,7 +148,7 @@ impl BackgroundTaskProcessor {
                 continue;
             }
             if let Err(err) = tokio::fs::remove_file(&file).await {
-                eprintln!("unable to remove file from disk ({file}): {err}");
+                tracing::error!("unable to remove file from disk ({file}): {err}");
             }
         }
         Ok(())
@@ -159,7 +159,7 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?;
         if deleted > 0 {
-            println!("deleted {deleted} expired session token(s)");
+            tracing::info!("deleted {deleted} expired session token(s)");
         }
         Ok(())
     }
@@ -188,7 +188,7 @@ impl BackgroundTaskProcessor {
             crate::models::db::person::delete_by_ids(&self.pool, &ids)
                 .await
                 .map_err(|err| err.to_string())?;
-            println!("deleted {deleted} people without faces");
+            tracing::info!("deleted {deleted} people without faces");
         }
 
         let person_groups = crate::models::db::person::delete_empty_groups(&self.pool)
@@ -198,7 +198,7 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?;
         if person_groups > 0 || cluster_groups > 0 {
-            println!(
+            tracing::info!(
                 "Deleted {person_groups} empty person groups and {cluster_groups} orphaned cluster groups"
             );
         }
@@ -210,7 +210,7 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?;
         if deleted > 0 {
-            println!("deleted {deleted} empty tags");
+            tracing::info!("deleted {deleted} empty tags");
         }
         Ok(())
     }
@@ -238,7 +238,7 @@ impl BackgroundTaskProcessor {
             Ok(version_check::VersionCheckOutcome::Skipped) => Ok(JobWorkerStatus::Skipped),
             Ok(version_check::VersionCheckOutcome::Failed) => Ok(JobWorkerStatus::Failed),
             Err(err) => {
-                eprintln!("Unable to run version check: {err}");
+                tracing::error!("Unable to run version check: {err}");
                 Ok(JobWorkerStatus::Failed)
             }
         }
@@ -248,7 +248,7 @@ impl BackgroundTaskProcessor {
         let updated = maintenance::sync_all_user_usage(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        println!("synced quota usage for {updated} user(s)");
+        tracing::info!("synced quota usage for {updated} user(s)");
         Ok(())
     }
 
@@ -258,7 +258,7 @@ impl BackgroundTaskProcessor {
             .await
             .map_err(|err| err.to_string())?;
         if deleted > 0 {
-            println!("deleted {deleted} stale audit row(s)");
+            tracing::info!("deleted {deleted} stale audit row(s)");
         }
         Ok(())
     }
@@ -277,7 +277,7 @@ impl BackgroundTaskProcessor {
                     .hls_session_folder(&session.owner_id, &session.id);
                 if let Err(err) = tokio::fs::remove_dir_all(&dir).await {
                     if err.kind() != std::io::ErrorKind::NotFound {
-                        eprintln!("failed to remove HLS session dir {}: {err}", dir.display());
+                        tracing::error!("failed to remove HLS session dir {}: {err}", dir.display());
                     }
                 }
                 maintenance::delete_hls_session(&self.pool, &session.id)
@@ -358,7 +358,7 @@ impl BackgroundTaskProcessor {
         }
 
         if !asset_ids.is_empty() {
-            println!(
+            tracing::info!(
                 "Queued {} asset(s) for deletion from the trash",
                 asset_ids.len()
             );
@@ -504,16 +504,16 @@ impl BackgroundTaskProcessor {
             if let Some(deleted_at) = user.deleted_at {
                 let ready_before = Utc::now() - Duration::days(delete_delay as i64);
                 if deleted_at > ready_before {
-                    eprintln!("Skipped user not ready for deletion: id={}", job.id);
+                    tracing::error!("Skipped user not ready for deletion: id={}", job.id);
                     return Ok(JobWorkerStatus::Skipped);
                 }
             } else {
-                eprintln!("Skipped user not ready for deletion: id={}", job.id);
+                tracing::error!("Skipped user not ready for deletion: id={}", job.id);
                 return Ok(JobWorkerStatus::Skipped);
             }
         }
 
-        println!("Deleting user: {}", user.id);
+        tracing::info!("Deleting user: {}", user.id);
 
         let folders = [
             self.storage
@@ -527,7 +527,7 @@ impl BackgroundTaskProcessor {
         for folder in folders {
             if let Err(err) = tokio::fs::remove_dir_all(&folder).await {
                 if err.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("failed to remove user folder {}: {err}", folder.display());
+                    tracing::error!("failed to remove user folder {}: {err}", folder.display());
                 }
             }
         }
@@ -604,7 +604,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("backgroundTask worker failed to start: {err}");
+                tracing::error!("backgroundTask worker failed to start: {err}");
             }
         }
     });

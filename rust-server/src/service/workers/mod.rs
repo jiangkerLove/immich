@@ -63,7 +63,7 @@ pub fn spawn_all(ctx: WorkerContext) {
         if let Some(config) = crate::utils::telemetry::config() {
             if !crate::utils::telemetry::api_metrics_enabled() {
                 crate::utils::telemetry::spawn_prometheus_exporter(config.microservices_port);
-                println!(
+                tracing::info!(
                     "prometheus job metrics listening on 0.0.0.0:{}",
                     config.microservices_port
                 );
@@ -75,7 +75,7 @@ pub fn spawn_all(ctx: WorkerContext) {
         if crate::utils::workers::should_run_microservices_workers(&ctx.env) {
             if let Err(err) = crate::service::plugin_import::sync_plugins(&ctx.pool, &ctx.env).await
             {
-                eprintln!("plugin import failed: {err}");
+                tracing::error!("plugin import failed: {err}");
             }
         }
         let config = get_merged(&ctx.pool).await.unwrap_or_else(|_| defaults());
@@ -239,7 +239,7 @@ async fn spawn_workers(ctx: &WorkerContext, config: &Value) {
 
     let queues = enabled_worker_queues(&ctx.env);
     if queues.len() > 1 {
-        println!(
+        tracing::info!(
             "rust microservices workers enabled for queues: {}",
             queues.join(", ")
         );

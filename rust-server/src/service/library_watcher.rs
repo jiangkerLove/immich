@@ -85,7 +85,7 @@ pub async fn bootstrap(pool: &PgPool, jobs: JobService) {
     let config = match get_merged(pool).await {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("library watcher: failed to load config: {err}");
+            tracing::error!("library watcher: failed to load config: {err}");
             return;
         }
     };
@@ -101,7 +101,7 @@ pub async fn reload_watch_config(pool: &PgPool) {
     let config = match get_merged(pool).await {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("library watcher: failed to reload config: {err}");
+            tracing::error!("library watcher: failed to reload config: {err}");
             return;
         }
     };
@@ -146,7 +146,7 @@ impl LibraryWatcherManager {
                 let libraries = match library::list_all(&self.pool).await {
                     Ok(value) => value,
                     Err(err) => {
-                        eprintln!("library watcher: failed to list libraries: {err}");
+                        tracing::error!("library watcher: failed to list libraries: {err}");
                         return;
                     }
                 };
@@ -162,7 +162,7 @@ impl LibraryWatcherManager {
                     Ok(Some(library)) => self.watch_library(&library).await,
                     Ok(None) => self.unwatch_library(id),
                     Err(err) => {
-                        eprintln!("library watcher: failed to load library {id}: {err}");
+                        tracing::error!("library watcher: failed to load library {id}: {err}");
                     }
                 }
             }
@@ -182,7 +182,7 @@ impl LibraryWatcherManager {
 
         self.unwatch_library(library.id);
 
-        println!(
+        tracing::info!(
             "Starting to watch library {} with import path(s) {:?}",
             library.id, library.import_paths
         );
@@ -198,7 +198,7 @@ impl LibraryWatcherManager {
         ) {
             Ok(value) => value,
             Err(err) => {
-                eprintln!(
+                tracing::error!(
                     "library watcher: failed to create watcher for {}: {err}",
                     library.id
                 );
@@ -208,7 +208,7 @@ impl LibraryWatcherManager {
 
         for import_path in &library.import_paths {
             if let Err(err) = watcher.watch(Path::new(import_path), RecursiveMode::Recursive) {
-                eprintln!(
+                tracing::error!(
                     "library watcher: failed to watch {import_path} for library {}: {err}",
                     library.id
                 );
@@ -247,7 +247,7 @@ impl LibraryWatcherManager {
 
     fn unwatch_library(&mut self, library_id: Uuid) {
         if self.watchers.remove(&library_id).is_some() {
-            println!("Stopped watching library {library_id}");
+            tracing::info!("Stopped watching library {library_id}");
         }
     }
 }
@@ -290,7 +290,7 @@ async fn handle_watch_event(context: &WatchContext, event: Event) {
                 .queue_library_remove_asset(&context.library_id, &[path_str])
                 .await
             {
-                eprintln!(
+                tracing::error!(
                     "library watcher: failed to queue remove for {} in library {}: {err}",
                     path.display(),
                     context.library_id
@@ -320,7 +320,7 @@ async fn schedule_sync(context: &WatchContext, path: String) {
             .queue_library_sync_files(&library_id, &[path_for_task.clone()])
             .await
         {
-            eprintln!(
+            tracing::error!(
                 "library watcher: failed to queue sync for {path_for_task} in library {library_id}: {err}"
             );
         }

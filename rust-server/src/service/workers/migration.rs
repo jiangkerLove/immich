@@ -60,7 +60,7 @@ impl MigrationProcessor {
                 }
             }
             other => {
-                eprintln!("migration job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!("migration job {other} is not implemented in rust-server yet; skipping");
                 Ok(JobWorkerStatus::Skipped)
             }
         }
@@ -123,7 +123,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("migration worker failed to start: {err}");
+                tracing::error!("migration worker failed to start: {err}");
             }
         }
     });

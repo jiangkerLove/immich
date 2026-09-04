@@ -24,7 +24,7 @@ pub fn spawn_redis_collector(redis_url: String) {
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             telemetry::record_redis_command("ping", elapsed_ms, result.is_ok());
             if let Err(err) = result {
-                eprintln!("io metrics: redis ping failed: {err}");
+                tracing::error!("io metrics: redis ping failed: {err}");
             }
         }
     });

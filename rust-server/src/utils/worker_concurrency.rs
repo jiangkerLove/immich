@@ -76,9 +76,9 @@ pub fn log_concurrency_settings(config: &Value) {
         (QUEUE_BACKUP, 1),
     ];
 
-    println!("worker concurrency: updating queue settings");
+    tracing::info!("worker concurrency: updating queue settings");
     for (queue, default) in queues {
         let value = concurrency_for_queue(config, queue, default);
-        println!("worker concurrency: {queue} -> {value}");
+        tracing::info!("worker concurrency: {queue} -> {value}");
     }
 }

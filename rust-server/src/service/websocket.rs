@@ -264,6 +264,6 @@ async fn on_connect<A: Adapter>(
         })
         .await
     {
-        eprintln!("websocket version check notification failed: {err}");
+        tracing::error!("websocket version check notification failed: {err}");
     }
 }

@@ -626,7 +626,7 @@ impl HlsEngine {
             }
             Err(err) if is_unique_violation(&err) => {}
             Err(err) => {
-                eprintln!("Failed to create HLS session {session_id}: {err}");
+                tracing::error!("Failed to create HLS session {session_id}: {err}");
                 self.deliver_session_result(HlsSessionResult {
                     session_id,
                     error: Some("Failed to create HLS session".to_string()),
@@ -751,7 +751,7 @@ impl HlsEngine {
                 .start_transcode(session_id, variant_index, segment_index)
                 .await;
             if let Err(err) = result {
-                eprintln!("HLS transcode failed for session {session_id}: {err}");
+                tracing::error!("HLS transcode failed for session {session_id}: {err}");
                 self.fail_session(session_id, err).await;
             }
             let mut sessions = self.transcode_sessions.lock().await;
@@ -828,7 +828,7 @@ impl HlsEngine {
         )
         .map_err(|err| err.to_string())?;
 
-        println!(
+        tracing::info!(
             "Starting HLS transcode for asset {asset_id} variant {variant_index}: ffmpeg {}",
             args[1..].join(" ")
         );
@@ -898,7 +898,7 @@ impl HlsEngine {
                 let mut buf = Vec::new();
                 let _ = stderr.read_to_end(&mut buf).await;
                 if !buf.is_empty() {
-                    eprintln!(
+                    tracing::error!(
                         "HLS ffmpeg stderr for session {session_id} variant {variant_index}: {}",
                         String::from_utf8_lossy(&buf)
                     );
@@ -987,14 +987,14 @@ impl HlsEngine {
             match status {
                 Ok(exit) if exit.success() => false,
                 Ok(exit) => {
-                    eprintln!(
+                    tracing::error!(
                         "FFmpeg exited with code {:?} for session {session_id} variant {variant_index}",
                         exit.code()
                     );
                     true
                 }
                 Err(err) => {
-                    eprintln!(
+                    tracing::error!(
                         "FFmpeg wait failed for session {session_id} variant {variant_index}: {err}"
                     );
                     true
@@ -1204,7 +1204,7 @@ fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
         let client = match redis::Client::open(redis_url.as_str()) {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("hls events: redis connect failed: {err}");
+                tracing::error!("hls events: redis connect failed: {err}");
                 return;
             }
         };
@@ -1212,19 +1212,19 @@ fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
         let mut pubsub = match client.get_async_pubsub().await {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("hls events: pubsub connect failed: {err}");
+                tracing::error!("hls events: pubsub connect failed: {err}");
                 return;
             }
         };
 
         for channel in hls_events::HLS_CHANNELS {
             if let Err(err) = pubsub.subscribe(*channel).await {
-                eprintln!("hls events: subscribe {channel} failed: {err}");
+                tracing::error!("hls events: subscribe {channel} failed: {err}");
                 return;
             }
         }
 
-        println!(
+        tracing::info!(
             "hls events: listening (api={}, worker={})",
             roles.api, roles.worker
         );
@@ -1234,14 +1234,14 @@ fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
             let channel: String = match msg.get_channel() {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!("hls events: channel error: {err}");
+                    tracing::error!("hls events: channel error: {err}");
                     continue;
                 }
             };
             let payload: String = match msg.get_payload() {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!("hls events: payload error: {err}");
+                    tracing::error!("hls events: payload error: {err}");
                     continue;
                 }
             };
@@ -1287,6 +1287,6 @@ fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
             }
         }
 
-        eprintln!("hls events: listener ended");
+        tracing::error!("hls events: listener ended");
     });
 }

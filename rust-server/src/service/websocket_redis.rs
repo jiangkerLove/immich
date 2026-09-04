@@ -83,24 +83,24 @@ impl Resp2RedisDriver {
                 let channel: String = match msg.get_channel() {
                     Ok(channel) => channel,
                     Err(err) => {
-                        eprintln!("redis pubsub channel parse error: {err}");
+                        tracing::error!("redis pubsub channel parse error: {err}");
                         continue;
                     }
                 };
                 let payload: Vec<u8> = match msg.get_payload() {
                     Ok(payload) => payload,
                     Err(err) => {
-                        eprintln!("redis pubsub payload parse error: {err}");
+                        tracing::error!("redis pubsub payload parse error: {err}");
                         continue;
                     }
                 };
                 if let Some(tx) = handlers_clone.read().unwrap().get(&channel) {
                     if let Err(err) = tx.try_send((channel, payload)) {
-                        eprintln!("redis pubsub channel full: {err}");
+                        tracing::error!("redis pubsub channel full: {err}");
                     }
                 }
             }
-            eprintln!("redis pubsub stream ended");
+            tracing::error!("redis pubsub stream ended");
         });
 
         Ok(Self {
@@ -206,11 +206,11 @@ pub async fn connect_driver(redis_url: &str) -> Result<ImmichRedisDriver, RedisE
 
     match RedisDriver::new(&resp3_client).await {
         Ok(driver) => {
-            println!("WebSocket Redis adapter using RESP3");
+            tracing::info!("WebSocket Redis adapter using RESP3");
             Ok(ImmichRedisDriver::Resp3(driver))
         }
         Err(err) if is_resp3_unsupported(&err) => {
-            eprintln!(
+            tracing::error!(
                 "Redis does not support RESP3 (HELLO); falling back to RESP2 pub/sub: {err}"
             );
             let resp2_url = redis_url_with_protocol(redis_url, "resp2");

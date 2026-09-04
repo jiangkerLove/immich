@@ -123,14 +123,14 @@ impl LibraryProcessor {
                     .map(|_| JobWorkerStatus::Success)
             }
             other => {
-                eprintln!("library job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!("library job {other} is not implemented in rust-server yet; skipping");
                 Ok(JobWorkerStatus::Skipped)
             }
         }
     }
 
     async fn handle_scan_queue_all(&self) -> Result<(), String> {
-        println!("Initiating scan of all external libraries...");
+        tracing::info!("Initiating scan of all external libraries...");
 
         self.jobs
             .queue_json_job_empty(QUEUE_LIBRARY, "LibraryDeleteCheck")
@@ -157,7 +157,7 @@ impl LibraryProcessor {
     }
 
     async fn handle_delete_check(&self) -> Result<(), String> {
-        println!("Checking for any libraries pending deletion...");
+        tracing::info!("Checking for any libraries pending deletion...");
         let pending = library::list_deleted(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
@@ -165,7 +165,7 @@ impl LibraryProcessor {
             return Ok(());
         }
 
-        println!(
+        tracing::info!(
             "Found {} libraries pending deletion, cleaning up...",
             pending.len()
         );
@@ -192,7 +192,7 @@ impl LibraryProcessor {
             .map_err(|err| err.to_string())?;
 
         if asset_ids.is_empty() {
-            println!("Deleting library {library_id}");
+            tracing::info!("Deleting library {library_id}");
             library::hard_delete(&self.pool, &library_id)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -223,13 +223,13 @@ impl LibraryProcessor {
             .await
             .map_err(|err| err.to_string())?
         else {
-            println!("Library {library_id} not found, skipping refresh");
+            tracing::info!("Library {library_id} not found, skipping refresh");
             return Ok(queue_sync_files_status(false, 1));
         };
 
         let valid_paths = self.validate_import_paths(&library_row).await?;
         if valid_paths.is_empty() {
-            println!("No valid import paths found for library {library_id}");
+            tracing::info!("No valid import paths found for library {library_id}");
             return Ok(queue_sync_files_status(true, 0));
         }
 
@@ -240,7 +240,7 @@ impl LibraryProcessor {
         let mut crawl_count = 0usize;
         let mut import_count = 0usize;
 
-        println!(
+        tracing::info!(
             "Starting disk crawl of {} import path(s) for library {library_id}...",
             valid_paths.len()
         );
@@ -273,14 +273,14 @@ impl LibraryProcessor {
                     .map_err(|err| err.to_string())?;
             }
 
-            println!(
+            tracing::info!(
                 "Crawled {crawl_count} file(s) so far: {} of current batch of {} will be imported to library {library_id}...",
                 new_paths.len(),
                 filtered.len()
             );
         }
 
-        println!(
+        tracing::info!(
             "Finished disk crawl, {crawl_count} file(s) found on disk and queued {import_count} file(s) for import into {library_id}"
         );
 
@@ -295,11 +295,11 @@ impl LibraryProcessor {
             .await
             .map_err(|err| err.to_string())?
         else {
-            println!("Library {} not found, skipping file import", job.library_id);
+            tracing::info!("Library {} not found, skipping file import", job.library_id);
             return Ok(sync_files_status(false));
         };
         if library_row.deleted_at.is_some() {
-            println!(
+            tracing::info!(
                 "Library {} is deleted, won't import assets into it",
                 job.library_id
             );
@@ -314,7 +314,7 @@ impl LibraryProcessor {
             {
                 Ok(Some(asset_id)) => created_ids.push(asset_id),
                 Ok(None) => {}
-                Err(err) => eprintln!(
+                Err(err) => tracing::error!(
                     "Error processing {path} for library {}: {err}",
                     job.library_id
                 ),
@@ -335,7 +335,7 @@ impl LibraryProcessor {
             self.queue_post_sync_jobs(&created_ids).await?;
         }
 
-        println!(
+        tracing::info!(
             "Imported {} {} file(s) into library {}",
             created_ids.len(),
             import_progress_suffix(job.progress_counter, job.total_assets),
@@ -361,11 +361,11 @@ impl LibraryProcessor {
             .map_err(|err| err.to_string())?;
         let total_assets = asset_ids.len();
         if total_assets == 0 {
-            println!("Library {library_id} is empty, no need to check assets");
+            tracing::info!("Library {library_id} is empty, no need to check assets");
             return Ok(queue_sync_assets_status(true));
         }
 
-        println!(
+        tracing::info!(
             "Checking {total_assets} asset(s) against import paths and exclusion patterns in library {library_id}..."
         );
 
@@ -377,7 +377,7 @@ impl LibraryProcessor {
         )
         .await
         .map_err(|err| err.to_string())?;
-        println!(
+        tracing::info!(
             "{affected} asset(s) out of {total_assets} were offlined due to import paths and/or exclusion pattern(s) in library {library_id}"
         );
 
@@ -385,7 +385,7 @@ impl LibraryProcessor {
             return Ok(queue_sync_assets_status(true));
         }
 
-        println!("Scanning library {library_id} for assets missing from disk...");
+        tracing::info!("Scanning library {library_id} for assets missing from disk...");
 
         let mut count = 0usize;
         for chunk in asset_ids.chunks(JOBS_LIBRARY_PAGINATION_SIZE) {
@@ -405,13 +405,13 @@ impl LibraryProcessor {
                 )
                 .await
                 .map_err(|err| err.to_string())?;
-            println!(
+            tracing::info!(
                 "Queued check of {count} of {total_assets} ({:.1} %) existing asset(s) so far in library {library_id}",
                 100.0 * count as f64 / total_assets as f64
             );
         }
 
-        println!("Finished queuing {count} asset check(s) for library {library_id}");
+        tracing::info!("Finished queuing {count} asset check(s) for library {library_id}");
         Ok(queue_sync_assets_status(true))
     }
 
@@ -456,7 +456,7 @@ impl LibraryProcessor {
 
         self.queue_post_sync_jobs(&update_ids).await?;
 
-        println!(
+        tracing::info!(
             "{}",
             sync_assets_progress_log(
                 batch_len,
@@ -559,29 +559,29 @@ impl LibraryProcessor {
         let mut valid = Vec::new();
         for import_path in &library.import_paths {
             if self.storage.is_immich_path(import_path) {
-                eprintln!(
+                tracing::error!(
                     "Skipping invalid import path {import_path}: Cannot use media upload folder for external libraries"
                 );
                 continue;
             }
             if !Path::new(import_path).is_absolute() {
-                eprintln!("Skipping invalid import path {import_path}: path must be absolute");
+                tracing::error!("Skipping invalid import path {import_path}: path must be absolute");
                 continue;
             }
             let path = PathBuf::from(import_path);
             match tokio::fs::metadata(&path).await {
                 Ok(meta) if meta.is_dir() => {
                     if !has_read_access(&path) {
-                        eprintln!(
+                        tracing::error!(
                             "Skipping invalid import path {import_path}: Lacking read permission for folder"
                         );
                         continue;
                     }
                     valid.push(normalize_path(import_path));
                 }
-                Ok(_) => eprintln!("Skipping invalid import path {import_path}: not a directory"),
+                Ok(_) => tracing::error!("Skipping invalid import path {import_path}: not a directory"),
                 Err(err) => {
-                    eprintln!("Skipping invalid import path {import_path}: {err}");
+                    tracing::error!("Skipping invalid import path {import_path}: {err}");
                 }
             }
         }
@@ -753,7 +753,7 @@ pub fn spawn(
                 std::future::pending::<()>().await;
             }
             Err(err) => {
-                eprintln!("library worker failed to start: {err}");
+                tracing::error!("library worker failed to start: {err}");
             }
         }
     });

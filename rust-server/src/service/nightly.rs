@@ -20,7 +20,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                 let config = match get_merged(&pool).await {
                     Ok(value) => value,
                     Err(err) => {
-                        eprintln!("{SCHEDULER_NAME}: failed to load config: {err}");
+                        tracing::error!("{SCHEDULER_NAME}: failed to load config: {err}");
                         return;
                     }
                 };
@@ -35,9 +35,9 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                 }
 
                 if let Err(err) = jobs.queue_nightly_jobs(&config).await {
-                    eprintln!("{SCHEDULER_NAME}: failed to queue jobs: {err}");
+                    tracing::error!("{SCHEDULER_NAME}: failed to queue jobs: {err}");
                 } else {
-                    println!("{SCHEDULER_NAME}: queued nightly jobs");
+                    tracing::info!("{SCHEDULER_NAME}: queued nightly jobs");
                     mark_ran(&last_run, JOB_ID, now);
                 }
             })

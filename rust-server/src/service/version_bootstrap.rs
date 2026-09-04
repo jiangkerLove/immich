@@ -45,7 +45,7 @@ async fn sync_version_history(pool: &PgPool, jobs: &JobService) -> Result<(), St
         return Ok(());
     }
 
-    println!("version bootstrap: adding {current} to upgrade history");
+    tracing::info!("version bootstrap: adding {current} to upgrade history");
     version_history::insert_version(pool, current)
         .await
         .map_err(|err| err.to_string())?;
@@ -55,7 +55,7 @@ async fn sync_version_history(pool: &PgPool, jobs: &JobService) -> Result<(), St
             .queue_json_job_empty(QUEUE_BACKGROUND, "MemoryGenerate")
             .await
             .map_err(|err| err.to_string())?;
-        println!("version bootstrap: queued MemoryGenerate after upgrade from {previous_version}");
+        tracing::info!("version bootstrap: queued MemoryGenerate after upgrade from {previous_version}");
     }
 
     Ok(())

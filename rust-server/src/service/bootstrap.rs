@@ -39,7 +39,7 @@ pub async fn run(mode: ServerMode) {
             telemetry.microservices_port
         };
         telemetry_util::spawn_prometheus_exporter(port);
-        println!("prometheus metrics listening on 0.0.0.0:{port}");
+        tracing::info!("prometheus metrics listening on 0.0.0.0:{port}");
     }
 
     if telemetry_util::host_metrics_enabled() {
@@ -90,8 +90,10 @@ pub async fn run(mode: ServerMode) {
         .expect("failed to bind port");
 
     match mode {
-        ServerMode::Api => println!("rust-server listening on 0.0.0.0:{port}"),
-        ServerMode::Maintenance => println!("rust-server maintenance worker on 0.0.0.0:{port}"),
+        ServerMode::Api => tracing::info!("rust-server listening on 0.0.0.0:{port}"),
+        ServerMode::Maintenance => {
+            tracing::info!("rust-server maintenance worker on 0.0.0.0:{port}")
+        }
     }
 
     axum::serve(listener, app)
@@ -100,7 +102,7 @@ pub async fn run(mode: ServerMode) {
         .expect("server error");
 
     lifecycle::on_shutdown().await;
-    println!("rust-server stopped");
+    tracing::info!("rust-server stopped");
 }
 
 async fn shutdown_signal() {
@@ -126,7 +128,7 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
 
-    println!("Shutdown signal received, stopping HTTP server...");
+    tracing::info!("Shutdown signal received, stopping HTTP server...");
 }
 
 pub async fn resolve_server_mode(settings: &EnvDto, argv_mode: Option<&str>) -> ServerMode {
@@ -140,12 +142,12 @@ pub async fn resolve_server_mode(settings: &EnvDto, argv_mode: Option<&str>) -> 
     // Mirror TS `main.ts` Workers.bootstrap: DB maintenance-mode flag selects worker.
     match db_is_maintenance_mode(settings).await {
         Ok(true) => {
-            println!("maintenance-mode metadata set; starting maintenance worker");
+            tracing::info!("maintenance-mode metadata set; starting maintenance worker");
             ServerMode::Maintenance
         }
         Ok(false) => ServerMode::Api,
         Err(err) => {
-            eprintln!("failed to read maintenance-mode metadata ({err}); starting API");
+            tracing::warn!("failed to read maintenance-mode metadata ({err}); starting API");
             ServerMode::Api
         }
     }

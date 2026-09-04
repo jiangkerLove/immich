@@ -115,7 +115,9 @@ impl ThumbnailService {
             .await
             .map_err(|err| err.to_string())?
         else {
-            eprintln!("thumbnail generation failed for {asset_id}: missing asset or metadata");
+            tracing::error!(
+                "thumbnail generation failed for {asset_id}: missing asset or metadata"
+            );
             return Ok(ThumbnailJobOutcome::Failed);
         };
 
@@ -134,9 +136,10 @@ impl ThumbnailService {
         } else if asset.asset_type == "IMAGE" {
             self.generate_image(&asset, &config, false).await?
         } else {
-            eprintln!(
+            tracing::error!(
                 "skipping thumbnail generation for {}: type {} is not image/video",
-                asset.id, asset.asset_type
+                asset.id,
+                asset.asset_type
             );
             return Ok(ThumbnailJobOutcome::Skipped);
         };
@@ -177,7 +180,9 @@ impl ThumbnailService {
             .await
             .map_err(|err| err.to_string())?
         else {
-            eprintln!("edit thumbnail generation failed for {asset_id}: missing asset or metadata");
+            tracing::error!(
+                "edit thumbnail generation failed for {asset_id}: missing asset or metadata"
+            );
             return Ok(ThumbnailJobOutcome::Failed);
         };
 
@@ -241,13 +246,13 @@ impl ThumbnailService {
             .await
             .map_err(|err| err.to_string())?
         else {
-            eprintln!("person thumbnail generation failed for {person_id}: missing data");
+            tracing::error!("person thumbnail generation failed for {person_id}: missing data");
             return Ok(ThumbnailJobOutcome::Failed);
         };
 
         let input_path = if data.asset_type == "VIDEO" {
             let Some(preview) = data.preview_path.as_ref() else {
-                eprintln!(
+                tracing::error!(
                     "person thumbnail generation failed for {person_id}: missing video preview"
                 );
                 return Ok(ThumbnailJobOutcome::Failed);
@@ -279,7 +284,7 @@ impl ThumbnailService {
             match decode_image_path(&input_path).await {
                 Ok(image) => image,
                 Err(err) => {
-                    eprintln!("person thumbnail decode failed for {person_id}: {err}");
+                    tracing::error!("person thumbnail decode failed for {person_id}: {err}");
                     extract_with_ffmpeg(&input_path, config.preview_size).await?
                 }
             }
@@ -652,7 +657,7 @@ impl ThumbnailService {
         let decoded = match self.decode_asset_image(asset, config, is_edited).await {
             Ok((image, _, _)) => image,
             Err(err) => {
-                eprintln!("image decode failed for {}, trying ffmpeg: {err}", asset.id);
+                tracing::error!("image decode failed for {}, trying ffmpeg: {err}", asset.id);
                 extract_with_ffmpeg(&asset.original_path, config.preview_size).await?
             }
         };
@@ -1117,7 +1122,7 @@ fn write_resized(
     output: &Path,
     size: u32,
     format: &str,
-    _quality: u8,
+    quality: u8,
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
     let (width, height) = image.dimensions();
@@ -1139,15 +1144,27 @@ fn write_resized(
         image.resize(new_w.max(1), new_h.max(1), FilterType::Lanczos3)
     };
 
-    let image_format = match format {
-        "webp" => ImageFormat::WebP,
-        "png" => ImageFormat::Png,
-        _ => ImageFormat::Jpeg,
-    };
-
-    resized
-        .save_with_format(output, image_format)
-        .map_err(|err| err.to_string())
+    match format {
+        "jpeg" | "jpg" => {
+            use image::codecs::jpeg::JpegEncoder;
+            use std::fs::File;
+            use std::io::BufWriter;
+            let file = File::create(output).map_err(|err| err.to_string())?;
+            let encoder = JpegEncoder::new_with_quality(BufWriter::new(file), quality);
+            resized
+                .write_with_encoder(encoder)
+                .map_err(|err| err.to_string())
+        }
+        "png" => resized
+            .save_with_format(output, ImageFormat::Png)
+            .map_err(|err| err.to_string()),
+        _ => {
+            let _ = quality;
+            resized
+                .save_with_format(output, ImageFormat::WebP)
+                .map_err(|err| err.to_string())
+        }
+    }
 }
 
 fn compute_thumbhash(path: &Path) -> Result<Vec<u8>, String> {

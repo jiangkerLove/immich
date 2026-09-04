@@ -59,7 +59,7 @@ pub async fn read_tags(path: &str, extended_video: bool) -> Result<Value, String
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("exiftool warning for {path}: {stderr}");
+        tracing::error!("exiftool warning for {path}: {stderr}");
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

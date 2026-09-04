@@ -15,17 +15,17 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
         let lock = match advisory_lock::try_acquire(&pool, LOCK_BACKUP_DATABASE).await {
             Ok(Some(value)) => value,
             Ok(None) => {
-                println!("backup scheduler: another instance holds the lock, skipping");
+                tracing::info!("backup scheduler: another instance holds the lock, skipping");
                 return;
             }
             Err(err) => {
-                eprintln!("backup scheduler: failed to acquire lock: {err}");
+                tracing::error!("backup scheduler: failed to acquire lock: {err}");
                 return;
             }
         };
         let _lock = lock;
 
-        println!("backup scheduler: started");
+        tracing::info!("backup scheduler: started");
         let mut last_run: Option<chrono::DateTime<Local>> = None;
 
         loop {
@@ -34,7 +34,7 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
             let config = match get_merged(&pool).await {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!("backup scheduler: failed to load config: {err}");
+                    tracing::error!("backup scheduler: failed to load config: {err}");
                     continue;
                 }
             };
@@ -73,9 +73,9 @@ pub fn spawn(pool: PgPool, jobs: JobService) {
                 .queue_deduplicated_json_job(QUEUE_BACKUP, "DatabaseBackup", serde_json::json!({}))
                 .await
             {
-                eprintln!("backup scheduler: failed to queue DatabaseBackup: {err}");
+                tracing::error!("backup scheduler: failed to queue DatabaseBackup: {err}");
             } else {
-                println!("backup scheduler: queued DatabaseBackup");
+                tracing::info!("backup scheduler: queued DatabaseBackup");
                 last_run = Some(now);
             }
         }

@@ -40,9 +40,9 @@ async fn generate_memories(pool: &PgPool) -> Result<(), sqlx::Error> {
             continue;
         }
 
-        println!("Creating memories for {}", target_start.to_rfc3339());
+        tracing::info!("Creating memories for {}", target_start.to_rfc3339());
         if let Err(err) = create_memories_for_day(pool, &users, target).await {
-            eprintln!("Failed to create memories for {target}: {err}");
+            tracing::error!("Failed to create memories for {target}: {err}");
         }
 
         let next_state = MemoriesState {

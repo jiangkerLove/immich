@@ -24,7 +24,7 @@ const MAX_IN_FLIGHT: usize = 9;
 pub async fn init(pool: &PgPool, env: &EnvDto, jobs: &JobService) -> Result<(), String> {
     let paths = geodata_paths::resolve_geodata_paths(env);
     if !geodata_paths::geodata_dir_exists(&paths) {
-        println!(
+        tracing::info!(
             "geodata import: geodata bundle not found at {} (reverse geocoding may be unavailable)",
             paths.date_file.display()
         );
@@ -40,7 +40,7 @@ pub async fn init(pool: &PgPool, env: &EnvDto, jobs: &JobService) -> Result<(), 
         .await
         .map_err(|err| err.to_string())?;
     if state.last_update.as_deref() == Some(geodata_date.as_str()) {
-        println!("geodata import: already up to date ({geodata_date})");
+        tracing::info!("geodata import: already up to date ({geodata_date})");
         return Ok(());
     }
 
@@ -76,13 +76,13 @@ pub async fn init(pool: &PgPool, env: &EnvDto, jobs: &JobService) -> Result<(), 
         .await
         .map_err(|err| err.to_string())?;
 
-    println!("geodata import: completed");
+    tracing::info!("geodata import: completed");
     Ok(())
 }
 
 async fn run_import(pool: &PgPool, paths: &GeodataPaths, jobs: &JobService) -> Result<(), String> {
     if let Err(err) = jobs.pause_metadata_extraction().await {
-        eprintln!("geodata import: failed to pause metadata extraction: {err}");
+        tracing::error!("geodata import: failed to pause metadata extraction: {err}");
     }
 
     let result = async {
@@ -98,7 +98,7 @@ async fn run_import(pool: &PgPool, paths: &GeodataPaths, jobs: &JobService) -> R
     .await;
 
     if let Err(err) = jobs.resume_metadata_extraction().await {
-        eprintln!("geodata import: failed to resume metadata extraction: {err}");
+        tracing::error!("geodata import: failed to resume metadata extraction: {err}");
     }
 
     result
@@ -195,7 +195,7 @@ async fn load_cities500(
     admin1: &HashMap<String, String>,
     admin2: &HashMap<String, String>,
 ) -> Result<(), String> {
-    println!("geodata import: starting cities500 import");
+    tracing::info!("geodata import: starting cities500 import");
     let start = Instant::now();
     let path = path.to_path_buf();
     let admin1 = admin1.clone();
@@ -246,7 +246,7 @@ async fn load_cities500(
 
         imported += batch_len;
         if imported % 10_000 == 0 {
-            println!("geodata import: {imported} geodata records imported");
+            tracing::info!("geodata import: {imported} geodata records imported");
         }
     }
 
@@ -264,7 +264,7 @@ async fn load_cities500(
     } else {
         count as u64
     };
-    println!(
+    tracing::info!(
         "geodata import: successfully imported {count} geodata records in {duration:.2}s ({records_per_second} records/second)"
     );
     Ok(())
@@ -416,7 +416,7 @@ async fn import_naturalearth_countries(pool: &PgPool, path: &Path) -> Result<(),
         .map_err(|err| err.to_string())?;
     tx.commit().await.map_err(|err| err.to_string())?;
 
-    println!("geodata import: starting Natural Earth countries import");
+    tracing::info!("geodata import: starting Natural Earth countries import");
     let start = Instant::now();
     let path = path.to_path_buf();
     let (tx, mut rx) = mpsc::channel(MAX_IN_FLIGHT);
@@ -479,7 +479,7 @@ async fn import_naturalearth_countries(pool: &PgPool, path: &Path) -> Result<(),
     .map_err(|err| err.to_string())?;
 
     let duration = start.elapsed().as_secs_f64();
-    println!(
+    tracing::info!(
         "geodata import: successfully imported {count} Natural Earth records in {duration:.2}s"
     );
     Ok(())

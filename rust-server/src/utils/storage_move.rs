@@ -60,7 +60,7 @@ pub async fn move_file(pool: &PgPool, options: MoveFileOptions) -> Result<MoveFi
         };
 
         let Some(actual_path) = actual_path else {
-            eprintln!(
+            tracing::error!(
                 "unable to complete move for {entity_id} ({path_type}): file missing at both locations"
             );
             return Ok(MoveFileOutcome::Skipped);
@@ -77,7 +77,7 @@ pub async fn move_file(pool: &PgPool, options: MoveFileOptions) -> Result<MoveFi
             )
             .await?
         {
-            eprintln!(
+            tracing::error!(
                 "skipping move for {entity_id} ({path_type}): verification failed at new location"
             );
             return Ok(MoveFileOutcome::Skipped);
@@ -148,7 +148,7 @@ async fn perform_physical_move(
             )
             .await?
             {
-                eprintln!(
+                tracing::error!(
                     "skipping move for {entity_id} ({path_type}): verification failed after copy"
                 );
                 let _ = tokio::fs::remove_file(new_path).await;
@@ -156,7 +156,7 @@ async fn perform_physical_move(
             }
 
             if let Err(err) = tokio::fs::remove_file(&move_row.old_path).await {
-                eprintln!(
+                tracing::error!(
                     "unable to delete old file {} after copy: {err}",
                     move_row.old_path
                 );
@@ -164,7 +164,7 @@ async fn perform_physical_move(
             Ok(true)
         }
         Err(err) => {
-            eprintln!(
+            tracing::error!(
                 "unable to complete move for {entity_id} ({path_type}): rename failed: {err}"
             );
             Ok(false)
