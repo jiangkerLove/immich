@@ -22,9 +22,10 @@
 
 ## 新会话建议
 
-1. 做迁移或规划 → 读 `.cursor/docs/migration-checklist.md`
+1. 做迁移或规划 → 读 `.cursor/docs/migration-checklist.md`（先看 §0 切流结论、§3 Cutover）
 2. 做具体 parity 切片 → 对照 `server/src/services/` 与 `rust-server/src/service/`
-3. 可在同一分支上连续积累多批改动再合并
+3. 当前优先是切流验证（冒烟 / schema / 维护重启），不是再补 HTTP/Job 面
+4. 可在同一分支上连续积累多批改动再合并
 
 ## 术语
 

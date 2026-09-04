@@ -1,10 +1,12 @@
 use sqlx::postgres::PgPoolOptions;
-use uuid::Uuid;
 
 use crate::constants::SERVER_VERSION;
+use crate::models::db::users::{UserDb, map_user_admin};
 use crate::models::dto::env::EnvDto;
 use crate::service::bootstrap;
+use crate::utils::crypto::random_bytes_as_text;
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::{get_merged, json_str};
 
 pub async fn run(args: &[String]) {
     let command = args.first().map(String::as_str).unwrap_or("help");
@@ -181,20 +183,17 @@ async fn connect_pool(settings: &EnvDto) -> Result<sqlx::PgPool, String> {
 
 async fn list_users(settings: &EnvDto) -> Result<(), String> {
     let pool = connect_pool(settings).await?;
-    let rows: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
-        r#"
-        SELECT id, email, name, "isAdmin" as is_admin
-        FROM "user"
-        ORDER BY email
-        "#,
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|err| err.to_string())?;
-
-    for (id, email, name, is_admin) in rows {
-        println!("{id}\t{email}\t{name}\tadmin={is_admin}");
-    }
+    let users = UserDb::list_admin(&pool, None, true)
+        .await
+        .map_err(|err| err.to_string())?;
+    let mapped: Vec<_> = users
+        .into_iter()
+        .map(|user| map_user_admin(user, None))
+        .collect();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&mapped).map_err(|err| err.to_string())?
+    );
     Ok(())
 }
 
@@ -204,26 +203,20 @@ async fn reset_admin_password(
     invalidate_sessions: bool,
 ) -> Result<(), String> {
     let pool = connect_pool(settings).await?;
-    let admin: Option<(Uuid, String)> = sqlx::query_as(
-        r#"
-        SELECT id, email
-        FROM "user"
-        WHERE "isAdmin" = TRUE AND status = 'active'
-        ORDER BY "createdAt" ASC
-        LIMIT 1
-        "#,
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|err| err.to_string())?;
+    let admin = UserDb::get_admin(&pool)
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "Admin account does not exist".to_string())?;
 
-    let Some((admin_id, email)) = admin else {
-        return Err("No active admin user found".to_string());
-    };
+    println!(
+        "Found Admin:\n- ID={}\n- OAuth ID={}\n- Email={}\n- Name={}",
+        admin.id, admin.oauth_id, admin.email, admin.name
+    );
 
-    let password = password.map(str::to_string);
-    let generated = password.is_none();
-    let password = password.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let admin_id = admin.id;
+    let provided = password.map(str::to_string);
+    let generated = provided.is_none();
+    let password = provided.unwrap_or_else(|| random_bytes_as_text(24));
     let hash =
         bcrypt::hash(&password, crate::constants::SALT_ROUNDS).map_err(|err| err.to_string())?;
 
@@ -243,23 +236,24 @@ async fn reset_admin_password(
     if generated {
         println!("The admin password has been updated to:\n{password}");
     } else {
-        println!("The admin password has been updated for {email}.");
+        println!("The admin password has been updated.");
     }
     Ok(())
 }
 
 async fn set_admin(settings: &EnvDto, email: &str, is_admin: bool) -> Result<(), String> {
     let pool = connect_pool(settings).await?;
-    let result = sqlx::query(r#"UPDATE "user" SET "isAdmin" = $1 WHERE email = $2"#)
+    let user = UserDb::get_by_email(&pool, email)
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "User does not exist".to_string())?;
+
+    sqlx::query(r#"UPDATE "user" SET "isAdmin" = $1 WHERE id = $2"#)
         .bind(is_admin)
-        .bind(email)
+        .bind(user.id)
         .execute(&pool)
         .await
         .map_err(|err| err.to_string())?;
-
-    if result.rows_affected() == 0 {
-        return Err(format!("User not found: {email}"));
-    }
     Ok(())
 }
 
@@ -305,25 +299,27 @@ async fn migration_status(settings: &EnvDto) -> Result<(), String> {
 }
 
 async fn set_password_login(settings: &EnvDto, enabled: bool) -> Result<(), String> {
-    let pool = connect_pool(settings).await?;
-    crate::utils::system_config::set_config_field(
-        &pool,
-        &["passwordLogin", "enabled"],
-        serde_json::json!(enabled),
-    )
-    .await
-    .map_err(|err| err.to_string())
+    set_login_config_field(settings, &["passwordLogin", "enabled"], enabled).await
 }
 
 async fn set_oauth_login(settings: &EnvDto, enabled: bool) -> Result<(), String> {
+    set_login_config_field(settings, &["oauth", "enabled"], enabled).await
+}
+
+async fn set_login_config_field(
+    settings: &EnvDto,
+    path: &[&str],
+    enabled: bool,
+) -> Result<(), String> {
     let pool = connect_pool(settings).await?;
-    crate::utils::system_config::set_config_field(
-        &pool,
-        &["oauth", "enabled"],
-        serde_json::json!(enabled),
-    )
-    .await
-    .map_err(|err| err.to_string())
+    let old_config = get_merged(&pool).await.map_err(|err| err.to_string())?;
+    crate::utils::system_config::set_config_field(&pool, path, serde_json::json!(enabled))
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let redis_url = crate::service::server_events::redis_url_from_env(settings);
+    crate::service::server_events::publish_config_update(&redis_url, Some(old_config)).await;
+    Ok(())
 }
 
 async fn change_media_location(
@@ -454,9 +450,8 @@ async fn enable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {
     };
 
     let jwt = sign_maintenance_jwt(&secret, "cli-admin").map_err(|err| err.to_string())?;
-    let host = settings.immich_host.as_deref().unwrap_or("localhost");
-    let port = settings.immich_port.unwrap_or(2283);
-    let auth_url = format!("http://{host}:{port}/maintenance?token={jwt}");
+    let base_url = maintenance_base_url(&pool).await?;
+    let auth_url = format!("{base_url}/maintenance?token={jwt}");
 
     if already_enabled {
         println!("The server is already in maintenance mode!");
@@ -469,6 +464,16 @@ async fn enable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {
     println!("\nLog in using the following URL:");
     println!("{auth_url}");
     Ok(())
+}
+
+async fn maintenance_base_url(pool: &sqlx::PgPool) -> Result<String, String> {
+    let config = get_merged(pool).await.map_err(|err| err.to_string())?;
+    let external = json_str(&config, &["server", "externalDomain"], "");
+    if external.is_empty() {
+        Ok("https://my.immich.app".to_string())
+    } else {
+        Ok(external.trim_end_matches('/').to_string())
+    }
 }
 
 async fn disable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {

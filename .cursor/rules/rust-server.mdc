@@ -40,4 +40,4 @@ rustfmt +stable --edition 2024 path/to/edited.rs
 - `IMMICH_WORKERS_INCLUDE=api`  alone → 不跑 BullMQ / HLS encoder（与 Immich 一致）
 - Windows：`fs_access` / `disk` 已可本地 `cargo check`；unix-only 测例需 `#[cfg(unix)]`
 
-完整差距见 `.cursor/docs/migration-checklist.md` §3。
+完整差距与切流清单见 `.cursor/docs/migration-checklist.md` §0 / §3（Cutover + P4）。

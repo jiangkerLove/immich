@@ -25,6 +25,11 @@ alwaysApply: true
 - 对比文件：`server/src/services/*.ts` ↔ `rust-server/src/service/`
 - 对比 worker：`server/src/enum.ts` JobName ↔ `rust-server/src/service/workers/`
 
+## 当前优先（切流，非再补 API）
+
+- 真库 `migration-status` / `schema-check` → compose + `smoke.ps1` → 维护模式重启
+- 细节见 `.cursor/docs/migration-checklist.md` §0 / §3 Cutover
+
 ## 暂缓（不要塞进普通 PR）
 
 - ML/OCR/face/duplicate **算法**重写（保留调 ML 容器即可）

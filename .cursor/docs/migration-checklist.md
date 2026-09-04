@@ -1,12 +1,24 @@
 # rust-server 迁移清单（jiangkerLove/immich）
 
 > 本文档描述本 fork 将上游 TypeScript `server/` 迁移到 `rust-server/` 的进度与规划。  
-> 目标：**尽可能对齐上游行为，后期自行维护一个可正常使用的版本**。  
+> 目标：**尽可能对齐上游行为，后期自行维护一个可正常使用的版本**（无缝切到 Rust 后端）。  
 > 集成主线：`dev-rust`（你说的 rust-dev）  
 > 上游同步：`main`
 
-最后更新：`cursor/parity-memory-admin-partner-4063`（logging / profile image / smoke script，2026-09）  
-Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
+最后更新：2026-09 全面审计（P0–P3 代码项完成；切流阻塞改为真实冒烟 / schema 锁定）  
+Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`  
+交互审计面板：Cursor canvas `rust-migration-audit`
+
+---
+
+## 0. 无缝切换结论（先看这里）
+
+| 判断 | 说明 |
+|------|------|
+| **代码面** | HTTP 全领域、66 JobName、19 队列、媒体/库/同步/搜索 API、WS、HLS、sqlx baseline、CLI — **已到位** |
+| **切流路径** | **默认单进程** + 保留 `immich-machine-learning`；overlay：`docker/docker-compose.rust.yml` |
+| **真正阻塞** | 不是缺 API，而是：**真实 compose 冒烟未跑通**、**现有库 baseline 未验证锁定**、**维护模式 AppRestart 重启链路未在你的部署上确认** |
+| **下一步** | §3 **Cutover** 三项 → §3 **P4** 实测 → 长期合上游开 `migrations/2+` |
 
 ---
 
@@ -14,18 +26,19 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 | 维度 | 上游 TS | rust-server | 评估 |
 |------|---------|-------------|------|
-| HTTP API 路由 | 41 个 controller，约 191 个端点 | 路由已注册，端点基本全覆盖 | ✅ **已完成** |
-| 领域服务 | ~50 个 NestJS service | ~80 个 Rust service 模块 | ✅ **约 90%** |
-| 数据库访问 | 55 个 repository | `models/db/` 内联 SQL（54 模块） | ✅ **已完成**（架构不同） |
+| HTTP API 路由 | ~45 个 controller（不含 spec），端点全覆盖 | ~42 个 route 模块（多域合并）+ SPA/分享页 | ✅ **已完成** |
+| 领域服务 | ~54 个 NestJS service | ~80+ Rust service（含 `media/`、`workers/`） | ✅ **约 95%+**（无孤立业务域） |
+| 数据库访问 | ~55 个 repository | `models/db/` 内联 SQL | ✅ **已完成**（架构不同） |
 | BullMQ 任务名 | 66 个 `JobName` | 66 个均有 worker 处理 | ✅ **已完成** |
-| BullMQ 队列 | 19 个 `QueueName` | 19 个均有 worker（`search` 为遗留空队列 no-op） | ✅ **已完成** |
+| BullMQ 队列 | 19 个 `QueueName` | 19 个均有 worker（`search` 遗留空队列 no-op） | ✅ **已完成** |
 | WebSocket 客户端事件 | ~15 种 | 含 `on_album_update` | ✅ **已完成** |
-| 内部事件总线 | `EventRepository` ~30 种 | `ConfigUpdate` Redis；单进程维护模式靠 DB 标志 + `process::exit` | ⚠️ **部分** |
-| 数据库迁移 | 上游 Kysely TS 链 | sqlx + `baseline_lock.json` 对标；启动自动 init/bridge/漂移检查 | ✅ **纯 Rust** |
-| 可单机部署使用 | ✓ | ✓ | ✅ **可用** |
-| 与上游完全等价 | ✓ | 仍有差距 | ⚠️ **持续对齐中** |
+| 跨进程协调 | Socket.IO serverSideEmit 等 | Redis：`ConfigUpdate` + `AppRestart` + HLS 六路 | ✅ **已完成**（够用；非 1:1 EventRepository） |
+| 数据库迁移 | 上游 Kysely TS 链 | sqlx `1_baseline` + `baseline_lock`；启动 auto init/bridge/漂移检查 | ✅ **纯 Rust** |
+| 运维 CLI | `immich-admin` 全量子命令 | `service/admin.rs`（另多 `run-migrations` / `migration-status`） | ✅ **已对齐** |
+| 可单机部署使用 | ✓ | ✓（默认单进程） | ✅ **可用** |
+| 与上游完全等价 / 真库证明 | ✓ | 冒烟与边缘未证明 | ⚠️ **切流前必测** |
 
-**结论：** 日常功能（上传、浏览、相册、人物、库、同步、搜索 API、备份、完整性检查、大部分后台任务）已可跑通；剩余工作主要是**行为细节、多进程部署、观测与边缘场景**。
+**结论：** 功能迁移主体已完成。剩余工作以 **验证与运维锁定** 为主，不是再补一批接口。
 
 ---
 
@@ -33,26 +46,27 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 ### 2.1 HTTP / 路由层
 
-- **全部 41 个 controller 领域**均有对应 `routes/` + `handlers/`
-- 额外实现：SPA 首页 `/`、分享页 SSR `/share/*`、`/s/*`
-- 主要路由文件：`rust-server/src/routes/mod.rs` 及其子模块
+- 全部业务 controller 领域均有对应 `routes/` + `handlers/`（无缺失域）
+- 额外：SPA `/`、分享 SSR `/share/*`、`/s/*`（`routes/static_web.rs`）；`maintenance_worker` 路由
+- 入口：`rust-server/src/routes/mod.rs`
 
 | 模块 | Rust 路径 | 说明 |
 |------|-----------|------|
-| 认证 / OAuth / Session / API Key | `routes/auth.rs`, `oauth.rs`, `session.rs`, `api_key.rs` | 登录、PIN、OIDC |
+| 认证 / OAuth / Session / API Key | `routes/auth.rs`, `oauth.rs`, `session.rs`, `api_key.rs` | 含 admin unlink |
 | 资产 CRUD / 批量 / 统计 | `routes/asset.rs` | |
 | 上传 / 下载 / 播放 | `routes/asset_media.rs`, `asset_file.rs` | |
-| 视频 / HLS | `routes/video_stream.rs` + `service/hls.rs` | 单进程可用 |
+| 视频 / HLS | `routes/video_stream.rs` + `service/hls.rs` | 单进程 + 分进程 Redis |
 | 相册 / 标签 / 堆栈 / 伙伴 / 共享链接 | `routes/album.rs` 等 | |
 | 人物 / 人脸 | `routes/person.rs`, `routes/face.rs` | |
-| 外部库 | `routes/library.rs` + `service/library_watcher.rs` | 含 fs watch |
-| 搜索 | `routes/search.rs` + `service/search.rs` | API 在；SQL 边缘待验 |
-| 同步 | `routes/sync.rs` + `service/sync.rs` | 体量大，实体类型齐全 |
-| 工作流 | `routes/workflow.rs` | 执行见 §3.4 |
-| 插件（读） | `routes/plugin.rs` | |
+| 外部库 | `routes/library.rs` + `library_watcher` | 含 fs watch |
+| 搜索 | `routes/search.rs` + `service/search.rs` | API 在；边缘见 P4 |
+| 同步 | `routes/sync.rs` + `service/sync.rs` | 体量大；压测见 P4 |
+| 工作流 | `routes/workflow.rs` | 执行仅 AssetV1（与上游一致） |
+| 插件（读） | `routes/plugin.rs` | 管理 API 见暂缓 |
 | 管理：用户 / 配置 / 完整性 / 备份 / 维护 | `routes/user_admin.rs` 等 | |
 | 通知 / 邮件 | `routes/notification.rs` | |
 | 任务 / 队列管理 | `routes/job.rs`, `queue.rs` | |
+| Cluster groups | `routes/cluster_group.rs` | |
 
 ### 2.2 认证与权限
 
@@ -60,256 +74,147 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 |------|------|
 | 登录 / 登出 / PIN | `service/auth.rs` |
 | OAuth / OIDC | `service/oauth.rs` |
-| Session | `service/session.rs` |
-| API Key | `service/api_key.rs` |
-| 批量资产权限（伙伴相册等） | `service/access.rs` → `filter_accessible_ids` |
-| 单资产媒体读权限（伙伴/相册/共享链接） | `require_asset_access` → 与批量路径一致走 `filter_accessible_ids` |
+| Session / API Key | `session.rs`, `api_key.rs` |
+| 批量 + 单资产媒体权限（伙伴/相册/共享） | `access.rs` → `filter_accessible_ids` / `require_asset_access` |
 | 权限枚举 | `models/db/auth_permission.rs` |
 
 ### 2.3 资产业务与媒体流水线
 
 | 功能 | Rust 模块 |
 |------|-----------|
-| 资产 CRUD / 回收站 / 时间线 | `service/asset.rs`, `timeline.rs`, `trash.rs` |
-| 上传 / 下载 | `service/asset_media.rs` |
-| 元数据提取 | `service/media/metadata_extract.rs` |
-| Live Photo / 动图后处理 | `service/media/metadata_postprocess.rs` |
-| 缩略图 / 人物缩略图 / 编辑缩略图 | `service/media/thumbnail.rs` |
-| 视频转码 | `service/media/video_encode.rs` |
-| Sidecar 读写在盘 | `service/media/sidecar.rs` |
-| 存储模板迁移 | `service/media/storage_template.rs` |
-| 文件路径迁移 | `service/media/file_migration.rs` |
-| 资产编辑 | `service/media/edits.rs` |
-| 可见性 | `service/media/visibility.rs` |
+| 资产 CRUD / 回收站 / 时间线 | `asset.rs`, `timeline.rs`, `trash.rs` |
+| 上传 / 下载 | `asset_media.rs` |
+| 元数据 / Live Photo / 缩略图 / 视频 / Sidecar / 模板 / 编辑 / 可见性 | `service/media/*` |
 
-**近期对齐（PR #7–#18 + P0 切片）：**
+近期 parity 已含：Library job 状态、路径 `R_OK`、WS `on_album_update`、ML QueueAll 关闭时 Skipped、伙伴媒体读权限等（详见历史 PR §9）。
 
-- Library job 状态 `Success` / `Skipped` / `Failed`
-- Library scan 含软删除库、`path_normalize`、路径 `R_OK`
-- Background-task：`AssetDelete` / `VersionCheck` / `UserDelete` 状态
-- Websocket：`on_new_release` 连接时推送；**`on_album_update`**（加/删相册资产、共享链接上传）
-- ML `*QueueAll` 在功能关闭时 `Skipped`
-- Integrity 扫描跳过隐藏文件
-- `LibrarySyncAssetsQueueAll` 任务名、migration 空目录清理条件
-- Sidecar `null/undefined` 变更检测、Person 迁移空路径等
-- **单资产媒体访问**：`require_asset_access` 支持伙伴 / 相册成员（不再仅 owner）
-
-### 2.4 机器学习流水线（调用 ML 服务，非算法重写）
+### 2.4 机器学习（调 ML 容器，非算法重写）
 
 | 任务 | Worker | Service |
 |------|--------|---------|
 | SmartSearch (CLIP) | `workers/smart_search.rs` | `media/smart_search.rs` |
-| 人脸检测 | `workers/face_detection.rs` | `media/face_detection.rs` |
-| 人脸识别 / 聚类 | `workers/facial_recognition.rs` | `media/facial_recognition.rs` |
-| OCR | `workers/ocr.rs` | `media/ocr.rs` |
-| 重复检测 | `workers/duplicate_detection.rs` | `media/duplicate_detection.rs` |
+| 人脸检测 / 识别 | `face_detection`, `facial_recognition` | `media/face_*` |
+| OCR / 重复检测 | `ocr`, `duplicate_detection` | `media/ocr`, `duplicate_detection` |
 | ML HTTP 客户端 | — | `service/ml.rs` |
 
-> 说明：实现的是「排队 + 调 ML 容器 + 写库」，不是重写 CLIP/OCR 模型本身。
+### 2.5–2.9 其他已完成域
 
-### 2.5 外部库（Library）
+- **Library**：CRUD、8 种任务、watch、定时扫描、Windows `fs_access`、跨平台磁盘
+- **Sync**：stream/ack、实体类型对齐、审计清理
+- **工作流 / 插件**：CRUD、AssetV1 执行、触发、Extism + host（`allowedHosts` 运行时校验）
+- **通知 / 邮件 / 社交**：notification、email、album、activity、memory、map、download
+- **运维**：system_config/metadata、version、backup、integrity（10）、maintenance + AppRestart、nightly、geodata、storage/DB bootstrap、**`immich-admin` CLI**
 
-| 功能 | 文件 |
-|------|------|
-| CRUD / 校验 / 扫描 | `service/library.rs` |
-| 8 种 library 任务 | `workers/library.rs` |
-| 文件监视 | `service/library_watcher.rs` |
-| 定时扫描 | `service/library_scheduler.rs` |
-| 读权限检查 | `utils/fs_access.rs`（unix=`R_OK`，windows=`File::open`/`read_dir`） |
-| 磁盘用量 | `utils/disk.rs`（`sysinfo::Disks`，跨平台） |
+### 2.10 后台任务（66 JobName / 19 队列）
 
-### 2.6 同步（Sync）
+均有 handler。`workers/search.rs` 仅消化遗留空队列 → `skipped`（上游亦无 `@OnJob`）。
 
-| 功能 | 文件 |
-|------|------|
-| Stream / Ack API | `service/sync.rs`（~1800 行） |
-| 各实体类型常量 | 与上游 `SyncEntityType` 对齐 |
-| 审计表清理任务 | `workers/background_task.rs` |
-| DB 查询 | `models/db/sync_repository.rs` |
-
-### 2.7 工作流与插件
-
-| 功能 | 状态 | 文件 |
-|------|------|------|
-| 工作流 CRUD / 日志 / 分享 | ✅ | `service/workflow.rs` |
-| 执行引擎 | ✅ 仅 AssetV1（与上游一致） | `service/workflow_execution.rs`, `workers/workflow.rs` |
-| 触发：AssetCreate / AssetMetadataExtracted / AssetTagged | ✅ | `service/workflow_trigger.rs` |
-| 执行日志写入 | ✅ | `models/db/workflow_log.rs` |
-| Plugin 导入 / Extism 运行时 | ✅ | `service/plugin_import.rs`, `plugin_runtime.rs` |
-| Plugin host 函数（tag / HTTP 等） | ✅ | `service/plugin_host.rs` |
-
-### 2.8 通知、邮件、社交
-
-| 功能 | 文件 |
-|------|------|
-| 用户通知 | `service/notification.rs` |
-| 邮件模板 / 发送 | `service/email.rs` |
-| 通知任务 | `workers/notifications.rs` |
-| 相册 / 活动 / 记忆 / 地图 / 下载 | 各 `service/*.rs` |
-
-### 2.9 系统 / 运维
-
-| 功能 | 文件 |
-|------|------|
-| 系统配置读写 | `service/system_config.rs` |
-| 系统元数据 | `service/system_metadata.rs` |
-| 版本检查 + 历史 + websocket | `service/version_check.rs`, `version_scheduler.rs` |
-| 数据库备份 / 恢复 | `service/database_backup.rs`, `database_backup_runner.rs` |
-| 完整性检查（10 种任务） | `service/integrity.rs`, `workers/integrity.rs` |
-| 维护模式 + maintenance worker | `service/maintenance.rs`, `maintenance_worker.rs`, `bootstrap.rs`（启动读 DB；进入后 exit） |
-| 夜间任务编排 | `service/nightly.rs`, `job.rs::queue_nightly_jobs` |
-| 地理数据导入 | `service/geodata_import.rs` |
-| 存储 / DB 引导 | `storage_bootstrap.rs`, `database_bootstrap.rs` |
-| `immich-admin` 子集 | `service/admin.rs` |
-
-### 2.10 后台任务（全部 66 个 JobName）
-
-每个上游 `JobName` 在 Rust 中都有对应 handler（按 worker 分文件）：
-
-| Worker 文件 | 负责的任务（摘要） |
-|-------------|-------------------|
-| `background_task.rs` | 清理类、VersionCheck、UserDelete、AssetDelete、MemoryGenerate 等 |
-| `thumbnail_generation.rs` | 缩略图 QueueAll / 单资产 / 人物 |
-| `metadata_extraction.rs` | 元数据提取 |
-| `video_conversion.rs` | 视频编码 |
-| `editor.rs` | 编辑缩略图 |
-| `sidecar.rs` | SidecarCheck / Write / QueueAll |
-| `face_detection.rs` | 人脸检测 |
-| `facial_recognition.rs` | 人脸识别 QueueAll |
-| `smart_search.rs` | CLIP 编码 |
-| `search.rs` | 遗留 `search` 空队列（no-op → `skipped`） |
-| `duplicate_detection.rs` | 重复检测 |
-| `ocr.rs` | OCR |
-| `library.rs` | 库扫描 / 同步 / 删除 |
-| `migration.rs` | 存储迁移 |
-| `storage_template_migration.rs` | 模板迁移 |
-| `backup_database.rs` | 数据库备份 |
-| `integrity.rs` | 完整性 10 任务 |
-| `workflow.rs` | WorkflowAssetTrigger |
-| `notifications.rs` | 通知 / 邮件 |
-
-定时调度：`nightly.rs`, `backup_scheduler.rs`, `library_scheduler.rs`, `integrity_scheduler.rs`, `version_scheduler.rs`
+定时：`nightly`, `backup_scheduler`, `library_scheduler`, `integrity_scheduler`, `version_scheduler`。
 
 ---
 
-## 3. 部分完成 / 已知差距（建议优先处理）
+## 3. 差距与待办（按切流优先级）
 
-按**对你「能正常使用」的影响**排序。
+### Cutover — 无缝切换前必做（验证 / 运维，非缺功能）
 
-### P0 — 用户可感知的功能缺口
+| # | 事项 | 说明 | 怎么做 |
+|---|------|------|--------|
+| C1 | **真实 compose 冒烟** | 单元测试不证明全链路 | `docker-compose.rust.yml` + 保留 ML；`rust-server/scripts/smoke.ps1`（登录→上传→缩略图→搜索；可选库扫描/备份） |
+| C2 | **现有库 schema 锁定** | Kysely 若 ahead of `baseline_lock` 会漂移 | `immich-admin migration-status` / `schema-check`；无 ahead 后再当生产 schema 源 |
+| C3 | **维护模式重启链路** | CLI/UI 写 DB + Redis `AppRestart` 后 `exit(0)` | 确认 compose/k8s **restart policy** 能拉起进维护或退出维护 |
 
-| # | 问题 | 上游行为 | 当前 rust | 建议改动 |
-|---|------|----------|-----------|----------|
-| ~~1~~ | ~~伙伴资产媒体访问~~ | ~~伙伴可通过媒体端点访问共享资产~~ | ✅ `require_asset_access` → `filter_accessible_ids` | 已完成 |
-| ~~2~~ | ~~缺少 `on_album_update` websocket~~ | ~~相册变更后推送~~ | ✅ `AlbumService::notify_album_update` + `emit_album_update` | 已完成 |
+> 三项通过后，可认为「日常可无缝切到 Rust 单进程后端」。
 
-> P0 两项已在本切片落地。下一优先见 P1。
+### P0 / P1 / P3 — 代码项（已完成）
 
-### P1 — 多实例 / 拆分部署
+| 优先级 | 项 | 状态 |
+|--------|-----|------|
+| P0 | 伙伴媒体访问、`on_album_update` | ✅ |
+| P1 | HLS Redis 六路、ConfigUpdate + AppRestart | ✅ |
+| P3 | search no-op、sqlx baseline、telemetry、tracing、immich-admin CLI | ✅ |
 
-| # | 问题 | 说明 | 文件 |
+### P2 — 工作流 / 插件（与上游一致或可暂缓）
+
+| # | 问题 | 说明 | 处理 |
 |---|------|------|------|
-| ~~3~~ | ~~**HLS 跨进程协调**~~ | ✅ Redis pub/sub 六路事件（对标 Socket.IO `serverSideEmit`）；单进程仍走本地 `PendingEvents` | `hls_events.rs`, `transcoding.rs`, `workers.rs` |
-| ~~4~~ | ~~**内部事件总线不完整**~~ | ✅ ConfigUpdate + AppRestart + **HLS** Redis；CLI/UI 维护模式经 AppRestart | `server_events.rs`, `hls_events.rs` |
+| 5 | 工作流仅 AssetV1 | 上游亦仅 AssetV1 | **等上游**；非缺口 |
+| ~~6~~ | AssetV1 写 null | 上游亦未实现 | 无需改 |
+| 7 | PersonRecognized 触发 | TS 已注释 | 暂缓 |
+| 8 | Plugin `allowedHosts` 管理 API | 运行时有校验，公开管理 API 无 | 暂缓 |
+| — | Plugin host 边界测试 | 加固用 | 可选，不挡切流 |
 
-### P2 — 工作流 / 插件细节
+### P4 — 代码已有，parity 未用真库证明
 
-| # | 问题 | 说明 | 文件 |
-|---|------|------|------|
-| 5 | **工作流仅执行 AssetV1** | 上游 `WorkflowType` 也仅启用 AssetV1（`AssetPersonV1` 已注释） | **与上游一致**；扩展需等上游 | `workflow_execution.rs` |
-| ~~6~~ | ~~AssetV1 字段清空~~ | 上游亦为 `TODO allow setting to null` + `?? undefined`；双方均忽略 JSON null | **无需改 Rust**；与 TS 行为一致 |
-| 7 | **PersonRecognized 触发** | TS 已注释，双方均未启用 | 可暂缓 |
-| 8 | **Plugin `allowedHosts` 管理 API** | 运行时校验有，公开管理 API 无 | 可暂缓 |
+| 领域 | 风险点 | 建议验证 |
+|------|--------|----------|
+| Search v3 | 筛选 / 游标 / 智能搜索边缘 | 对比同库 TS 结果 |
+| Sync | 全实体 backfill / ack / 多端 | 手机 + web 同步一轮 |
+| ML 流水线 | CLIP / 人脸 / OCR / 重复 QueueAll | live ML 容器跑全量 |
+| Integrity | 大库 checksum / untracked | 万级文件扫一次 |
+| 伙伴 / 共享媒体 | 权限已修，需 E2E | 伙伴账号打开共享图 |
+| 分进程 | `INCLUDE=api` + `microservices` + HLS Redis | **仅在需要拆分时测**；默认单进程可跳过 |
 
-### P3 — 运维与工程化
+### 工程小项（不挡切流）
 
-| # | 问题 | 说明 | 文件 |
-|---|------|------|------|
-| ~~9~~ | ~~`search` 队列无 worker~~ | ✅ 已加 no-op worker（上游亦无 `@OnJob`，仅空 Worker） | `workers/search.rs` |
-| ~~10~~ | ~~数据库迁移依赖 Node~~ | ✅ 单一 sqlx `1_baseline`（融合当前全部 Kysely）+ `baseline_lock`；**锁定后再**用 `2+` 追上游 | `migrations/`, `database_migrations.rs` |
-| ~~11~~ | ~~Telemetry Io/Repo 指标~~ | ✅ `repo`：sqlx pool gauges；`io`：Redis PING + publish 命令计数/耗时 | `utils/telemetry.rs`, `repo_metrics.rs`, `io_metrics.rs` |
-| ~~12~~ | ~~结构化日志~~ | ✅ `tracing` + Immich level reload（`utils/logging.rs`）；bootstrap/server_events/hls_events 已切换 | `logging.rs`, `bootstrap.rs` |
-| 13 | **`immich-admin` CLI** | 只移植了常用子命令 | `service/admin.rs` |
-
-### P4 — 需实测验证（代码已有，parity 未证明）
-
-| 领域 | 建议验证方式 |
-|------|--------------|
-| Search v3 筛选 / 游标 | 对比 `search.service.ts` 与真实库查询结果 |
-| Sync 全实体 backfill | 多端同步压测 |
-| ML 流水线 | 接 live `machine-learning` 容器跑 QueueAll |
-| Integrity 大库 | 万级文件 checksum / untracked |
-| 拆分 worker | `IMMICH_WORKER_INCLUDE=api` + `microservices` 分开跑 |
+| 项 | 说明 |
+|----|------|
+| 其余 `println!` → `tracing` | 逐步替换 |
+| checklist / 规则文档 | 随审计已更新；之后改代码时同步勾选 |
 
 ---
 
-## 4. 明确暂缓（非阻塞「能用」）
-
-以下在 `AGENTS.md` 中标记为**不要塞进普通 PR** 的大块工作：
+## 4. 明确暂缓（不要塞进普通 PR）
 
 | 项 | 原因 |
 |----|------|
-| ML/OCR/face/duplicate **算法**重写 | 仍调用上游 ML 服务即可 |
-| Search v3 **大规模** SQL 重写 | API 已有，边缘对齐即可 |
-| Sync **协议级**重写 | `sync.rs` 已很大，优先修 bug |
-| Public plugin `allowedHosts` API | 管理面向，非核心路径 |
-| EXIF 自动打标 → AssetTagged | 手动 tag API 已可用 |
-| PersonRecognized workflow | 上游也注释掉了 |
+| ML/OCR/face/duplicate **算法**重写 | 继续调上游 ML 服务 |
+| Search v3 **大规模** SQL / Sync **协议级**重写 | API 已有；优先修实测 bug |
+| Public plugin `allowedHosts` API | 非核心；TS 亦无独立管理端点 |
+| EXIF 自动打标 → AssetTagged | 手动 tag API 已可用；上游亦弱 |
+| PersonRecognized / AssetPersonV1 | 上游关闭 |
+| Nest `EventRepository` 全量复刻 | 直调 + Redis 少量频道已够 |
 
 ---
 
-## 5. WebSocket 事件对照
+## 5. WebSocket / 跨进程事件对照
 
 | 事件 | TS | Rust | 状态 |
 |------|----|------|------|
-| `on_upload_success` | ✓ | ✓ | ✅ |
-| `on_asset_delete/trash/update/hidden/restore` | ✓ | ✓ | ✅ |
-| `on_asset_stack_update` | ✓ | ✓ | ✅ |
-| `on_user_delete` | ✓ | ✓ | ✅ |
-| `on_session_delete` | ✓ | ✓（500ms 延迟） | ✅ |
-| `on_notification` | ✓ | ✓ | ✅ |
-| `on_person_thumbnail` | ✓ | ✓ | ✅ |
-| `on_config_update` | ✓ | ✓ | ✅ |
+| `on_upload_success` 及资产删/废/更/隐/恢 | ✓ | ✓ | ✅ |
+| `on_asset_stack_update` / `on_user_delete` / `on_session_delete` | ✓ | ✓ | ✅ |
+| `on_notification` / `on_person_thumbnail` / `on_config_update` | ✓ | ✓ | ✅ |
 | `on_server_version` / `on_new_release` | ✓ | ✓ | ✅ |
-| `AssetUploadReadyV2` / `AssetEditReadyV2` | ✓ | ✓ | ✅ |
-| `AppRestartV1` | ✓ | ✓ | ✅ |
+| `AssetUploadReadyV2` / `AssetEditReadyV2` / `AppRestartV1` | ✓ | ✓ | ✅ |
 | **`on_album_update`** | ✓ | ✓ | ✅ |
-| HLS server events（跨进程） | ✓ | 进程内 only | ⚠️ 单进程 OK；分进程见 §6 B-5 |
+| HLS server events（跨进程） | ✓ | ✓ Redis 六路；单进程本地 `PendingEvents` | ✅ |
 
 ---
 
-## 6. 推荐路线图（自行维护 fork 时）
+## 6. 推荐路线图（无缝切流）
 
-### 阶段 A —「日常能用」加固（1–2 个 PR 批次）
+### 阶段 A — 切流证明（当前最高优先）
 
-1. ~~修复伙伴/共享链接的**单资产媒体访问**（P0-1）~~ ✅
-2. ~~补上 **`on_album_update`**（P0-2）~~ ✅
-3. 用真实数据跑一遍：上传 → 元数据 → 缩略图 → 搜索 → 同步  
-   - 脚本：`rust-server/scripts/smoke.ps1`（需 `IMMICH_URL` / `IMMICH_EMAIL` / `IMMICH_PASSWORD`）
+1. ~~P0 伙伴媒体 + `on_album_update`~~ ✅  
+2. **C2** 目标库：`migration-status` / `schema-check`，确认无 `kysely_ahead_of_lock`  
+3. **C1** 叠 `docker-compose.rust.yml`，保留 ML，跑 `smoke.ps1`  
+4. **C3** 验证维护模式进入/退出后进程自动重启  
 
-### 阶段 B — 部署模型清晰化
+### 阶段 B — 部署模型
 
-4. **单进程部署（推荐默认）** ✅  
-   - 默认同时跑 API + 全部 BullMQ workers（未设 `IMMICH_WORKERS_INCLUDE=api` 单独拆分时）  
-   - HLS 实时转码在同一进程的 `HlsEngine`（`PendingEvents`），**无需** Redis/Socket 跨进程协调  
-   - 跨进程 `server_events`：`ConfigUpdate` + **`AppRestart`**（CLI/UI 维护模式切换）  
-   - **维护模式**：启动读 `system_metadata.maintenance-mode`；UI/CLI 进入或退出后发 Redis `AppRestart` 并 `process::exit(0)`，由进程管理器重启进对应 worker  
-5. 若要 **API / worker 分离**：✅ HLS Redis pub/sub（P1-3）；用 `IMMICH_WORKERS_INCLUDE=api` + 另一进程 `INCLUDE=microservices`，共享 PG/Redis/存储
+5. **单进程（推荐默认）** ✅ — API + workers + HLS 同进程  
+6. 可选：`IMMICH_WORKERS_INCLUDE=api` + `microservices`（HLS Redis 已就绪，需实测）  
 
-### 阶段 C — 工作流与插件
+### 阶段 C — 工作流 / 插件
 
-6. ~~AssetV1 null 清空（P2-6）~~ — 上游未实现，已从待办移除  
-7. ~~扩展 workflow 类型（P2-5）~~ — 上游亦仅 AssetV1，暂无缺口  
-8. Plugin host 边界测试
+7. ~~AssetV1 null / 扩展类型~~ — 上游无缺口  
+8. 可选：Plugin host 边界测试  
 
-### 阶段 D — 工程与长期维护
+### 阶段 D — 长期维护
 
-9. ~~`search` 队列 no-op worker（P3-9）~~ ✅  
-9b. ~~Windows `fs_access` / 跨平台磁盘用量~~ ✅（`sysinfo`，不再依赖 `df`）  
-10. ~~Kysely 迁移纯 Rust 化（P3-10）~~ ✅ — 单一 `1_baseline.sql` + `baseline_lock`（当前含 ClusterGroups 等全部已入库 Kysely）；**baseline 锁定投入使用后**，合上游再开 `migrations/2+`  
-11. ~~补全 telemetry Io/Repo（P3-11）~~ ✅ — `repo` pool gauges + `io` Redis ping/publish  
-12. ~~结构化日志（P3-12）~~ ✅ 基础已落地；其余 `println!` 可逐步替换  
-13. 定期 `main` → `dev-rust`：看 cargo warning / `immich-admin migration-status` 的 `kysely_ahead_of_lock`
+9. ~~P3 工程项（search no-op / baseline / telemetry / logging / CLI）~~ ✅  
+10. P4 真库验证（Search / Sync / ML / Integrity）  
+11. 定期 `main` → `dev-rust`；baseline 锁定后有 Kysely 增量再写 `migrations/2+`  
+12. 逐步 `println!` → `tracing`  
 
 ---
 
@@ -319,14 +224,16 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 # 同步分支
 git fetch origin main dev-rust
 
-# 测试
+# 单元测试
 cd rust-server && cargo +stable test --offline --lib
 
-# 发布前冒烟（按你的 compose 调整）
+# 切流前（按你的 compose）
+# docker compose -f docker-compose.yml -f docker/docker-compose.rust.yml up -d
+# rust-server immich-admin migration-status
+# rust-server immich-admin schema-check
 # $env:IMMICH_URL="http://127.0.0.1:2283"
 # $env:IMMICH_EMAIL="..."; $env:IMMICH_PASSWORD="..."
 # .\rust-server\scripts\smoke.ps1
-# - 登录 / 上传 / 缩略图 / 搜索 / 外部库扫描 / 备份 / 完整性
 ```
 
 | 操作 | 分支 |
@@ -335,7 +242,7 @@ cd rust-server && cargo +stable test --offline --lib
 | rust 功能开发 | 从 `dev-rust` 拉 `cursor/<name>-4063` |
 | 合并 rust 功能 | PR → `dev-rust`，删 `cursor/*` |
 
-详见根目录 **`AGENTS.md`**（Agent 工作流 + 批量合并节奏）。
+详见根目录 **`AGENTS.md`**。
 
 ---
 
@@ -343,41 +250,36 @@ cd rust-server && cargo +stable test --offline --lib
 
 | 关注点 | TypeScript | Rust |
 |--------|------------|------|
-| 入口 / Worker | `server/src/main.ts`, `workers/*.ts` | `rust-server/src/main.rs`, `service/bootstrap.rs` |
+| 入口 / Worker | `server/src/main.ts`, `workers/*.ts` | `main.rs`, `service/bootstrap.rs` |
 | 路由 | `server/src/controllers/` | `rust-server/src/routes/` |
-| 任务枚举 | `server/src/enum.ts` | `rust-server/src/service/job.rs` |
-| Worker 注册 | `@OnJob` | `rust-server/src/service/workers/mod.rs` |
-| 媒体流水线 | `services/media.service.ts`, `metadata.service.ts` | `rust-server/src/service/media/` |
-| 同步 | `services/sync.service.ts` | `rust-server/src/service/sync.rs` |
-| 搜索 | `services/search.service.ts` | `rust-server/src/service/search.rs` |
-| 工作流执行 | `services/workflow-execution.service.ts` | `rust-server/src/service/workflow_execution.rs` |
-| WebSocket | `repositories/websocket.repository.ts` | `rust-server/src/service/websocket.rs` |
-| 权限 | `repositories/access.repository.ts` | `rust-server/src/service/access.rs` |
+| 任务枚举 / Worker | `enum.ts` / `@OnJob` | `service/job.rs` / `workers/mod.rs` |
+| 媒体流水线 | `media.service.ts`, `metadata.service.ts` | `service/media/` |
+| 同步 / 搜索 | `sync.service.ts`, `search.service.ts` | `sync.rs`, `search.rs` |
+| 工作流 | `workflow-execution.service.ts` | `workflow_execution.rs` |
+| WebSocket / 权限 | `websocket.repository.ts`, `access.repository.ts` | `websocket.rs`, `access.rs` |
+| 跨进程事件 | Socket.IO / EventRepository | `server_events.rs`, `hls_events.rs` |
+| CLI | `commands/*`, `cli.service.ts` | `service/admin.rs` |
+| 切流 compose | — | `docker/docker-compose.rust.yml` |
 
 ---
 
-## 9. 已合并 PR 摘要（本 fork）
+## 9. 已合并 PR / 切片摘要（本 fork）
 
-| PR | 内容 |
-|----|------|
-| #7–#9 | 早期 server parity、sync-main → dev-rust |
-| #11–#16 | Workflow 日志、plugin host、library/background 任务状态、R_OK、scan queue |
-| #17 | sync-main 全部合入 `dev-rust` |
-| #18 | Websocket 版本、UserDelete、ML QueueAll、Sidecar、integrity、dedup 等批量 parity |
-| （P0 切片） | `require_asset_access` 伙伴/相册读权限；`on_album_update` websocket + 共享链接上传通知 |
-| （本切片） | search/Windows/维护；**sqlx baseline + baseline_lock 对标**；启动自动 migrate/bridge/漂移检查；`migration-status` |
-| （续） | 将树内已有 Kysely（含 ClusterGroups）折回 **单一** `1_baseline`；去掉 `init.sql` / 误开的 `2_` |
-| （续） | CLI/UI 维护：`immich:server:AppRestart` Redis；JWT `/maintenance?token=` 登录 URL |
-| （续） | Telemetry `repo`/`io`：DB pool gauges + Redis ping/publish metrics |
-| （本切片） | MemoryGenerate 阻塞锁；force-delete→AssetEmptyTrash；duplicate 尊重 trash.enabled；相册共享链接 AlbumShare(editor)；notification 访问错误；admin 重置密码默认清 session；Windows 路径分隔符 |
-| （续） | EXIF/tags `lockedProperties` append；UserAdmin force→`UserDelete`（WS 改由 job）；ClusterGroupRequest 通知+WS；download `archiveName` Content-Disposition |
-| （P1） | HLS Redis 六路跨进程协调；`INCLUDE=api` 不再误开 microservices；单进程仍本地 PendingEvents |
-| （续） | 结构化日志 `tracing`；头像缩略图流水线 + FileDelete；`scripts/smoke.ps1` 冒烟 |
+| 批次 | 内容 |
+|------|------|
+| #7–#18 | 早期 parity、sync-main、workflow/plugin、library/WS/ML/sidecar/integrity 等 |
+| P0 | 伙伴/相册媒体权限；`on_album_update` |
+| sqlx | 单一 `1_baseline` + `baseline_lock`；去掉 `init.sql`；`migration-status` |
+| 维护 | Redis `AppRestart`；JWT `/maintenance?token=` |
+| P1 | HLS Redis；`INCLUDE=api` 不再误开 microservices |
+| 运维 | telemetry `repo`/`io`；tracing；头像缩略图；`smoke.ps1` |
+| P3 | `immich-admin` CLI 行为对齐（list-users / reset / grant / externalDomain / ConfigUpdate） |
+| 其他 parity | MemoryGenerate 锁、trash/duplicate、ClusterGroup、download Content-Disposition、lockedProperties 等 |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API/任务/迁移均在 Rust；默认单进程可用；HLS 可分进程；结构化日志基础；头像缩略图；冒烟脚本已备。  
-**还差：** 对真实 compose 跑通 smoke；其余 `println!` 逐步替换；合上游后再开 `2+`。  
-**策略：** 按本文 §6 分阶段做小 PR；分进程时 `INCLUDE=api` + `INCLUDE=microservices` 并共享存储。
+**现在：** API / 66 Job / 迁移 / HLS 分进程 / CLI / 日志指标均在 Rust；**默认单进程即可替换 Node server（代码层面）。**  
+**还差（切流）：** 真库 `migration-status` → compose + `smoke.ps1` → 维护模式重启确认 →（可选）P4 深度实测。  
+**策略：** 单进程 + ML sidecar 先切；合上游后开 `2+`；大块算法/协议重写继续暂缓。
