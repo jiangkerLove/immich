@@ -1,0 +1,7 @@
+#
+# Moved: see ../rust-server/docker-compose.overlay.yml
+#
+#   cd ../rust-server
+#   docker compose -f ../docker/docker-compose.yml -f docker-compose.overlay.yml --env-file ../docker/.env up -d --build
+include:
+  - path: ../rust-server/docker-compose.overlay.yml

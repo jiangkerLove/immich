@@ -3,10 +3,16 @@
 FROM rust:1.85-bookworm AS rust-builder
 
 WORKDIR /build/rust-server
-COPY rust-server/Cargo.toml rust-server/Cargo.lock rust-server/build.rs ./
+COPY rust-server/Cargo.toml rust-server/build.rs ./
+# Lockfile is optional in the git tree; generate when missing.
+COPY rust-server/Cargo.lock* ./
 COPY rust-server/src ./src
+COPY rust-server/migrations ./migrations
+COPY rust-server/schema ./schema
+COPY rust-server/config ./config
 COPY server/src/schema/migrations /build/server/src/schema/migrations
-RUN cargo build --release
+RUN if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi \
+  && cargo build --release
 
 FROM ghcr.io/immich-app/base-server-dev:202606161235@sha256:9f88b07acc8b7bf37a1dd3d5a19193f664443eaaab4e08e9f9341414c5e4b23f AS node-builder
 
@@ -58,7 +64,10 @@ ENV NODE_ENV=production \
   NVIDIA_DRIVER_CAPABILITIES=all \
   NVIDIA_VISIBLE_DEVICES=all \
   IMMICH_SERVER_PATH=/usr/src/app/server \
-  IMMICH_WEB_ROOT=/build/www
+  IMMICH_WEB_ROOT=/build/www \
+  DB_HOSTNAME=database \
+  REDIS_HOSTNAME=redis \
+  IMMICH_MEDIA_LOCATION=/data
 
 COPY --from=server-builder /output/server-pruned ./server
 COPY --from=web-builder /usr/src/app/web/build /build/www

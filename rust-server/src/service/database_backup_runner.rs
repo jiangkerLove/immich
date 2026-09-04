@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression;
 use sqlx::PgPool;
 use tokio::task::spawn_blocking;
 
@@ -144,9 +144,8 @@ impl DatabaseBackupRunner {
         mut progress_cb: impl FnMut(f64) + Send + 'static,
     ) -> Result<(), BackupRunnerError> {
         let pg_version = self.postgres_version().await?;
-        let major = parse_postgres_major(&pg_version).ok_or_else(|| {
-            BackupRunnerError::UnsupportedPostgres(pg_version.clone())
-        })?;
+        let major = parse_postgres_major(&pg_version)
+            .ok_or_else(|| BackupRunnerError::UnsupportedPostgres(pg_version.clone()))?;
         let psql = resolve_pg_binary("psql", major);
         let args = self.psql_args(!is_pg_cluster_dump);
         let password = self.env.db_password.clone();
@@ -179,9 +178,8 @@ impl DatabaseBackupRunner {
 
     async fn create_backup(&self, filename_prefix: &str) -> Result<String, BackupRunnerError> {
         let pg_version = self.postgres_version().await?;
-        let major = parse_postgres_major(&pg_version).ok_or_else(|| {
-            BackupRunnerError::UnsupportedPostgres(pg_version.clone())
-        })?;
+        let major = parse_postgres_major(&pg_version)
+            .ok_or_else(|| BackupRunnerError::UnsupportedPostgres(pg_version.clone()))?;
         if !(14..=18).contains(&major) {
             return Err(BackupRunnerError::UnsupportedPostgres(pg_version));
         }
@@ -191,10 +189,7 @@ impl DatabaseBackupRunner {
         let password = self.env.db_password.clone();
 
         let version = ServerService::version();
-        let server_version = format!(
-            "v{}.{}.{}",
-            version.major, version.minor, version.patch
-        );
+        let server_version = format!("v{}.{}.{}", version.major, version.minor, version.patch);
         let timestamp = chrono::Local::now().format("%Y%m%dT%H%M%S");
         let pg_short = pg_version.split_whitespace().nth(1).unwrap_or("unknown");
         let filename = format!(
@@ -210,11 +205,10 @@ impl DatabaseBackupRunner {
 
         let dump_bin = pg_dump.clone();
         let temp = temp_path.clone();
-        let run_result = spawn_blocking(move || {
-            run_pg_dump_gzip(&dump_bin, &args, &password, &temp)
-        })
-        .await
-        .map_err(|err| BackupRunnerError::Process(err.to_string()))?;
+        let run_result =
+            spawn_blocking(move || run_pg_dump_gzip(&dump_bin, &args, &password, &temp))
+                .await
+                .map_err(|err| BackupRunnerError::Process(err.to_string()))?;
 
         if let Err(err) = run_result {
             let _ = std::fs::remove_file(&temp_path);
@@ -297,7 +291,7 @@ impl DatabaseBackupRunner {
             "--username".into(),
             self.env.db_username.clone(),
             "--host".into(),
-            self.env.db_url.clone(),
+            self.env.database_host().to_string(),
             "--port".into(),
             self.env.db_port.to_string(),
             "--clean".into(),
@@ -311,7 +305,7 @@ impl DatabaseBackupRunner {
             "--username".into(),
             self.env.db_username.clone(),
             "--host".into(),
-            self.env.db_url.clone(),
+            self.env.database_host().to_string(),
             "--port".into(),
             self.env.db_port.to_string(),
             "--dbname".into(),
@@ -378,15 +372,13 @@ where
         .write_all(preamble.as_bytes())
         .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
 
-    let file = std::fs::File::open(backup_path)
-        .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+    let file =
+        std::fs::File::open(backup_path).map_err(|err| BackupRunnerError::Io(err.to_string()))?;
     let mut reader: Box<dyn Read> = if backup_path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
-        || backup_path
-            .to_string_lossy()
-            .ends_with(".sql.gz")
+        || backup_path.to_string_lossy().ends_with(".sql.gz")
     {
         Box::new(GzDecoder::new(file))
     } else {
@@ -457,8 +449,8 @@ fn run_pg_dump_gzip(
         .take()
         .ok_or_else(|| BackupRunnerError::Process("pg_dump stdout unavailable".into()))?;
 
-    let file = std::fs::File::create(output_path)
-        .map_err(|err| BackupRunnerError::Io(err.to_string()))?;
+    let file =
+        std::fs::File::create(output_path).map_err(|err| BackupRunnerError::Io(err.to_string()))?;
     let mut encoder = GzEncoder::new(file, Compression::default());
 
     let copy_result = std::io::copy(&mut stdout, &mut encoder);

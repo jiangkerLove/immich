@@ -155,14 +155,7 @@ pub async fn resolve_server_mode(settings: &EnvDto, argv_mode: Option<&str>) -> 
 
 /// Read `system_metadata.maintenance-mode` without a full AppState bootstrap.
 async fn db_is_maintenance_mode(settings: &EnvDto) -> Result<bool, String> {
-    let db_connection_str = format!(
-        "postgres://{}:{}@{}:{}/{}",
-        settings.db_username,
-        settings.db_password,
-        settings.db_url,
-        settings.db_port,
-        settings.db_database_name,
-    );
+    let db_connection_str = settings.postgres_connection_string();
 
     let pool = PgPoolOptions::new()
         .max_connections(1)

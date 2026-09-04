@@ -16,7 +16,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | 判断 | 说明 |
 |------|------|
 | **代码面** | HTTP 全领域、66 JobName、19 队列、媒体/库/同步/搜索 API、WS、HLS、sqlx baseline、CLI — **已到位** |
-| **切流路径** | **默认单进程** + 保留 `immich-machine-learning`；overlay：`docker/docker-compose.rust.yml` |
+| **切流路径** | **Docker 一键**：`cd rust-server && docker compose up -d --build`（`docker-compose.yml`：web+API+PG+Redis+ML）；overlay 用 `docker-compose.overlay.yml`。说明见 `rust-server/README.docker.md` |
 | **真正阻塞** | 不是缺 API，而是：**真实 compose 冒烟未跑通**、**现有库 baseline 未验证锁定**、**维护模式 AppRestart 重启链路未在你的部署上确认** |
 | **下一步** | **仅剩 Cutover（需本机 compose/DB）**：C2 → C1 → C3；可选 P4。代码侧可迁移项已清空。 |
 
@@ -119,7 +119,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 
 | # | 事项 | 说明 | 怎么做 |
 |---|------|------|--------|
-| C1 | **真实 compose 冒烟** | 单元测试不证明全链路 | `docker-compose.rust.yml` + 保留 ML；`rust-server/scripts/smoke.ps1`（登录→上传→缩略图→搜索；可选库扫描/备份） |
+| C1 | **真实 compose 冒烟** | 单元测试不证明全链路 | `cd rust-server && docker compose up -d --build`；`rust-server/scripts/smoke.ps1`（登录→上传→缩略图→搜索；可选库扫描/备份） |
 | C2 | **现有库 schema 锁定** | Kysely 若 ahead of `baseline_lock` 会漂移 | `immich-admin migration-status` / `schema-check`；无 ahead 后再当生产 schema 源 |
 | C3 | **维护模式重启链路** | CLI/UI 写 DB + Redis `AppRestart` 后 `exit(0)` | 确认 compose/k8s **restart policy** 能拉起进维护或退出维护 |
 
@@ -197,7 +197,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 
 1. ~~P0 伙伴媒体 + `on_album_update`~~ ✅  
 2. **C2** 目标库：`migration-status` / `schema-check`，确认无 `kysely_ahead_of_lock`  
-3. **C1** 叠 `docker-compose.rust.yml`，保留 ML，跑 `smoke.ps1`  
+3. **C1** `cd rust-server && docker compose up -d --build`，跑 `smoke.ps1`  
 4. **C3** 验证维护模式进入/退出后进程自动重启  
 
 ### 阶段 B — 部署模型
@@ -230,7 +230,8 @@ git fetch origin main dev-rust
 cd rust-server && cargo +stable test --offline --lib
 
 # 切流前（按你的 compose）
-# docker compose -f docker-compose.yml -f docker/docker-compose.rust.yml up -d
+# cd rust-server && docker compose up -d --build
+# # or overlay: docker compose -f ../docker/docker-compose.yml -f docker-compose.overlay.yml up -d --build
 # rust-server immich-admin migration-status
 # rust-server immich-admin schema-check
 # $env:IMMICH_URL="http://127.0.0.1:2283"
@@ -261,7 +262,7 @@ cd rust-server && cargo +stable test --offline --lib
 | WebSocket / 权限 | `websocket.repository.ts`, `access.repository.ts` | `websocket.rs`, `access.rs` |
 | 跨进程事件 | Socket.IO / EventRepository | `server_events.rs`, `hls_events.rs` |
 | CLI | `commands/*`, `cli.service.ts` | `service/admin.rs` |
-| 切流 compose | — | `docker/docker-compose.rust.yml` |
+| 切流 compose | — | `rust-server/docker-compose.yml`（全栈） |
 
 ---
 

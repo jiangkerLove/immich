@@ -1,0 +1,7 @@
+#
+# Alias → rust-server all-in-one stack
+#
+# Prefer:
+#   cd ../rust-server && docker compose up -d --build
+include:
+  - path: ../rust-server/docker-compose.yml

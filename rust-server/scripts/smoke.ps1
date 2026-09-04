@@ -1,7 +1,7 @@
 # Immich rust-server smoke test
 #
 # Prerequisites: rust-server running (e.g. docker compose -f docker/docker-compose.yml
-#   -f docker/docker-compose.rust.yml up -d), plus a local image file.
+#   cd rust-server; docker compose up -d --build), plus a local image file.
 #
 # Usage:
 #   $env:IMMICH_URL = "http://127.0.0.1:2283"

@@ -1,0 +1,81 @@
+#
+# Immich rust-server — all-in-one (web + API + workers + Postgres + Redis + ML)
+#
+# From this directory:
+#   cp example.env .env
+#   docker compose up -d --build
+#
+# UI / API: http://localhost:2283
+# Postgres is Immich's vectorchord image (required). Do not swap for plain postgres.
+#
+# Overlay on stock Immich compose (docker/):
+#   docker compose -f ../docker/docker-compose.yml -f docker-compose.overlay.yml up -d --build
+
+name: immich
+
+services:
+  immich-server:
+    container_name: immich_server
+    build:
+      context: ..
+      dockerfile: rust-server/Dockerfile
+    image: immich-rust-server:local
+    command: ['rust-server']
+    volumes:
+      - ${UPLOAD_LOCATION}:/data
+      - /etc/localtime:/etc/localtime:ro
+      - ../packages/plugin-core:/build/plugins/immich-plugin-core:ro
+    env_file:
+      - .env
+    environment:
+      DB_HOSTNAME: database
+      REDIS_HOSTNAME: redis
+      IMMICH_MEDIA_LOCATION: /data
+      IMMICH_SERVER_PATH: /usr/src/app/server
+      IMMICH_WEB_ROOT: /build/www
+      IMMICH_CORE_PLUGIN: /build/plugins/immich-plugin-core
+    ports:
+      - '2283:2283'
+    depends_on:
+      - redis
+      - database
+    restart: always
+    healthcheck:
+      disable: false
+
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    # Official ML image; independent of the local rust image tag.
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_ML_VERSION:-release}
+    volumes:
+      - model-cache:/cache
+    env_file:
+      - .env
+    restart: always
+    healthcheck:
+      disable: false
+
+  redis:
+    container_name: immich_redis
+    image: docker.io/valkey/valkey:9@sha256:70739f85ad2ee01a726a965584a0f94895f01b0c60b3cc8b0aeef11eaa6888cf
+    healthcheck:
+      test: redis-cli ping | grep -q PONG || exit 1
+    restart: always
+
+  database:
+    container_name: immich_postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_DB: ${DB_DATABASE_NAME}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
+    shm_size: 128mb
+    restart: always
+    healthcheck:
+      disable: false
+
+volumes:
+  model-cache:

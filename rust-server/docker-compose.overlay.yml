@@ -1,0 +1,35 @@
+#
+# Overlay: replace Node immich-server with locally built rust-server,
+# keeping stock docker/docker-compose.yml (postgres / redis / ML).
+#
+#   cd rust-server
+#   docker compose -f ../docker/docker-compose.yml -f docker-compose.overlay.yml --env-file ../docker/.env up -d --build
+#
+# Prefer the all-in-one file in this directory for a fresh deploy:
+#   docker compose up -d --build
+
+name: immich
+
+services:
+  immich-server:
+    container_name: immich_server
+    build:
+      context: ..
+      dockerfile: rust-server/Dockerfile
+    image: immich-rust-server:local
+    command: ['rust-server']
+    environment:
+      DB_HOSTNAME: ${DB_HOSTNAME:-database}
+      REDIS_HOSTNAME: ${REDIS_HOSTNAME:-redis}
+      IMMICH_MEDIA_LOCATION: /data
+      IMMICH_SERVER_PATH: /usr/src/app/server
+      IMMICH_WEB_ROOT: /build/www
+      IMMICH_CORE_PLUGIN: /build/plugins/immich-plugin-core
+    volumes:
+      - ../packages/plugin-core:/build/plugins/immich-plugin-core:ro
+    depends_on:
+      database:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: always

@@ -34,10 +34,13 @@ pub struct EnvDto {
     pub immich_workers_exclude: Option<String>,
 
     pub db_database_name: String,
+    /// Immich compose default host is `database` (Docker service name).
     pub db_hostname: String,
     pub db_password: String,
     pub db_port: u16,
     pub db_ssl_mode: Option<DatabaseSslMode>,
+    /// Immich semantics: full `postgres://…` URL **or** empty.
+    /// This fork also accepts a bare hostname here for back-compat.
     pub db_url: String,
     pub db_username: String,
     pub db_vector_extension: Option<DbVectorExtension>,
@@ -60,6 +63,38 @@ pub struct EnvDto {
     pub immich_plugins_install_folder: Option<String>,
 
     pub no_color: Option<String>,
+}
+
+impl EnvDto {
+    /// Host for `psql`/`pg_dump` and for building a parts-style URL.
+    /// Matches Immich: prefer `DB_HOSTNAME` (default `database`); bare `DB_URL` is a legacy host alias.
+    pub fn database_host(&self) -> &str {
+        let url = self.db_url.trim();
+        if url.is_empty() {
+            return self.db_hostname.as_str();
+        }
+        if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            return self.db_hostname.as_str();
+        }
+        // Bare host previously documented as DB_URL=192.168.x.x
+        url
+    }
+
+    /// Connection string for sqlx. Immich: `DB_URL` as full URL overrides parts.
+    pub fn postgres_connection_string(&self) -> String {
+        let url = self.db_url.trim();
+        if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            return url.to_string();
+        }
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.db_username,
+            self.db_password,
+            self.database_host(),
+            self.db_port,
+            self.db_database_name,
+        )
+    }
 }
 
 impl Default for EnvDto {
@@ -99,7 +134,8 @@ impl Default for EnvDto {
             db_password: "postgres".into(),
             db_port: 5432,
             db_ssl_mode: None,
-            db_url: "localhost".into(),
+            // Empty → use DB_HOSTNAME (Immich compose: `database`)
+            db_url: String::new(),
             db_username: "postgres".into(),
             db_vector_extension: None,
             db_skip_migrations: None,
@@ -158,4 +194,37 @@ pub enum DbVectorExtension {
     PgvectoRs,
     #[serde(rename = "vectorchord")]
     VectorChord,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_default_uses_database_hostname() {
+        let env = EnvDto::default();
+        assert_eq!(env.database_host(), "database");
+        assert!(env.postgres_connection_string().contains("@database:5432/"));
+    }
+
+    #[test]
+    fn bare_db_url_overrides_host() {
+        let mut env = EnvDto::default();
+        env.db_url = "192.168.1.10".into();
+        assert_eq!(env.database_host(), "192.168.1.10");
+        assert!(
+            env.postgres_connection_string()
+                .contains("@192.168.1.10:5432/")
+        );
+    }
+
+    #[test]
+    fn full_db_url_used_as_connection_string() {
+        let mut env = EnvDto::default();
+        env.db_url = "postgres://u:p@dbhost:5433/immich".into();
+        assert_eq!(
+            env.postgres_connection_string(),
+            "postgres://u:p@dbhost:5433/immich"
+        );
+    }
 }

@@ -8,6 +8,9 @@
 
 docker/upload
 docker/library
+docker/postgres
+rust-server/library
+rust-server/postgres
 uploads
 coverage
 

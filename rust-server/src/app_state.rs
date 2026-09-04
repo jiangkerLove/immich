@@ -199,14 +199,7 @@ impl AppState {
             .await
             .expect("failed to connect to redis");
 
-        let db_connection_str = format!(
-            "postgres://{}:{}@{}:{}/{}",
-            settings.db_username,
-            settings.db_password,
-            settings.db_url,
-            settings.db_port,
-            settings.db_database_name,
-        );
+        let db_connection_str = settings.postgres_connection_string();
 
         let sql_pool = PgPoolOptions::new()
             .max_connections(20)
@@ -224,10 +217,14 @@ impl AppState {
         {
             panic!(
                 "Database bootstrap failed: {err}\n\
-                 Connected to postgres://{}:***@{}:{}/{} — Immich needs the official vector image \
+                 Connected via {} — Immich needs the official vector image \
                  (e.g. ghcr.io/immich-app/postgres:*-vectorchord*), not plain PostgreSQL. \
                  Verify with: SELECT name FROM pg_available_extensions WHERE name IN ('vchord','vector','vectors');",
-                settings.db_username, settings.db_url, settings.db_port, settings.db_database_name
+                settings.postgres_connection_string().replacen(
+                    &format!(":{}@", settings.db_password),
+                    ":***@",
+                    1,
+                )
             );
         }
 
@@ -340,14 +337,7 @@ impl AppState {
             .await
             .expect("failed to connect to redis");
 
-        let db_connection_str = format!(
-            "postgres://{}:{}@{}:{}/{}",
-            settings.db_username,
-            settings.db_password,
-            settings.db_url,
-            settings.db_port,
-            settings.db_database_name,
-        );
+        let db_connection_str = settings.postgres_connection_string();
 
         let sql_pool = PgPoolOptions::new()
             .max_connections(5)

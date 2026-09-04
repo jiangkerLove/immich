@@ -166,17 +166,9 @@ Commands:
 }
 
 async fn connect_pool(settings: &EnvDto) -> Result<sqlx::PgPool, String> {
-    let url = format!(
-        "postgres://{}:{}@{}:{}/{}",
-        settings.db_username,
-        settings.db_password,
-        settings.db_url,
-        settings.db_port,
-        settings.db_database_name,
-    );
     PgPoolOptions::new()
         .max_connections(2)
-        .connect(&url)
+        .connect(&settings.postgres_connection_string())
         .await
         .map_err(|err| err.to_string())
 }

@@ -1,26 +1,10 @@
 #
-# Rust API server overlay for Immich.
+# Moved: all-in-one rust stack lives under rust-server/
 #
-# Usage (production base compose):
-#   docker compose -f docker-compose.yml -f docker-compose.rust.yml up -d
+#   cd ../rust-server
+#   cp example.env .env
+#   docker compose up -d --build
 #
-# Usage (dev compose):
-#   docker compose -f docker-compose.dev.yml -f docker-compose.rust.yml up -d
-#
-# Requires immich-machine-learning to remain running for ML jobs.
-# Set DB_SKIP_MIGRATIONS=true during database restore (see backup docs).
-
-name: immich
-
-services:
-  immich-server:
-    build:
-      context: ../
-      dockerfile: rust-server/Dockerfile
-    image: immich-rust-server:${IMMICH_VERSION:-latest}
-    command: ['rust-server']
-    environment:
-      IMMICH_SERVER_PATH: /usr/src/app/server
-      IMMICH_WEB_ROOT: /build/www
-    volumes:
-      - ../packages/plugin-core:/build/plugins/immich-plugin-core:ro
+# See rust-server/README.docker.md
+include:
+  - path: ../rust-server/docker-compose.yml
