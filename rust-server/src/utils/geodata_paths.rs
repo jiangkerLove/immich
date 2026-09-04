@@ -47,7 +47,12 @@ fn candidate_geodata_dirs() -> Vec<PathBuf> {
     if let Ok(current) = std::env::current_dir() {
         paths.push(current.join("server/build/geodata"));
         if current.ends_with("rust-server") {
-            paths.push(current.parent().unwrap_or(&current).join("server/build/geodata"));
+            paths.push(
+                current
+                    .parent()
+                    .unwrap_or(&current)
+                    .join("server/build/geodata"),
+            );
         }
     }
 

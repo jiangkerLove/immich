@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use axum::body::Body;
-use axum::http::{header, Response};
+use axum::http::{Response, header};
 use tokio_util::io::ReaderStream;
 
 use crate::models::response::response::ErrorResp;
@@ -25,9 +25,9 @@ pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorRe
     let stream = ReaderStream::new(handle);
     let body = Body::from_stream(stream);
 
-    let cache_control = file
-        .cache_control
-        .unwrap_or_else(|| "private, max-age=86400, no-transform, stale-while-revalidate=2592000".to_string());
+    let cache_control = file.cache_control.unwrap_or_else(|| {
+        "private, max-age=86400, no-transform, stale-while-revalidate=2592000".to_string()
+    });
 
     let mut builder = Response::builder()
         .header(header::CONTENT_TYPE, content_type)

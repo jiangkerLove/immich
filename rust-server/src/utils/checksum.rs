@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 
 pub fn decode_checksum(value: &str) -> Result<Vec<u8>, String> {
     if value.len() == 40 {

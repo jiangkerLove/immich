@@ -42,8 +42,7 @@ fn exif_count(asset: &AssetResponse) -> usize {
             fields
                 .values()
                 .filter(|value| {
-                    !value.is_null()
-                        && value.as_str().map(|text| !text.is_empty()).unwrap_or(true)
+                    !value.is_null() && value.as_str().map(|text| !text.is_empty()).unwrap_or(true)
                 })
                 .count()
         })

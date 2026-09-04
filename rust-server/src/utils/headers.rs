@@ -1,7 +1,7 @@
 use axum::http::{HeaderMap, header};
 use std::collections::HashMap;
 
-use crate::utils::cookie::{parse_immich_cookies, ImmichCookie};
+use crate::utils::cookie::{ImmichCookie, parse_immich_cookies};
 
 pub mod immich {
     pub const API_KEY: &str = "x-api-key";
@@ -91,7 +91,10 @@ pub struct AuthTokens {
     pub api_key: Option<String>,
 }
 
-pub fn extract_auth_tokens(headers: &HeaderMap, query_params: &HashMap<String, String>) -> AuthTokens {
+pub fn extract_auth_tokens(
+    headers: &HeaderMap,
+    query_params: &HashMap<String, String>,
+) -> AuthTokens {
     let share_key = header_value(headers, immich::SHARED_LINK_KEY)
         .or_else(|| query_params.get(query::SHARED_LINK_KEY).cloned());
     let share_slug = header_value(headers, immich::SHARED_LINK_SLUG)

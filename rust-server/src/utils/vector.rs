@@ -13,7 +13,7 @@ pub async fn smart_search_available(pool: &Pool<Postgres>) -> bool {
     let _ = SMART_SEARCH_AVAILABLE.set(available);
     if !available {
         eprintln!(
-            "smart_search unavailable: pgvector tables missing (install vector extension or use init.sql DO block)"
+            "smart_search unavailable: pgvector tables missing (install vector extension; baseline creates smart_search when available)"
         );
     }
     available
@@ -85,8 +85,7 @@ pub async fn resolve_vector_extension(
 
 fn clip_index_query(extension: &DbVectorExtension) -> String {
     match extension {
-        DbVectorExtension::VectorChord => {
-            r#"
+        DbVectorExtension::VectorChord => r#"
             CREATE INDEX IF NOT EXISTS clip_index ON smart_search
             USING vchordrq (embedding vector_cosine_ops) WITH (options = $$
             residual_quantization = false
@@ -97,16 +96,13 @@ fn clip_index_query(extension: &DbVectorExtension) -> String {
             sampling_factor = 1024
             $$)
             "#
-            .to_string()
-        }
-        DbVectorExtension::PgVector | DbVectorExtension::PgvectoRs => {
-            r#"
+        .to_string(),
+        DbVectorExtension::PgVector | DbVectorExtension::PgvectoRs => r#"
             CREATE INDEX IF NOT EXISTS clip_index ON smart_search
             USING hnsw (embedding vector_cosine_ops)
             WITH (ef_construction = 300, m = 16)
             "#
-            .to_string()
-        }
+        .to_string(),
     }
 }
 
@@ -144,10 +140,12 @@ pub async fn set_dimension_size(
         .execute(&mut *tx)
         .await
         .map_err(|err| err.to_string())?;
-    sqlx::query(&format!("ALTER TABLE smart_search ALTER COLUMN embedding TYPE vector({dim_size})"))
-        .execute(&mut *tx)
-        .await
-        .map_err(|err| err.to_string())?;
+    sqlx::query(&format!(
+        "ALTER TABLE smart_search ALTER COLUMN embedding TYPE vector({dim_size})"
+    ))
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| err.to_string())?;
     sqlx::query(&index_sql)
         .execute(&mut *tx)
         .await

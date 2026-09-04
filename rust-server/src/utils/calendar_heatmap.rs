@@ -38,9 +38,8 @@ pub async fn build_calendar_heatmap(
     query: &CalendarHeatmapQuery,
 ) -> Result<CalendarHeatmapResponse, ErrorResp> {
     let to_date = parse_date(query.to.as_deref()).unwrap_or_else(|| Utc::now().date_naive());
-    let from_date = parse_date(query.from.as_deref()).unwrap_or_else(|| {
-        to_date - Duration::weeks(52) + Duration::days(1)
-    });
+    let from_date = parse_date(query.from.as_deref())
+        .unwrap_or_else(|| to_date - Duration::weeks(52) + Duration::days(1));
 
     if from_date > to_date {
         return Err(ErrorResp::BadRequest("from must be before to".to_string()));
@@ -84,9 +83,11 @@ pub async fn build_calendar_heatmap(
 
 fn parse_date(value: Option<&str>) -> Option<NaiveDate> {
     value.and_then(|raw| {
-        NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-            .ok()
-            .or_else(|| DateTime::parse_from_rfc3339(raw).ok().map(|dt| dt.date_naive()))
+        NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok().or_else(|| {
+            DateTime::parse_from_rfc3339(raw)
+                .ok()
+                .map(|dt| dt.date_naive())
+        })
     })
 }
 

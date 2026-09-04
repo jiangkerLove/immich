@@ -1,7 +1,7 @@
-﻿# Fallback list when ../server/src/schema/migrations is absent at build time.
-# Canonical parity record: migrations/baseline_lock.json (must match this list
-# for the fused sqlx baseline). When absorbing upstream Kysely changes, update
-# both this file and baseline_lock.json together with migrations/N_*.sql.1744910873969-InitialMigration
+# Fallback list when ../server/src/schema/migrations is absent at build time.
+# Canonical parity record: migrations/baseline_lock.json (must match fused_kysely_migrations).
+# When absorbing upstream Kysely changes, update this file, baseline_lock.json, and migrations/N_*.sql.
+1744910873969-InitialMigration
 1744991379464-AddNotificationsTable
 1745244781846-AddUserAvatarColorColumn
 1745902563899-AddAssetVisibilityColumn
@@ -85,4 +85,15 @@
 1780592070031-ConvertNegativeRatingToNull
 1780592071031-AssetOcrSync
 1781089983296-CreateIntegrityReportTable
-
+1782414436633-AddPluginMethodAllowedHosts
+1782500000000-RestoreLivePhotoStillVisibility
+1784647658615-AddOAuthBearerTokenToSession
+1784836013770-MinFacePreferenceMigration
+1784986754473-ConvertUserPasswordEmptyStringToNull
+1784986754474-AlbumDescriptionNullable
+1786385711807-AlbumOwnerDeleteTrigger
+1786741078327-AddWorkflowLogsTable
+1786972746371-AssetOcrUpdatedAtTrigger
+1786972746372-AssetOcrSyncReset
+1787148183729-ClusterGroups
+1787148183730-DeleteMismatchedMemoryAssets

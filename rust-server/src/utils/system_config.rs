@@ -19,7 +19,11 @@ pub async fn get_merged(pool: &PgPool) -> Result<Value, sqlx::Error> {
     Ok(merged)
 }
 
-pub async fn set_config_field(pool: &PgPool, path: &[&str], value: Value) -> Result<(), sqlx::Error> {
+pub async fn set_config_field(
+    pool: &PgPool,
+    path: &[&str],
+    value: Value,
+) -> Result<(), sqlx::Error> {
     let mut config = get_merged(pool).await?;
     set_at(&mut config, path, value);
     set_json(pool, CONFIG_KEY, &config).await
@@ -64,7 +68,8 @@ pub fn json_str(value: &Value, path: &[&str], default: &str) -> String {
 }
 
 fn get_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
-    path.iter().try_fold(value, |current, key| current.get(*key))
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))
 }
 
 pub fn is_machine_learning_enabled(ml: &Value) -> bool {

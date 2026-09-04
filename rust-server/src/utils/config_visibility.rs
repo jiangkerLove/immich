@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ConfigVisibility {
@@ -134,10 +134,11 @@ mod tests {
         let user = filter_config(&config, ConfigVisibility::User);
 
         assert!(user.get("job").is_none());
-        assert!(user
-            .get("oauth")
-            .and_then(|value| value.get("clientSecret"))
-            .is_none());
+        assert!(
+            user.get("oauth")
+                .and_then(|value| value.get("clientSecret"))
+                .is_none()
+        );
         assert_eq!(
             user.get("image")
                 .and_then(|image| image.get("thumbnail"))

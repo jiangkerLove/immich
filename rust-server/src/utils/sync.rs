@@ -23,12 +23,7 @@ pub fn to_ack(ack: &SyncAck) -> String {
     }
 }
 
-pub fn serialize(
-    sync_type: &str,
-    data: &Value,
-    ids: &[&str],
-    ack_type: Option<&str>,
-) -> String {
+pub fn serialize(sync_type: &str, data: &Value, ids: &[&str], ack_type: Option<&str>) -> String {
     let ack = to_ack(&SyncAck {
         ack_type: ack_type.unwrap_or(sync_type).to_string(),
         update_id: ids[0].to_string(),

@@ -149,7 +149,12 @@ impl Services {
                 redis_url.clone(),
                 websocket.clone(),
             ),
-            maintenance: MaintenanceService::new(pool.clone(), storage.clone(), websocket.clone()),
+            maintenance: MaintenanceService::new(
+                pool.clone(),
+                storage.clone(),
+                websocket.clone(),
+                redis_url.clone(),
+            ),
             hls: HlsService::new(pool.clone(), storage.clone(), hls_engine),
             queue: QueueService::new(jobs.clone()),
             library: LibraryService::new(pool.clone(), jobs.clone(), library_path),
@@ -209,6 +214,9 @@ impl AppState {
             .connect(&db_connection_str)
             .await
             .expect("can't connect to database");
+
+        crate::utils::repo_metrics::spawn_pool_collector(sql_pool.clone(), 20);
+        crate::utils::io_metrics::spawn_redis_collector(redis_url.clone());
 
         crate::models::db::advisory_lock::wait_for_free_maintenance_lock(&sql_pool).await;
 
@@ -329,6 +337,9 @@ impl AppState {
             .await
             .expect("can't connect to database");
 
+        crate::utils::repo_metrics::spawn_pool_collector(sql_pool.clone(), 5);
+        crate::utils::io_metrics::spawn_redis_collector(redis_url.clone());
+
         let storage = StoragePaths::new(resolve_media_location(&settings));
         if let Err(err) =
             crate::service::storage_bootstrap::on_bootstrap(&sql_pool, &settings, &storage).await
@@ -340,6 +351,9 @@ impl AppState {
         let (websocket_layer, websocket) = WebSocketHub::build(auth, sql_pool.clone(), &redis_url)
             .await
             .expect("failed to initialize websocket redis adapter");
+
+        // Maintenance worker must hear CLI disable → AppRestart.
+        crate::service::server_events::spawn_listener(sql_pool.clone(), redis_url.clone());
 
         let hls_engine =
             crate::service::transcoding::HlsEngine::spawn(sql_pool.clone(), storage.clone());

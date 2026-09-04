@@ -4,7 +4,10 @@ use crate::models::response::response::ErrorResp;
 
 const VISIBILITY_LOCKED: &str = "locked";
 
-pub fn apply_locked_visibility_policy(auth: &AuthDto, filter: SearchFilter) -> Result<SearchFilter, ErrorResp> {
+pub fn apply_locked_visibility_policy(
+    auth: &AuthDto,
+    filter: SearchFilter,
+) -> Result<SearchFilter, ErrorResp> {
     let elevated = auth
         .session
         .as_ref()
@@ -65,11 +68,21 @@ fn deciding_conditions(filter: &SearchFilter, field: VisibilityField) -> Vec<&En
 fn can_match_visibility(condition: &EnumFilterString, value: &str) -> bool {
     (condition.eq.is_none() || condition.eq.as_deref() == Some(value))
         && (condition.ne.is_none() || condition.ne.as_deref() != Some(value))
-        && (condition.in_values.is_none() || condition.in_values.as_ref().is_some_and(|values| values.iter().any(|v| v == value)))
-        && (condition.not_in.is_none() || condition.not_in.as_ref().is_some_and(|values| !values.iter().any(|v| v == value)))
+        && (condition.in_values.is_none()
+            || condition
+                .in_values
+                .as_ref()
+                .is_some_and(|values| values.iter().any(|v| v == value)))
+        && (condition.not_in.is_none()
+            || condition
+                .not_in
+                .as_ref()
+                .is_some_and(|values| !values.iter().any(|v| v == value)))
 }
 
-pub use crate::models::dto::search::{collect_filter_ids, is_album_confined, is_fully_album_confined};
+pub use crate::models::dto::search::{
+    collect_filter_ids, is_album_confined, is_fully_album_confined,
+};
 
 #[cfg(test)]
 mod tests {
@@ -97,7 +110,11 @@ mod tests {
         let filter = SearchFilter::default();
         let effective = apply_locked_visibility_policy(&auth_without_elevation(), filter).unwrap();
         assert_eq!(
-            effective.branch.visibility.as_ref().and_then(|v| v.ne.as_deref()),
+            effective
+                .branch
+                .visibility
+                .as_ref()
+                .and_then(|v| v.ne.as_deref()),
             Some(VISIBILITY_LOCKED)
         );
     }

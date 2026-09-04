@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{header, HeaderValue, Response, StatusCode};
+use axum::http::{HeaderValue, Response, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::Serialize;
 
@@ -23,9 +23,7 @@ pub fn json_response_with_status<T: Serialize>(status: StatusCode, value: &T) ->
 }
 
 fn build_cookie(name: &str, value: &str, is_secure: bool, http_only: bool) -> String {
-    let mut cookie = format!(
-        "{name}={value}; Path=/; SameSite=Lax; Max-Age={COOKIE_MAX_AGE_SECS}"
-    );
+    let mut cookie = format!("{name}={value}; Path=/; SameSite=Lax; Max-Age={COOKIE_MAX_AGE_SECS}");
     if http_only {
         cookie.push_str("; HttpOnly");
     }

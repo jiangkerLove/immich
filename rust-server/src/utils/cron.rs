@@ -20,16 +20,18 @@ pub fn nightly_tasks_cron_expression(config: &Value) -> String {
         .unwrap_or("00:00");
 
     let mut parts = start_time.split(':');
-    let hour = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
-    let minute = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+    let hour = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    let minute = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
     format!("0 {minute} {hour} * * *")
 }
 
-pub fn should_run_cron(
-    expression: &str,
-    now: DateTime<Local>,
-    since: DateTime<Local>,
-) -> bool {
+pub fn should_run_cron(expression: &str, now: DateTime<Local>, since: DateTime<Local>) -> bool {
     let normalized = normalize_cron_expression(expression);
     let Ok(schedule) = Schedule::from_str(&normalized) else {
         eprintln!("cron: invalid expression '{expression}'");

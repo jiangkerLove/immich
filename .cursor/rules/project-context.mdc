@@ -44,9 +44,12 @@ rust-server/src/
 ## 优先待办（下一阶段）
 
 1. ~~伙伴媒体 / album WS / search / Windows / 维护 / **sqlx+baseline_lock**~~ — 已完成
-2. 真实数据冒烟：上传 → 元数据 → 缩略图 → 搜索 → 同步
-3. 若需 **API/worker 分进程**：HLS Redis 协调（P1-3）；否则保持单进程
-4. 合上游时：按 `migration-status` / cargo warning 吸收 Kysely → `migrations/N_*.sql` 并更新 lock
+2. ~~当前树内 Kysely 全部折入单一 `1_baseline`（含 ClusterGroups 等）~~ — 已完成；去掉 `init.sql`
+3. ~~CLI 维护 Redis AppRestart + JWT 登录 URL~~ — 已完成
+4. ~~Telemetry repo/io~~ — 已完成（pool + Redis ping/publish）
+5. 真实数据冒烟：上传 → 元数据 → 缩略图 → 搜索 → 同步
+6. 若需 **API/worker 分进程**：HLS Redis 协调（P1-3）；否则保持单进程
+7. **baseline 锁定后**合上游：cargo warning / `migration-status` → 再写 `migrations/2+` 并更新 lock
 
 ## 详细文档
 

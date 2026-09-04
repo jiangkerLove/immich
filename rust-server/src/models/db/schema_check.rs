@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use sqlx::{Pool, Postgres};
 
-const INIT_SQL: &str = include_str!("../../../schema/init.sql");
+/// Table inventory comes from the sqlx baseline (single source of truth).
+const BASELINE_SQL: &str = include_str!("../../../migrations/1_baseline.sql");
 include!(concat!(env!("OUT_DIR"), "/kysely_migrations.rs"));
 
 const OPTIONAL_TABLES: &[&str] = &["smart_search", "face_search"];
@@ -11,10 +12,6 @@ const IGNORED_EXTRA_TABLES: &[&str] = &[
     "kysely_migrations_lock",
     "_sqlx_migrations",
     "migration_overrides",
-    "cluster_group",
-    "cluster_group_request",
-    "person_group",
-    "person_group_audit",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +44,7 @@ pub struct SchemaCheckReport {
 
 pub fn expected_tables() -> HashSet<String> {
     let re = regex::Regex::new(r#"CREATE TABLE\s+(?:"([^"]+)"|([a-z_]+))"#).unwrap();
-    INIT_SQL
+    BASELINE_SQL
         .lines()
         .filter_map(|line| {
             re.captures(line.trim()).map(|caps| {
@@ -215,7 +212,11 @@ pub fn print_report(report: &SchemaCheckReport) -> bool {
     let mut ok = true;
 
     match &report.migrations {
-        Some(migrations) if migrations.iter().all(|m| m.status == MigrationStatus::Applied) => {
+        Some(migrations)
+            if migrations
+                .iter()
+                .all(|m| m.status == MigrationStatus::Applied) =>
+        {
             println!("Migrations are up to date");
         }
         Some(migrations) => {
@@ -240,10 +241,10 @@ pub fn print_report(report: &SchemaCheckReport) -> bool {
             }
         }
         None => {
-            println!("No kysely_migrations table (init.sql bootstrap database)");
+            println!("No kysely_migrations table (sqlx-baseline / fresh database)");
             if !expected_migration_names().is_empty() {
                 println!(
-                    "  Expected {} NestJS migration(s) when upgrading from immich server",
+                    "  Lock tracks {} upstream Kysely name(s) fused into sqlx baseline",
                     expected_migration_names().len()
                 );
             }
@@ -288,10 +289,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_expected_tables_from_init_sql() {
+    fn parses_expected_tables_from_baseline_sql() {
         let tables = expected_tables();
         assert!(tables.contains("user"));
         assert!(tables.contains("asset"));
+        assert!(tables.contains("cluster_group"));
+        assert!(tables.contains("person_group"));
+        assert!(tables.contains("workflow_log"));
         assert!(tables.contains("smart_search"));
         assert!(tables.contains("face_search"));
         assert!(tables.len() >= 60);
@@ -300,9 +304,11 @@ mod tests {
     #[test]
     fn loads_kysely_migration_names() {
         assert!(!expected_migration_names().is_empty());
-        assert!(expected_migration_names()
-            .iter()
-            .any(|name| name.contains("InitialMigration")));
+        assert!(
+            expected_migration_names()
+                .iter()
+                .any(|name| name.contains("InitialMigration"))
+        );
     }
 
     #[test]
@@ -335,8 +341,8 @@ mod tests {
     }
 
     #[test]
-    fn cluster_group_tables_are_ignored_as_extra() {
-        assert!(IGNORED_EXTRA_TABLES.contains(&"cluster_group"));
-        assert!(IGNORED_EXTRA_TABLES.contains(&"person_group"));
+    fn bookkeeping_tables_are_ignored_as_extra() {
+        assert!(IGNORED_EXTRA_TABLES.contains(&"_sqlx_migrations"));
+        assert!(IGNORED_EXTRA_TABLES.contains(&"migration_overrides"));
     }
 }

@@ -13,8 +13,8 @@ use crate::models::dto::maintenance::{
 use crate::models::response::response::ErrorResp;
 use crate::service::database_backup_runner::DatabaseBackupRunner;
 use crate::service::maintenance::{
-    decode_maintenance_jwt, detect_prior_install_internal, generate_maintenance_secret,
-    public_maintenance_status, sign_maintenance_jwt, MaintenanceClaims, MAINTENANCE_MODE_KEY,
+    MAINTENANCE_MODE_KEY, MaintenanceClaims, decode_maintenance_jwt, detect_prior_install_internal,
+    generate_maintenance_secret, public_maintenance_status, sign_maintenance_jwt,
 };
 use crate::service::websocket::WebSocketHub;
 use crate::utils::storage::StoragePaths;
@@ -71,7 +71,10 @@ impl MaintenanceWorkerRuntime {
             return;
         };
 
-        let secret = state.secret.clone().unwrap_or_else(generate_maintenance_secret);
+        let secret = state
+            .secret
+            .clone()
+            .unwrap_or_else(generate_maintenance_secret);
         *self.secret.write().await = secret.clone();
 
         let action = state
@@ -186,7 +189,8 @@ impl MaintenanceWorkerRuntime {
             }
         };
 
-        let runner = DatabaseBackupRunner::new(self.pool.clone(), self.storage.clone(), self.env.clone());
+        let runner =
+            DatabaseBackupRunner::new(self.pool.clone(), self.storage.clone(), self.env.clone());
         let runtime = self.clone();
         let result = runner
             .restore_database_backup(&filename, move |task, progress| {
@@ -252,15 +256,11 @@ impl MaintenanceWorkerRuntime {
     }
 
     async fn log_secret(&self, secret: &str) {
-        let host = self
-            .env
-            .immich_host
-            .as_deref()
-            .unwrap_or("localhost");
+        let host = self.env.immich_host.as_deref().unwrap_or("localhost");
         let port = self.env.immich_port.unwrap_or(2283);
         if let Ok(jwt) = sign_maintenance_jwt(secret, "immich-admin") {
             println!(
-                "\n\n🚧 Immich is in maintenance mode, you can log in using the following URL:\nhttp://{host}:{port}/admin/maintenance?token={jwt}\n"
+                "\n\n🚧 Immich is in maintenance mode, you can log in using the following URL:\nhttp://{host}:{port}/maintenance?token={jwt}\n"
             );
         }
     }

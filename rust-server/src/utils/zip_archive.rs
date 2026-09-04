@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use axum::body::Body;
-use axum::http::{header, Response};
+use axum::http::{Response, header};
 use tempfile::NamedTempFile;
 use tokio_util::io::ReaderStream;
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 use crate::models::response::response::ErrorResp;
 use crate::utils::file_response::{file_extension, file_stem};
@@ -69,8 +69,8 @@ fn build_zip_file(entries: Vec<ZipEntry>) -> Result<NamedTempFile, ErrorResp> {
         let archive_name = unique_archive_name(&entry.name, &mut name_counts);
         zip.start_file(archive_name, options)
             .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
-        let mut source = std::fs::File::open(&fs_path)
-            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        let mut source =
+            std::fs::File::open(&fs_path).map_err(|err| ErrorResp::ServerError(err.to_string()))?;
         std::io::copy(&mut source, &mut zip)
             .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
     }
@@ -87,11 +87,7 @@ fn resolve_path(path: &str) -> String {
 }
 
 pub fn archive_entry_name(original_file_name: &str, path: &str) -> String {
-    format!(
-        "{}{}",
-        file_stem(original_file_name),
-        file_extension(path)
-    )
+    format!("{}{}", file_stem(original_file_name), file_extension(path))
 }
 
 fn unique_archive_name(original: &str, counts: &mut HashMap<String, u32>) -> String {
@@ -125,7 +121,10 @@ fn sanitize_filename(name: &str) -> String {
     let sanitized: String = name
         .chars()
         .map(|ch| {
-            if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0') {
+            if matches!(
+                ch,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'
+            ) {
                 '_'
             } else {
                 ch

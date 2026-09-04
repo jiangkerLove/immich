@@ -1,11 +1,10 @@
 //! Database schema migrations via sqlx + upstream Kysely parity lock.
 //!
 //! ## Model
-//! - `migrations/1_baseline.sql` = fused end-state of Kysely history listed in
+//! - `migrations/1_baseline.sql` = fused end-state of **all** Kysely names in
 //!   `migrations/baseline_lock.json` (`fused_kysely_migrations`).
-//! - Later upstream Kysely files (after that lock) become `migrations/2_*.sql`…
-//!   (one TS file → one sqlx file, **or** several TS files merged into one sqlx
-//!   file depending on when you sync). Update the lock when you absorb them.
+//! - After that baseline is locked in use, newer upstream Kysely become
+//!   `migrations/2_*.sql`… Update the lock when you absorb them.
 //!
 //! ## Runtime (automatic)
 //! 1. Bridge existing Immich schemas into `_sqlx_migrations` v1 if needed.
@@ -58,6 +57,7 @@ pub async fn run(pool: &PgPool, env: &EnvDto) -> Result<(), MigrationError> {
     );
 
     bridge_legacy_schema_if_needed(pool).await?;
+    bridge_incremental_if_kysely_already_applied(pool).await?;
 
     println!(
         "database migrations: applying pending sqlx ({} file(s) in crate)",
@@ -245,6 +245,78 @@ async fn bridge_legacy_schema_if_needed(pool: &PgPool) -> Result<(), MigrationEr
     Ok(())
 }
 
+/// When an Immich DB already applied the Kysely files that a later sqlx version
+/// absorbs (or already has the end-state schema), record that sqlx version
+/// without re-executing it.
+async fn bridge_incremental_if_kysely_already_applied(pool: &PgPool) -> Result<(), MigrationError> {
+    if INCREMENTAL_SQLX_COVERAGE.is_empty() {
+        return Ok(());
+    }
+
+    let kysely_applied: std::collections::HashSet<String> =
+        if table_exists(pool, "kysely_migrations").await? {
+            sqlx::query_scalar::<_, String>(r#"SELECT name FROM kysely_migrations"#)
+                .fetch_all(pool)
+                .await
+                .map_err(|err| MigrationError::Failed(err.to_string()))?
+                .into_iter()
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+    let cluster_present = table_exists(pool, "cluster_group").await?;
+    let workflow_log_present = table_exists(pool, "workflow_log").await?;
+    let allowed_hosts_present = column_exists(pool, "plugin_method", "allowedHosts").await?;
+
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|err| MigrationError::Failed(err.to_string()))?;
+
+    conn.ensure_migrations_table()
+        .await
+        .map_err(|err| MigrationError::Failed(err.to_string()))?;
+
+    for coverage in INCREMENTAL_SQLX_COVERAGE {
+        if sqlx_version_applied(pool, coverage.sqlx_version).await? {
+            continue;
+        }
+
+        let all_kysely_present = !coverage.kysely_migrations.is_empty()
+            && coverage
+                .kysely_migrations
+                .iter()
+                .all(|name| kysely_applied.contains(*name));
+
+        // End-state heuristic for DBs that already match a later sqlx version
+        // without kysely_migrations rows (e.g. restored from a fused dump).
+        let end_state_present = cluster_present && workflow_log_present && allowed_hosts_present;
+
+        if !all_kysely_present && !end_state_present {
+            continue;
+        }
+
+        let Some(migration) = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == coverage.sqlx_version)
+        else {
+            return Err(MigrationError::Failed(format!(
+                "missing sqlx migration version {}",
+                coverage.sqlx_version
+            )));
+        };
+
+        println!(
+            "database migrations: bridging already-applied upstream schema → sqlx version {} ({})",
+            coverage.sqlx_version, migration.description
+        );
+        record_migration_applied(&mut conn, migration).await?;
+    }
+
+    Ok(())
+}
+
 async fn sqlx_version_applied(pool: &PgPool, version: i64) -> Result<bool, MigrationError> {
     if !table_exists(pool, "_sqlx_migrations").await? {
         return Ok(false);
@@ -278,6 +350,25 @@ async fn table_exists(pool: &PgPool, table: &str) -> Result<bool, MigrationError
         "#,
     )
     .bind(table)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| MigrationError::Failed(err.to_string()))
+}
+
+async fn column_exists(pool: &PgPool, table: &str, column: &str) -> Result<bool, MigrationError> {
+    sqlx::query_scalar(
+        r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = $1
+                  AND column_name = $2
+            )
+        "#,
+    )
+    .bind(table)
+    .bind(column)
     .fetch_one(pool)
     .await
     .map_err(|err| MigrationError::Failed(err.to_string()))
@@ -341,7 +432,7 @@ mod tests {
         assert_eq!(SQLX_BASELINE_VERSION, 1);
         assert_eq!(SQLX_BASELINE_FILE, "1_baseline.sql");
         assert!(
-            FUSED_KYSELY_MIGRATIONS.len() >= 80,
+            FUSED_KYSELY_MIGRATIONS.len() >= 90,
             "expected fused Kysely history in baseline_lock.json, got {}",
             FUSED_KYSELY_MIGRATIONS.len()
         );
@@ -349,6 +440,23 @@ mod tests {
             FUSED_KYSELY_MIGRATIONS
                 .iter()
                 .any(|name| name.contains("InitialMigration"))
+        );
+        assert!(
+            FUSED_KYSELY_MIGRATIONS
+                .iter()
+                .any(|name| name.contains("ClusterGroups"))
+        );
+        assert!(
+            INCREMENTAL_SQLX_COVERAGE.is_empty(),
+            "baseline not locked yet — keep a single sqlx v1 until intentional upstream sync"
+        );
+        assert_eq!(
+            MIGRATOR
+                .iter()
+                .filter(|m| !m.migration_type.is_down_migration())
+                .count(),
+            1,
+            "expected only sqlx migration version 1 until post-baseline sync"
         );
     }
 }

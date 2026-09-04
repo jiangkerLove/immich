@@ -38,8 +38,7 @@ impl<T: Send + Clone + 'static> PendingEvents<T> {
             }
         });
 
-        rx.await
-            .map_err(|_| "Request timed out".to_string())?
+        rx.await.map_err(|_| "Request timed out".to_string())?
     }
 
     pub async fn complete(&self, key: &str, value: T) {

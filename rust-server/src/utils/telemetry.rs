@@ -54,6 +54,18 @@ pub fn host_metrics_enabled() -> bool {
         .is_some_and(|config| config.metrics.contains(&ImmichTelemetry::Host))
 }
 
+pub fn repo_metrics_enabled() -> bool {
+    ENABLED
+        .get()
+        .is_some_and(|config| config.metrics.contains(&ImmichTelemetry::Repo))
+}
+
+pub fn io_metrics_enabled() -> bool {
+    ENABLED
+        .get()
+        .is_some_and(|config| config.metrics.contains(&ImmichTelemetry::Io))
+}
+
 pub fn parse_telemetry(env: &EnvDto) -> TelemetryConfig {
     let all = [
         ImmichTelemetry::Host,
@@ -121,8 +133,7 @@ pub fn record_http_request(duration_ms: f64, status: u16) {
     }
     metrics::counter!("immich.http.requests.total").increment(1);
     metrics::histogram!("immich.http.request.duration_ms").record(duration_ms);
-    metrics::counter!("immich.http.responses.total", "status" => status_group(status))
-        .increment(1);
+    metrics::counter!("immich.http.responses.total", "status" => status_group(status)).increment(1);
 }
 
 pub fn record_job_finished(queue: &str, job_name: &str, success: bool) {
@@ -136,8 +147,7 @@ pub fn record_job_finished(queue: &str, job_name: &str, success: bool) {
         metrics::counter!("immich.queues.completed", "queue" => queue, "job" => job_name)
             .increment(1);
     } else {
-        metrics::counter!("immich.queues.failed", "queue" => queue, "job" => job_name)
-            .increment(1);
+        metrics::counter!("immich.queues.failed", "queue" => queue, "job" => job_name).increment(1);
     }
 }
 
@@ -163,8 +173,7 @@ pub fn record_queue_active_delta(queue: &str, delta: i64) {
     if delta >= 0 {
         metrics::gauge!("immich.queues.active", "queue" => queue).increment(delta as f64);
     } else {
-        metrics::gauge!("immich.queues.active", "queue" => queue)
-            .decrement((-delta) as f64);
+        metrics::gauge!("immich.queues.active", "queue" => queue).decrement((-delta) as f64);
     }
 }
 
@@ -175,6 +184,48 @@ pub fn record_job_status(job_name: &str, status: &str) {
     let job_name = sanitize_metric_name(job_name);
     let status = sanitize_metric_name(status);
     metrics::counter!("immich.jobs", "job" => job_name, "status" => status).increment(1);
+}
+
+/// Repository / DB layer duration (mirrors TS `repo` method histograms).
+pub fn record_repo_duration(operation: &str, duration_ms: f64) {
+    if !repo_metrics_enabled() {
+        return;
+    }
+    let operation = sanitize_metric_name(operation);
+    metrics::histogram!(
+        "immich.repo.duration_ms",
+        "operation" => operation
+    )
+    .record(duration_ms);
+}
+
+pub fn record_db_pool_stats(size: u32, idle: usize, max: u32) {
+    if !repo_metrics_enabled() {
+        return;
+    }
+    metrics::gauge!("immich.repo.db.pool.size").set(f64::from(size));
+    metrics::gauge!("immich.repo.db.pool.idle").set(idle as f64);
+    metrics::gauge!("immich.repo.db.pool.max").set(f64::from(max));
+}
+
+/// Redis / IO layer (mirrors TS IORedis instrumentation behind `io`).
+pub fn record_redis_command(operation: &str, duration_ms: f64, success: bool) {
+    if !io_metrics_enabled() {
+        return;
+    }
+    let operation = sanitize_metric_name(operation);
+    let status = if success { "ok" } else { "error" };
+    metrics::counter!(
+        "immich.io.redis.commands.total",
+        "operation" => operation.clone(),
+        "status" => status
+    )
+    .increment(1);
+    metrics::histogram!(
+        "immich.io.redis.command.duration_ms",
+        "operation" => operation
+    )
+    .record(duration_ms);
 }
 
 pub fn set_users_total(count: i64) {
@@ -201,4 +252,33 @@ fn status_group(status: u16) -> String {
 
 fn sanitize_metric_name(value: &str) -> String {
     value.replace('.', "_").replace('-', "_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_include_all_enables_repo_and_io() {
+        let env = EnvDto {
+            immich_telemetry_include: Some("all".into()),
+            ..EnvDto::default()
+        };
+        let config = parse_telemetry(&env);
+        assert!(config.metrics.contains(&ImmichTelemetry::Repo));
+        assert!(config.metrics.contains(&ImmichTelemetry::Io));
+    }
+
+    #[test]
+    fn parse_include_list_and_exclude() {
+        let env = EnvDto {
+            immich_telemetry_include: Some("api,repo,io".into()),
+            immich_telemetry_exclude: Some("io".into()),
+            ..EnvDto::default()
+        };
+        let config = parse_telemetry(&env);
+        assert!(config.metrics.contains(&ImmichTelemetry::Api));
+        assert!(config.metrics.contains(&ImmichTelemetry::Repo));
+        assert!(!config.metrics.contains(&ImmichTelemetry::Io));
+    }
 }

@@ -139,14 +139,14 @@ Commands:
   reset-admin-password [pw] Reset admin password (generates one if omitted)
   grant-admin <email>       Grant admin privileges
   revoke-admin <email>      Revoke admin privileges
-  schema-check              Verify schema tables vs init.sql (legacy kysely names optional)
+  schema-check              Verify schema tables vs sqlx 1_baseline.sql
   run-migrations            Auto-check + apply sqlx migrations (baseline + pending)
   migration-status          Print sqlx / baseline_lock / kysely drift status
   media-location            Print current media location
   change-media-location <old> <new> [--yes]
                             Rewrite stored file paths after moving media
-  enable-maintenance-mode   Enable maintenance mode
-  disable-maintenance-mode  Disable maintenance mode
+  enable-maintenance-mode   Enable maintenance mode (Redis AppRestart + JWT login URL)
+  disable-maintenance-mode  Disable maintenance mode (Redis AppRestart)
   enable-password-login     Enable password login
   disable-password-login    Disable password login
   enable-oauth-login        Enable OAuth login
@@ -380,14 +380,108 @@ async fn change_media_location(
 }
 
 async fn enable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {
-    let pool = connect_pool(settings).await?;
-    let secret = uuid::Uuid::new_v4().to_string();
-    let payload = serde_json::json!({
-        "isMaintenanceMode": true,
-        "secret": secret,
-        "action": { "action": "start" }
-    });
+    use crate::models::dto::maintenance::{
+        MaintenanceAction, MaintenanceModeState, SetMaintenanceModeReq,
+    };
+    use crate::service::maintenance::{generate_maintenance_secret, sign_maintenance_jwt};
+    use crate::service::server_events;
 
+    let pool = connect_pool(settings).await?;
+    let existing = sqlx::query_scalar::<_, serde_json::Value>(
+        r#"SELECT value FROM system_metadata WHERE key = 'maintenance-mode'"#,
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|err| err.to_string())?;
+
+    let already = existing
+        .as_ref()
+        .and_then(|value| value.get("isMaintenanceMode"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    let (secret, already_enabled) = if already {
+        let secret = existing
+            .as_ref()
+            .and_then(|value| value.get("secret"))
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Maintenance mode is on but secret is missing".to_string())?
+            .to_string();
+        (secret, true)
+    } else {
+        let secret = generate_maintenance_secret();
+        let state = MaintenanceModeState {
+            is_maintenance_mode: true,
+            secret: Some(secret.clone()),
+            action: Some(SetMaintenanceModeReq {
+                action: MaintenanceAction::Start,
+                restore_backup_filename: None,
+            }),
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO system_metadata (key, value)
+            VALUES ('maintenance-mode', $1)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            "#,
+        )
+        .bind(serde_json::to_value(&state).map_err(|err| err.to_string())?)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        let redis_url = server_events::redis_url_from_env(settings);
+        server_events::publish_app_restart(&redis_url, true).await?;
+        (secret, false)
+    };
+
+    let jwt = sign_maintenance_jwt(&secret, "cli-admin").map_err(|err| err.to_string())?;
+    let host = settings.immich_host.as_deref().unwrap_or("localhost");
+    let port = settings.immich_port.unwrap_or(2283);
+    let auth_url = format!("http://{host}:{port}/maintenance?token={jwt}");
+
+    if already_enabled {
+        println!("The server is already in maintenance mode!");
+    } else {
+        println!("Maintenance mode has been enabled.");
+        println!(
+            "(signaled running rust-server via Redis AppRestart — process manager should restart)"
+        );
+    }
+    println!("\nLog in using the following URL:");
+    println!("{auth_url}");
+    Ok(())
+}
+
+async fn disable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {
+    use crate::models::dto::maintenance::MaintenanceModeState;
+    use crate::service::server_events;
+
+    let pool = connect_pool(settings).await?;
+    let existing = sqlx::query_scalar::<_, serde_json::Value>(
+        r#"SELECT value FROM system_metadata WHERE key = 'maintenance-mode'"#,
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|err| err.to_string())?;
+
+    let already_disabled = existing
+        .as_ref()
+        .and_then(|value| value.get("isMaintenanceMode"))
+        .and_then(|value| value.as_bool())
+        .map(|on| !on)
+        .unwrap_or(true);
+
+    if already_disabled {
+        println!("The server is already out of maintenance mode!");
+        return Ok(());
+    }
+
+    let state = MaintenanceModeState {
+        is_maintenance_mode: false,
+        secret: None,
+        action: None,
+    };
     sqlx::query(
         r#"
         INSERT INTO system_metadata (key, value)
@@ -395,27 +489,18 @@ async fn enable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         "#,
     )
-    .bind(payload)
+    .bind(serde_json::to_value(&state).map_err(|err| err.to_string())?)
     .execute(&pool)
     .await
     .map_err(|err| err.to_string())?;
 
-    let host = settings.immich_host.as_deref().unwrap_or("localhost");
-    let port = settings.immich_port.unwrap_or(2283);
-    println!("Maintenance mode has been enabled.");
-    println!("\nLog in using the following URL:");
-    println!("http://{host}:{port}/admin/maintenance");
-    Ok(())
-}
+    let redis_url = server_events::redis_url_from_env(settings);
+    server_events::publish_app_restart(&redis_url, false).await?;
 
-async fn disable_maintenance_mode(settings: &EnvDto) -> Result<(), String> {
-    let pool = connect_pool(settings).await?;
-    sqlx::query(r#"DELETE FROM system_metadata WHERE key = 'maintenance-mode'"#)
-        .execute(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
     println!("Maintenance mode has been disabled.");
-    let _ = settings;
+    println!(
+        "(signaled running rust-server via Redis AppRestart — process manager should restart)"
+    );
     Ok(())
 }
 

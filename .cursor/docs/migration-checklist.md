@@ -210,7 +210,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
 | 3 | **HLS 跨进程协调** | TS 用 Socket.IO server events；Rust 用进程内 `PendingEvents` | **单进程部署可用**（见 §6 B-4）。仅 API/worker **分进程**时需 Redis 协调 | `service/transcoding.rs`, `service/hls.rs` |
-| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust mainly `ConfigUpdate` Redis | 单进程：维护模式已用 DB 标志 + 进程退出切换。跨进程缺口主要是 HLS；CLI enable 仍需手动/进程管理器重启 | `service/server_events.rs`, `bootstrap.rs` |
+| 4 | **内部事件总线不完整** | TS `@OnEvent` 驱动多处副作用；Rust mainly ConfigUpdate + **AppRestart** Redis | ✅ CLI enable/disable 经 Redis `AppRestart` 通知进程退出；单进程 UI 路径亦发 Redis + 本地 exit。HLS 仍仅进程内 | `server_events.rs`, `admin.rs`, `bootstrap.rs` |
 
 ### P2 — 工作流 / 插件细节
 
@@ -226,8 +226,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 | # | 问题 | 说明 | 文件 |
 |---|------|------|------|
 | ~~9~~ | ~~`search` 队列无 worker~~ | ✅ 已加 no-op worker（上游亦无 `@OnJob`，仅空 Worker） | `workers/search.rs` |
-| ~~10~~ | ~~数据库迁移依赖 Node~~ | ✅ sqlx baseline + `baseline_lock.json`；启动自动 migrate；上游新 Kysely 用 `2+` 或合并演进后更新 lock | `migrations/`, `database_migrations.rs` |
-| 11 | **Telemetry Io/Repo 指标** | TS 有 DB/IO prometheus；Rust 未接全 | `utils/telemetry.rs` |
+| ~~10~~ | ~~数据库迁移依赖 Node~~ | ✅ 单一 sqlx `1_baseline`（融合当前全部 Kysely）+ `baseline_lock`；**锁定后再**用 `2+` 追上游 | `migrations/`, `database_migrations.rs` |
+| ~~11~~ | ~~Telemetry Io/Repo 指标~~ | ✅ `repo`：sqlx pool gauges；`io`：Redis PING + publish 命令计数/耗时 | `utils/telemetry.rs`, `repo_metrics.rs`, `io_metrics.rs` |
 | 12 | **结构化日志** | TS `LoggingRepository`；Rust 多为 `println!` | 全库 |
 | 13 | **`immich-admin` CLI** | 只移植了常用子命令 | `service/admin.rs` |
 
@@ -291,8 +291,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 4. **单进程部署（推荐默认）** ✅  
    - 默认同时跑 API + 全部 BullMQ workers（未设 `IMMICH_WORKERS_INCLUDE=api` 单独拆分时）  
    - HLS 实时转码在同一进程的 `HlsEngine`（`PendingEvents`），**无需** Redis/Socket 跨进程协调  
-   - 跨进程 `server_events` 目前仅广播 `ConfigUpdate`  
-   - **维护模式**：启动读 `system_metadata.maintenance-mode`；UI 进入后发 `AppRestartV1` 并 `process::exit(0)`，由进程管理器重启进 maintenance worker  
+   - 跨进程 `server_events`：`ConfigUpdate` + **`AppRestart`**（CLI/UI 维护模式切换）  
+   - **维护模式**：启动读 `system_metadata.maintenance-mode`；UI/CLI 进入或退出后发 Redis `AppRestart` 并 `process::exit(0)`，由进程管理器重启进对应 worker  
 5. 若要 **API / worker 分离**：优先做 HLS Redis pub/sub 协调（P1-3）；在此之前不要拆进程跑视频流
 
 ### 阶段 C — 工作流与插件
@@ -305,9 +305,10 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`
 
 9. ~~`search` 队列 no-op worker（P3-9）~~ ✅  
 9b. ~~Windows `fs_access` / 跨平台磁盘用量~~ ✅（`sysinfo`，不再依赖 `df`）  
-10. ~~Kysely 迁移纯 Rust 化（P3-10）~~ ✅ — `baseline_lock.json` 记录已融合的 Kysely 名；合上游时按同步节奏写 `migrations/N_*.sql`（可多条 TS 合并为一条），更新 lock；启动自动检查/初始化  
-11. 补全 telemetry / 日志（P3-11/12）  
-12. 定期 `main` → `dev-rust`：看 cargo warning / `immich-admin migration-status` 的 `kysely_ahead_of_lock`
+10. ~~Kysely 迁移纯 Rust 化（P3-10）~~ ✅ — 单一 `1_baseline.sql` + `baseline_lock`（当前含 ClusterGroups 等全部已入库 Kysely）；**baseline 锁定投入使用后**，合上游再开 `migrations/2+`  
+11. ~~补全 telemetry Io/Repo（P3-11）~~ ✅ — `repo` pool gauges + `io` Redis ping/publish  
+12. 结构化日志（P3-12）  
+13. 定期 `main` → `dev-rust`：看 cargo warning / `immich-admin migration-status` 的 `kysely_ahead_of_lock`
 
 ---
 
@@ -361,11 +362,14 @@ cd rust-server && cargo +stable test --offline --lib
 | #18 | Websocket 版本、UserDelete、ML QueueAll、Sidecar、integrity、dedup 等批量 parity |
 | （P0 切片） | `require_asset_access` 伙伴/相册读权限；`on_album_update` websocket + 共享链接上传通知 |
 | （本切片） | search/Windows/维护；**sqlx baseline + baseline_lock 对标**；启动自动 migrate/bridge/漂移检查；`migration-status` |
+| （续） | 将树内已有 Kysely（含 ClusterGroups）折回 **单一** `1_baseline`；去掉 `init.sql` / 误开的 `2_` |
+| （续） | CLI/UI 维护：`immich:server:AppRestart` Redis；JWT `/maintenance?token=` 登录 URL |
+| （续） | Telemetry `repo`/`io`：DB pool gauges + Redis ping/publish metrics |
 
 ---
 
 ## 10. 一句话总结
 
-**现在：** API/任务/迁移均在 Rust；默认单进程可用；schema 用 sqlx baseline（融合上游 Kysely 终态）+ 增量。  
-**还差：** 真实数据冒烟、分进程 HLS Redis、CLI 维护远程重启、telemetry、合上游时同步 `migrations/`。  
+**现在：** API/任务/迁移均在 Rust；默认单进程可用；schema 仅 sqlx `1_baseline`；CLI 维护 Redis AppRestart；telemetry 含 api/host/job/**repo/io**。  
+**还差：** 真实数据冒烟、分进程 HLS Redis、结构化日志、合上游后再开 `2+`。  
 **策略：** 按本文 §6 分阶段做小 PR；未准备好 HLS 跨进程前不要拆 API/worker。

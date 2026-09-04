@@ -42,7 +42,9 @@ fn resolve_existing_path(path: &Path) -> Option<PathBuf> {
     if path.exists() {
         return Some(path.to_path_buf());
     }
-    path.parent().filter(|parent| parent.exists()).map(Path::to_path_buf)
+    path.parent()
+        .filter(|parent| parent.exists())
+        .map(Path::to_path_buf)
 }
 
 fn path_is_under(path: &Path, mount: &Path) -> bool {

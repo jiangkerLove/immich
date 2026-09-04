@@ -1,17 +1,17 @@
 use std::path::Path;
 
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::models::db::system_metadata::{get_json, set_json};
+use crate::models::dto::auth::AuthDto;
 use crate::models::dto::maintenance::{
     MaintenanceAction, MaintenanceAuthResp, MaintenanceDetectInstallFolderResp,
-    MaintenanceDetectInstallResp, MaintenanceLoginReq, MaintenanceModeState,
-    MaintenanceStatusResp, SetMaintenanceModeReq,
+    MaintenanceDetectInstallResp, MaintenanceLoginReq, MaintenanceModeState, MaintenanceStatusResp,
+    SetMaintenanceModeReq,
 };
-use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::permission::require_admin;
@@ -40,14 +40,21 @@ pub struct MaintenanceService {
     pool: PgPool,
     storage: StoragePaths,
     websocket: WebSocketHub,
+    redis_url: String,
 }
 
 impl MaintenanceService {
-    pub fn new(pool: PgPool, storage: StoragePaths, websocket: WebSocketHub) -> Self {
+    pub fn new(
+        pool: PgPool,
+        storage: StoragePaths,
+        websocket: WebSocketHub,
+        redis_url: String,
+    ) -> Self {
         Self {
             pool,
             storage,
             websocket,
+            redis_url,
         }
     }
 
@@ -105,7 +112,10 @@ impl MaintenanceService {
         })
     }
 
-    pub async fn detect_prior_install(&self, auth: &AuthDto) -> Result<MaintenanceDetectInstallResp, ErrorResp> {
+    pub async fn detect_prior_install(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<MaintenanceDetectInstallResp, ErrorResp> {
         require_admin(auth)?;
         detect_prior_install_internal(&self.storage).await
     }
@@ -135,7 +145,10 @@ impl MaintenanceService {
         self.enter_maintenance_mode(dto, &auth.user.name).await
     }
 
-    pub async fn start_restore_flow(&self, is_secure: bool) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
+    pub async fn start_restore_flow(
+        &self,
+        is_secure: bool,
+    ) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
         use crate::models::db::users::UserDb;
 
         if UserDb::get_admin(&self.pool)
@@ -154,8 +167,7 @@ impl MaintenanceService {
         };
         let jwt = self.enter_maintenance_mode(&dto, "admin").await?;
         Ok(crate::utils::response::respond_with_maintenance_cookie(
-            is_secure,
-            &jwt,
+            is_secure, &jwt,
         ))
     }
 
@@ -179,6 +191,8 @@ impl MaintenanceService {
         .await?;
 
         self.websocket.emit_app_restart(true);
+        // Cross-process (and CLI): Redis AppRestart so peers exit; this process exits below.
+        let _ = crate::service::server_events::publish_app_restart(&self.redis_url, true).await;
         // Single-process: exit so the process manager restarts into Maintenance mode
         // (boot reads maintenance-mode metadata). Matches TS AppRestart → process.exit.
         tokio::spawn(async {

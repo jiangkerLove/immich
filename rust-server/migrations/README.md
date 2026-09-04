@@ -4,47 +4,43 @@ Upstream Immich evolves schema with TypeScript Kysely files:
 
 `server/src/schema/migrations/*.ts`
 
-This fork **does not run Node**. History is tracked in sqlx:
+This fork **does not run Node**. Schema is applied with sqlx:
 
 | Artifact | Role |
 |----------|------|
-| `1_baseline.sql` | Fused end-state of all Kysely files listed in the lock |
-| `baseline_lock.json` | **Parity record**: which Kysely names are already inside baseline v1 |
-| `2_*.sql`, `3_*.sql`, … | After the lock snapshot: new deltas when you sync upstream |
+| `1_baseline.sql` | **Current** fused end-state of every Kysely name in the lock |
+| `baseline_lock.json` | Parity record (`fused_kysely_migrations`) |
+| `2_*.sql`, `3_*.sql`, … | **Only after** baseline is locked in use and you sync *new* upstream Kysely |
 | `_sqlx_migrations` | Runtime bookkeeping (version + checksum) |
+
+There is **no** separate `schema/init.sql`. Empty DBs get schema from sqlx `1_baseline.sql`.
+
+## Before you lock baseline
+
+While still iterating the fused snapshot (no production DBs depending on the checksum):
+
+1. Fold any Kysely already present under `server/` into **`1_baseline.sql`**
+2. Append those names to `fused_kysely_migrations` in `baseline_lock.json`
+3. Keep a **single** sqlx file (`1_baseline.sql`) — do **not** open `2_` yet
+
+## After baseline is in use (true incremental)
+
+When you merge `main` and upstream added *new* Kysely files beyond the lock:
+
+1. `cargo:warning` / `immich-admin migration-status` lists names ahead of the lock
+2. Add `migrations/N_*.sql` (one-to-one or merged)
+3. Append names to `fused_kysely_migrations` and optionally `incremental[]` for bridge
+4. **Do not** rewrite `1_baseline.sql` checksum lightly once applied in real DBs
 
 ## Runtime (automatic on every API start)
 
-`database_migrations::run` always:
-
-1. **Init / bridge** — empty DB → apply sqlx; existing Immich schema → record baseline v1 without re-executing.
-2. **Apply pending** — any `migrations/N_*.sql` not yet in `_sqlx_migrations`.
-3. **Check** — require `asset` table; print status; warn if Kysely names (DB or `server/` tree) are **ahead of** `baseline_lock.json`.
-
-CLI:
+1. Bridge existing Immich schema → record sqlx v1 without re-running
+2. Bridge later sqlx versions if their Kysely names are already applied (when `incremental` is set)
+3. Apply pending sqlx migrations
+4. Require `asset`; print status; warn if tree/DB Kysely is ahead of the lock
 
 ```bash
 rust-server immich-admin run-migrations
 rust-server immich-admin migration-status
+rust-server immich-admin schema-check
 ```
-
-`DB_SKIP_MIGRATIONS=true` skips apply (status still useful via `migration-status`).
-
-## Sync policy (your timing)
-
-When you merge `main` → `dev-rust` and upstream added Kysely migrations:
-
-1. Build will `cargo:warning` listing names not in the lock.
-2. Choose **per sync batch**:
-   - **One sqlx file per TS file**, or
-   - **Merge several TS changes into one** `migrations/N_description.sql` (recommended when you sync infrequently).
-3. Update `baseline_lock.json`:
-   - Append the absorbed Kysely names to `fused_kysely_migrations`, **or**
-   - Keep baseline v1 frozen and treat post-lock names as covered only by sqlx `2+` (still append them to the lock once absorbed so drift clears).
-4. Keep `schema/init.sql` aligned with the latest end-state for fresh installs / docs.
-
-**Do not** rewrite `1_baseline.sql` checksum after it has been applied in production DBs unless you deliberately re-bridge.
-
-## No Node
-
-`IMMICH_SERVER_PATH` / `bin/run-kysely-migrations.cjs` are unused for schema.

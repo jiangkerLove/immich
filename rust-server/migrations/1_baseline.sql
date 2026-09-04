@@ -1,9 +1,8 @@
 -- sqlx baseline: fused end-state of Immich Kysely migration history
--- (server/src/schema/migrations/* -> current schema).
+-- listed in migrations/baseline_lock.json (all fused names → this single file).
 -- Fresh empty databases apply this migration.
--- Databases that already have Immich schema (via kysely or init.sql) are
--- bridged: version 1 is recorded in _sqlx_migrations without re-executing.
--- Future schema changes: add migrations/2_*.sql, 3_*.sql, ...
+-- Existing Immich schemas are bridged: version 1 is recorded without re-executing.
+-- Only after this baseline is locked in use: add migrations/2_*.sql when syncing new upstream.
 
 -- ---------------------------------------------------------------------------
 -- Extensions & functions
@@ -178,8 +177,32 @@ $$;
 CREATE OR REPLACE FUNCTION person_delete_audit()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
-    INSERT INTO person_audit ("personId", "ownerId")
-    SELECT id, "ownerId" FROM OLD;
+    INSERT INTO person_audit ("personGroupId", "ownerId")
+    SELECT "personGroupId", "ownerId" FROM OLD;
+    RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION person_group_delete_audit()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO person_group_audit ("personGroupId", "clusterGroupId")
+    SELECT id, "clusterGroupId" FROM OLD;
+    RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION album_user_delete()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM album
+    WHERE album.id = OLD."albumId"
+      AND NOT EXISTS (
+          SELECT "albumId"
+          FROM album_user
+          WHERE album_user."albumId" = album.id
+            AND album_user.role = 'owner'
+      );
     RETURN NULL;
 END;
 $$;
@@ -261,10 +284,23 @@ CREATE TYPE asset_checksum_algorithm_enum AS ENUM ('sha1', 'sha1-path');
 CREATE TYPE album_user_role_enum AS ENUM ('owner', 'editor', 'viewer');
 CREATE TYPE video_stream_variant_codec_enum AS ENUM ('h264', 'hevc', 'av1');
 
+CREATE TABLE cluster_group (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name varchar,
+    "createdAt" timestamptz NOT NULL DEFAULT now(),
+    "updatedAt" timestamptz NOT NULL DEFAULT now(),
+    "updateId" uuid NOT NULL DEFAULT immich_uuid_v7()
+);
+CREATE INDEX "cluster_group_updateId_idx" ON cluster_group ("updateId");
+CREATE TRIGGER "cluster_group_updatedAt"
+    BEFORE UPDATE ON cluster_group
+    FOR EACH ROW
+    EXECUTE FUNCTION updated_at();
+
 CREATE TABLE "user" (
     id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     email varchar NOT NULL UNIQUE,
-    password varchar NOT NULL DEFAULT '',
+    password varchar DEFAULT NULL,
     "pinCode" varchar,
     "createdAt" timestamptz NOT NULL DEFAULT now(),
     "profileImagePath" varchar NOT NULL DEFAULT '',
@@ -280,10 +316,22 @@ CREATE TABLE "user" (
     "quotaUsageInBytes" bigint NOT NULL DEFAULT 0,
     status varchar NOT NULL DEFAULT 'active',
     "profileChangedAt" timestamptz NOT NULL DEFAULT now(),
-    "updateId" uuid NOT NULL DEFAULT immich_uuid_v7()
+    "updateId" uuid NOT NULL DEFAULT immich_uuid_v7(),
+    "clusterGroupId" uuid NOT NULL REFERENCES cluster_group(id) ON UPDATE CASCADE ON DELETE NO ACTION
 );
 
 CREATE INDEX user_updated_at_id_idx ON "user" ("updatedAt", id);
+CREATE INDEX "user_clusterGroupId_idx" ON "user" ("clusterGroupId");
+
+CREATE TABLE cluster_group_request (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "clusterGroupId" uuid NOT NULL REFERENCES cluster_group(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    "userId" uuid NOT NULL REFERENCES "user"(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    "createdAt" timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT "cluster_group_request_clusterGroupId_userId_uq" UNIQUE ("clusterGroupId", "userId")
+);
+CREATE INDEX "cluster_group_request_clusterGroupId_idx" ON cluster_group_request ("clusterGroupId");
+CREATE INDEX "cluster_group_request_userId_idx" ON cluster_group_request ("userId");
 
 CREATE TABLE session (
     id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -299,7 +347,8 @@ CREATE TABLE session (
     "updateId" uuid NOT NULL DEFAULT immich_uuid_v7(),
     "isPendingSyncReset" boolean NOT NULL DEFAULT false,
     "pinExpiresAt" timestamptz,
-    "oauthSid" varchar
+    "oauthSid" varchar,
+    "oauthBearerToken" varchar
 );
 
 CREATE INDEX session_token_idx ON session (token);
@@ -498,11 +547,16 @@ CREATE TABLE asset_ocr (
     "textScore" real NOT NULL,
     text text NOT NULL,
     "isVisible" boolean NOT NULL DEFAULT true,
-    "updateId" uuid NOT NULL DEFAULT immich_uuid_v7()
+    "updateId" uuid NOT NULL DEFAULT immich_uuid_v7(),
+    "updatedAt" timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX asset_ocr_update_id_idx ON asset_ocr ("updateId");
 CREATE INDEX asset_ocr_asset_id_idx ON asset_ocr ("assetId");
+CREATE TRIGGER "asset_ocr_updatedAt"
+    BEFORE UPDATE ON asset_ocr
+    FOR EACH ROW
+    EXECUTE FUNCTION updated_at();
 
 CREATE TABLE asset_job_status (
     "assetId" uuid PRIMARY KEY REFERENCES asset(id) ON UPDATE CASCADE ON DELETE CASCADE,
@@ -556,7 +610,7 @@ CREATE TABLE album (
     "createdAt" timestamptz NOT NULL DEFAULT now(),
     "albumThumbnailAssetId" uuid REFERENCES asset(id) ON UPDATE CASCADE ON DELETE SET NULL,
     "updatedAt" timestamptz NOT NULL DEFAULT now(),
-    description text NOT NULL DEFAULT '',
+    description text DEFAULT NULL,
     "deletedAt" timestamptz,
     "isActivityEnabled" boolean NOT NULL DEFAULT true,
     "order" varchar NOT NULL DEFAULT 'desc',
@@ -577,6 +631,12 @@ CREATE TABLE album_user (
 );
 
 CREATE UNIQUE INDEX album_user_unique_owner ON album_user ("albumId") WHERE role = 'owner';
+
+CREATE TRIGGER album_user_delete
+    AFTER DELETE ON album_user
+    REFERENCING OLD TABLE AS old
+    FOR EACH ROW
+    EXECUTE FUNCTION album_user_delete();
 
 CREATE TABLE album_asset (
     "albumId" uuid NOT NULL REFERENCES album(id) ON UPDATE CASCADE ON DELETE CASCADE,
@@ -682,7 +742,7 @@ CREATE INDEX partner_update_id_idx ON partner ("updateId");
 CREATE TABLE asset_face (
     id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     "assetId" uuid NOT NULL REFERENCES asset(id) ON UPDATE CASCADE ON DELETE CASCADE,
-    "personId" uuid,
+    "personGroupId" uuid,
     "imageWidth" integer NOT NULL DEFAULT 0,
     "imageHeight" integer NOT NULL DEFAULT 0,
     "boundingBoxX1" integer NOT NULL DEFAULT 0,
@@ -696,11 +756,33 @@ CREATE TABLE asset_face (
     "isVisible" boolean NOT NULL DEFAULT true
 );
 
-CREATE TABLE person (
+CREATE TABLE person_group (
     id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "clusterGroupId" uuid NOT NULL REFERENCES cluster_group(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    "createdAt" timestamptz NOT NULL DEFAULT now(),
+    "createId" uuid NOT NULL DEFAULT immich_uuid_v7(),
+    "updatedAt" timestamptz NOT NULL DEFAULT now(),
+    "updateId" uuid NOT NULL DEFAULT immich_uuid_v7()
+);
+CREATE INDEX "person_group_clusterGroupId_idx" ON person_group ("clusterGroupId");
+CREATE INDEX "person_group_createId_idx" ON person_group ("createId");
+CREATE INDEX "person_group_updateId_idx" ON person_group ("updateId");
+CREATE TRIGGER person_group_delete_audit
+    AFTER DELETE ON person_group
+    REFERENCING OLD TABLE AS old
+    FOR EACH STATEMENT
+    WHEN (pg_trigger_depth() = 0)
+    EXECUTE FUNCTION person_group_delete_audit();
+CREATE TRIGGER "person_group_updatedAt"
+    BEFORE UPDATE ON person_group
+    FOR EACH ROW
+    EXECUTE FUNCTION updated_at();
+
+CREATE TABLE person (
+    "ownerId" uuid NOT NULL REFERENCES "user"(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    "personGroupId" uuid NOT NULL REFERENCES person_group(id) ON UPDATE CASCADE ON DELETE CASCADE,
     "createdAt" timestamptz NOT NULL DEFAULT now(),
     "updatedAt" timestamptz NOT NULL DEFAULT now(),
-    "ownerId" uuid NOT NULL REFERENCES "user"(id) ON UPDATE CASCADE ON DELETE CASCADE,
     name varchar NOT NULL DEFAULT '',
     "thumbnailPath" varchar NOT NULL DEFAULT '',
     "isHidden" boolean NOT NULL DEFAULT false,
@@ -709,17 +791,20 @@ CREATE TABLE person (
     "isFavorite" boolean NOT NULL DEFAULT false,
     color varchar,
     "updateId" uuid NOT NULL DEFAULT immich_uuid_v7(),
+    PRIMARY KEY ("ownerId", "personGroupId"),
     CONSTRAINT person_birth_date_chk CHECK ("birthDate" <= CURRENT_DATE)
 );
 
 ALTER TABLE asset_face
-    ADD CONSTRAINT asset_face_person_id_fkey
-    FOREIGN KEY ("personId") REFERENCES person(id) ON UPDATE CASCADE ON DELETE SET NULL;
+    ADD CONSTRAINT "asset_face_personGroupId_fkey"
+    FOREIGN KEY ("personGroupId") REFERENCES person_group(id) ON UPDATE CASCADE ON DELETE SET NULL;
 
-CREATE INDEX asset_face_asset_id_person_id_idx ON asset_face ("assetId", "personId");
-CREATE INDEX asset_face_person_id_asset_id_not_deleted_is_visible_idx
-    ON asset_face ("personId", "assetId")
+CREATE INDEX "asset_face_personGroupId_assetId_idx" ON asset_face ("personGroupId", "assetId");
+CREATE INDEX "asset_face_personGroupId_assetId_notDeleted_isVisible_idx"
+    ON asset_face ("personGroupId", "assetId")
     WHERE "deletedAt" IS NULL AND "isVisible" IS TRUE;
+CREATE INDEX "asset_face_assetId_personGroupId_idx" ON asset_face ("assetId", "personGroupId");
+CREATE INDEX "person_personGroupId_idx" ON person ("personGroupId");
 CREATE INDEX idx_person_name_trigram ON person USING gin (f_unaccent(name) gin_trgm_ops);
 
 CREATE TABLE system_metadata (
@@ -863,6 +948,7 @@ CREATE TABLE plugin_method (
     "hostFunctions" boolean NOT NULL DEFAULT false,
     schema jsonb,
     "uiHints" varchar[] NOT NULL DEFAULT '{}',
+    "allowedHosts" varchar[] NOT NULL DEFAULT '{}',
     UNIQUE ("pluginId", name)
 );
 
@@ -875,7 +961,8 @@ CREATE TABLE workflow (
     "createdAt" timestamptz NOT NULL DEFAULT now(),
     "updatedAt" timestamptz NOT NULL DEFAULT now(),
     "updateId" uuid NOT NULL DEFAULT immich_uuid_v7(),
-    enabled boolean NOT NULL DEFAULT true
+    enabled boolean NOT NULL DEFAULT true,
+    logging boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE workflow_step (
@@ -886,6 +973,18 @@ CREATE TABLE workflow_step (
     config jsonb,
     "order" integer NOT NULL
 );
+
+CREATE TABLE workflow_log (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    "createdAt" timestamptz NOT NULL DEFAULT now(),
+    "workflowId" uuid NOT NULL REFERENCES workflow(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    result varchar NOT NULL,
+    "workflowStepId" uuid REFERENCES workflow_step(id) ON UPDATE CASCADE ON DELETE SET NULL,
+    "triggerDataId" uuid,
+    "runId" uuid NOT NULL
+);
+CREATE INDEX "workflow_log_workflowId_idx" ON workflow_log ("workflowId");
+CREATE INDEX "workflow_log_workflowStepId_idx" ON workflow_log ("workflowStepId");
 
 -- smart_search / face_search：无 pgvector 时自动跳过
 DO $$
@@ -1059,13 +1158,23 @@ CREATE TABLE stack_audit (
 );
 CREATE INDEX stack_audit_deleted_at_idx ON stack_audit ("deletedAt");
 
+CREATE TABLE person_group_audit (
+    id uuid PRIMARY KEY DEFAULT immich_uuid_v7(),
+    "personGroupId" uuid NOT NULL,
+    "clusterGroupId" uuid NOT NULL,
+    "deletedAt" timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX "person_group_audit_personGroupId_idx" ON person_group_audit ("personGroupId");
+CREATE INDEX "person_group_audit_clusterGroupId_idx" ON person_group_audit ("clusterGroupId");
+CREATE INDEX "person_group_audit_deletedAt_idx" ON person_group_audit ("deletedAt");
+
 CREATE TABLE person_audit (
     id uuid PRIMARY KEY DEFAULT immich_uuid_v7(),
-    "personId" uuid NOT NULL,
+    "personGroupId" uuid NOT NULL,
     "ownerId" uuid NOT NULL,
     "deletedAt" timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX person_audit_person_id_idx ON person_audit ("personId");
+CREATE INDEX "person_audit_personGroupId_idx" ON person_audit ("personGroupId");
 CREATE INDEX person_audit_owner_id_idx ON person_audit ("ownerId");
 CREATE INDEX person_audit_deleted_at_idx ON person_audit ("deletedAt");
 
@@ -1238,7 +1347,7 @@ CREATE TRIGGER person_delete_audit
     AFTER DELETE ON person
     REFERENCING OLD TABLE AS old
     FOR EACH STATEMENT
-    WHEN (pg_trigger_depth() = 0)
+    WHEN (pg_trigger_depth() <= 1)
     EXECUTE FUNCTION person_delete_audit();
 
 CREATE TRIGGER user_metadata_delete_audit

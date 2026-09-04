@@ -18,4 +18,3 @@ pub fn push_visibility_enum_eq(
     query.push_bind(visibility.into());
     query.push("::asset_visibility_enum");
 }
-

@@ -1,5 +1,5 @@
+use base64::{Engine as _, engine::general_purpose};
 use rand::RngCore;
-use base64::{engine::general_purpose, Engine as _};
 use sha2::{Digest, Sha256};
 
 pub fn random_bytes_as_text(bytes: usize) -> String {

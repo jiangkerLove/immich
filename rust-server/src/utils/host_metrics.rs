@@ -27,10 +27,8 @@ pub fn spawn_collector(media_path: PathBuf) {
 
             metrics::gauge!("immich.host.cpu.usage_percent")
                 .set(f64::from(system.global_cpu_usage()));
-            metrics::gauge!("immich.host.memory.used_bytes")
-                .set(system.used_memory() as f64);
-            metrics::gauge!("immich.host.memory.total_bytes")
-                .set(system.total_memory() as f64);
+            metrics::gauge!("immich.host.memory.used_bytes").set(system.used_memory() as f64);
+            metrics::gauge!("immich.host.memory.total_bytes").set(system.total_memory() as f64);
 
             if let Some(usage) = disk::check_disk_usage(&media_path) {
                 metrics::gauge!("immich.host.disk.used_bytes").set(usage.used as f64);
