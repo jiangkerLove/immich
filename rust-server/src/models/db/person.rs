@@ -128,6 +128,43 @@ pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<Person
     .await
 }
 
+#[derive(Debug, FromRow)]
+pub struct PersonMergeRow {
+    pub owner_id: Uuid,
+    pub id: Uuid,
+    pub name: String,
+    pub birth_date: Option<NaiveDate>,
+    pub thumbnail_path: String,
+}
+
+/// Every owner row for the given person groups, ordered by owner. Matches `getForMergePerson`.
+pub async fn list_for_merge(
+    pool: &Pool<Postgres>,
+    ids: &[Uuid],
+) -> Result<Vec<PersonMergeRow>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let schema = PersonSchema::get(pool).await?;
+    let id_select = schema.person_id_as_id("");
+    let id_where = schema.person_id_expr("");
+    sqlx::query_as::<_, PersonMergeRow>(&format!(
+        r#"
+            SELECT "ownerId" AS owner_id,
+                   {id_select},
+                   name,
+                   "birthDate" AS birth_date,
+                   "thumbnailPath" AS thumbnail_path
+            FROM person
+            WHERE {id_where} = ANY($1)
+            ORDER BY "ownerId"
+        "#
+    ))
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_by_id_for_owner(
     pool: &Pool<Postgres>,
     owner_id: &Uuid,

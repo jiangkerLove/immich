@@ -243,6 +243,7 @@ pub async fn get_by_checksums(
 #[derive(Debug)]
 pub struct NewAsset<'a> {
     pub owner_id: Uuid,
+    pub library_id: Option<Uuid>,
     pub asset_type: &'a str,
     pub original_path: &'a str,
     pub checksum: &'a [u8],
@@ -259,15 +260,16 @@ pub async fn create_asset(pool: &Pool<Postgres>, asset: NewAsset<'_>) -> Result<
     let id: Uuid = sqlx::query_scalar(
         r#"
             INSERT INTO asset (
-                "ownerId", type, "originalPath", checksum, "checksumAlgorithm",
+                "ownerId", "libraryId", type, "originalPath", checksum, "checksumAlgorithm",
                 "fileCreatedAt", "fileModifiedAt", "localDateTime",
                 "isFavorite", duration, "originalFileName", "livePhotoVideoId", visibility
             )
-            VALUES ($1, $2, $3, $4, 'sha1', $5, $6, $5, $7, $8, $9, $10, $11::asset_visibility_enum)
+            VALUES ($1, $2, $3, $4, $5, 'sha1', $6, $7, $6, $8, $9, $10, $11, $12::asset_visibility_enum)
             RETURNING id
         "#,
     )
     .bind(asset.owner_id)
+    .bind(asset.library_id)
     .bind(asset.asset_type)
     .bind(asset.original_path)
     .bind(asset.checksum)

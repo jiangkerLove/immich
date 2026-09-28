@@ -274,6 +274,7 @@ async fn apply_motion_photos(
             pool,
             NewAsset {
                 owner_id: asset.owner_id,
+                library_id: asset.library_id,
                 asset_type: "VIDEO",
                 original_path: &motion_path,
                 checksum: &checksum,
