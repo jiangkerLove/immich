@@ -142,6 +142,110 @@ pub async fn extract_binary_tag(path: &str, tag_name: &str) -> Result<Vec<u8>, S
     Ok(output.stdout)
 }
 
+/// Copy one ExifTool group from `source` onto `target`.
+///
+/// Matches TypeScript `MediaRepository.copyTagGroup` (`-m`, `-TagsFromFile`,
+/// `-{group}:all>{group}:all`, `-overwrite_original`).
+pub async fn copy_tag_group(tag_group: &str, source: &str, target: &str) -> Result<(), String> {
+    let mut command = Command::new("exiftool");
+    for arg in copy_tag_group_args(tag_group, source) {
+        command.arg(arg);
+    }
+    command
+        .arg(target)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = run(&mut command).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "exiftool copy tag group {tag_group} failed for {target}: {stderr}"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Copy the source ICC profile onto a derivative.
+///
+/// ExifTool exits successfully when the source has no profile. Callers treat a
+/// hard failure as a warning so thumbnail generation still completes.
+pub async fn copy_icc_profile(source: &str, target: &str) -> Result<(), String> {
+    let mut command = Command::new("exiftool");
+    command
+        .arg("-m")
+        .arg("-overwrite_original")
+        .arg("-TagsFromFile")
+        .arg(source)
+        .arg("-icc_profile")
+        .arg(target)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = run(&mut command).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "exiftool copy icc profile failed for {target}: {stderr}"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn orientation_colorspace_args(
+    orientation: Option<&str>,
+    colorspace: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec!["-m".to_string(), "-overwrite_original".to_string()];
+    if let Some(orientation) = orientation.and_then(|value| value.parse::<i32>().ok()) {
+        if orientation > 0 {
+            args.push(format!("-Orientation#={orientation}"));
+        }
+    }
+    if let Some(colorspace) = colorspace.filter(|value| !value.is_empty()) {
+        args.push(format!("-ColorSpace={colorspace}"));
+    }
+    args
+}
+
+pub async fn write_orientation_and_colorspace(
+    path: &str,
+    orientation: Option<&str>,
+    colorspace: Option<&str>,
+) -> Result<(), String> {
+    let args = orientation_colorspace_args(orientation, colorspace);
+    if args.len() == 2 {
+        return Ok(());
+    }
+
+    let mut command = Command::new("exiftool");
+    command
+        .arg("-api")
+        .arg("largefilesupport=1")
+        .args(&args)
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = run(&mut command).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("exiftool write exif failed for {path}: {stderr}"));
+    }
+    Ok(())
+}
+
+pub(crate) fn copy_tag_group_args(tag_group: &str, source: &str) -> Vec<String> {
+    vec![
+        "-m".to_string(),
+        "-overwrite_original".to_string(),
+        "-TagsFromFile".to_string(),
+        source.to_string(),
+        format!("-{tag_group}:all>{tag_group}:all"),
+    ]
+}
+
 pub async fn write_tags(path: &str, tags: &[(&str, TagWriteValue)]) -> Result<(), String> {
     if tags.is_empty() {
         return Ok(());
@@ -191,4 +295,41 @@ pub enum TagWriteValue {
     Text(String),
     Number(f64),
     StringList(Vec<String>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{copy_tag_group_args, orientation_colorspace_args};
+
+    #[test]
+    fn copy_tag_group_args_match_typescript_write_args() {
+        let args = copy_tag_group_args("XMP-GPano", "/library/original.jpg");
+        assert_eq!(
+            args,
+            vec![
+                "-m".to_string(),
+                "-overwrite_original".to_string(),
+                "-TagsFromFile".to_string(),
+                "/library/original.jpg".to_string(),
+                "-XMP-GPano:all>XMP-GPano:all".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn orientation_colorspace_args_match_typescript_write_exif() {
+        assert_eq!(
+            orientation_colorspace_args(Some("6"), Some("sRGB")),
+            vec![
+                "-m".to_string(),
+                "-overwrite_original".to_string(),
+                "-Orientation#=6".to_string(),
+                "-ColorSpace=sRGB".to_string(),
+            ]
+        );
+        assert_eq!(
+            orientation_colorspace_args(Some("0"), Some("")),
+            vec!["-m".to_string(), "-overwrite_original".to_string()]
+        );
+    }
 }

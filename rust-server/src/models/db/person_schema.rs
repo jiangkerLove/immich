@@ -145,6 +145,26 @@ impl PersonSchema {
     pub fn person_list_select_columns(&self) -> String {
         self.person_select_columns("person.")
     }
+
+    /// Exclude a face when any person in its group was born after the asset date.
+    /// `$5` is the asset `fileCreatedAt`. Matches TypeScript `searchFaces` `minBirthDate`.
+    pub fn face_birth_date_exclusion(&self, face_alias: &str) -> String {
+        let person_match = match self.variant {
+            PersonSchemaVariant::Legacy => {
+                format!(r#"person.id = {face_alias}."personId""#)
+            }
+            PersonSchemaVariant::ClusterGroups => {
+                format!(r#"person."personGroupId" = {face_alias}."personGroupId""#)
+            }
+        };
+        format!(
+            r#"($5::timestamptz IS NULL OR NOT EXISTS (
+                SELECT 1 FROM person
+                WHERE {person_match}
+                  AND person."birthDate" > $5::date
+            ))"#
+        )
+    }
 }
 
 pub async fn create_person_group(
@@ -204,6 +224,18 @@ mod tests {
             r#"person."personGroupId" AS id"#
         );
         assert_eq!(schema.face_person_col(), "personGroupId");
+    }
+
+    #[test]
+    fn birth_date_exclusion_covers_the_person_group() {
+        let legacy = PersonSchema::for_variant(PersonSchemaVariant::Legacy);
+        let legacy_sql = legacy.face_birth_date_exclusion("asset_face");
+        assert!(legacy_sql.contains(r#"person.id = asset_face."personId""#));
+
+        let cluster = PersonSchema::for_variant(PersonSchemaVariant::ClusterGroups);
+        let cluster_sql = cluster.face_birth_date_exclusion("asset_face");
+        assert!(cluster_sql.contains(r#"person."personGroupId" = asset_face."personGroupId""#));
+        assert!(cluster_sql.contains(r#"person."birthDate" > $5::date"#));
     }
 
     #[test]

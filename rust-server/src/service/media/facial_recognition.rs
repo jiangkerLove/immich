@@ -1,8 +1,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::db::ml_job;
+use crate::models::db::ml_job::{self, face_search_scope};
 use crate::models::db::person;
+use crate::models::db::person_schema::PersonSchema;
 use crate::models::db::system_metadata::{
     FacialRecognitionState, get_facial_recognition_state, get_machine_learning_config,
     is_facial_recognition_enabled, set_facial_recognition_state,
@@ -164,11 +165,19 @@ impl FacialRecognitionService {
             return Ok(FacialRecognitionOutcome::Skipped);
         }
 
+        let schema = PersonSchema::get(&self.pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let scope = face_search_scope(
+            schema.is_cluster_groups(),
+            face.cluster_group_id,
+            face.owner_id,
+        );
         let min_birth_date = Some(face.file_created_at);
         let matches = ml_job::search_faces(
             &self.pool,
             &embedding,
-            &[face.owner_id],
+            scope,
             config.facial_recognition.max_distance,
             config.facial_recognition.min_faces as i64,
             false,
@@ -197,7 +206,7 @@ impl FacialRecognitionService {
             let with_person = ml_job::search_faces(
                 &self.pool,
                 &embedding,
-                &[face.owner_id],
+                scope,
                 config.facial_recognition.max_distance,
                 1,
                 true,
@@ -220,6 +229,18 @@ impl FacialRecognitionService {
         }
 
         if let Some(person_id) = person_id {
+            if schema.is_cluster_groups() {
+                let created =
+                    person::ensure_person_in_group(&self.pool, &face.owner_id, &person_id, face_id)
+                        .await
+                        .map_err(|err| err.to_string())?;
+                if created {
+                    self.jobs
+                        .queue_person_generate_thumbnail(&face.owner_id, &person_id)
+                        .await
+                        .map_err(|err| err.to_string())?;
+                }
+            }
             person::reassign_face(&self.pool, face_id, &person_id)
                 .await
                 .map_err(|err| err.to_string())?;

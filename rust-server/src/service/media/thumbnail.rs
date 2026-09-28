@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, ImageFormat};
+use image::{DynamicImage, GenericImageView, ImageDecoder, ImageFormat};
 use serde_json::Value;
 use sqlx::PgPool;
 use thumbhash::rgba_to_thumb_hash;
@@ -38,12 +38,8 @@ const RAW_EXTENSIONS: &[&str] = &[
     ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f",
 ];
 
-const WEB_UNSUPPORTED_EXTENSIONS: &[&str] = &[
-    ".3fr", ".ari", ".arw", ".cap", ".cin", ".cr2", ".cr3", ".crw", ".dcr", ".dng", ".erf", ".fff",
-    ".iiq", ".k25", ".kdc", ".mrw", ".nef", ".nrw", ".orf", ".ori", ".pef", ".psd", ".raf", ".raw",
-    ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f", ".heic", ".heif", ".hif", ".insp", ".jp2",
-    ".jpe", ".jxl", ".mpo", ".svg", ".tif", ".tiff",
-];
+const WEB_SUPPORTED_EXTENSIONS: &[&str] =
+    &[".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbnailJobOutcome {
@@ -57,12 +53,16 @@ struct ImageFormatConfig {
     preview_format: String,
     preview_size: u32,
     preview_quality: u8,
+    preview_progressive: bool,
     thumbnail_format: String,
     thumbnail_size: u32,
     thumbnail_quality: u8,
+    thumbnail_progressive: bool,
     fullsize_enabled: bool,
     fullsize_format: String,
     fullsize_quality: u8,
+    fullsize_progressive: bool,
+    colorspace: String,
     extract_embedded: bool,
 }
 
@@ -74,10 +74,14 @@ impl Default for ImageFormatConfig {
             thumbnail_format: "webp".into(),
             thumbnail_size: 250,
             preview_quality: 80,
+            preview_progressive: false,
             thumbnail_quality: 80,
+            thumbnail_progressive: false,
             fullsize_enabled: false,
             fullsize_format: "jpeg".into(),
             fullsize_quality: 80,
+            fullsize_progressive: false,
+            colorspace: "p3".into(),
             extract_embedded: false,
         }
     }
@@ -194,9 +198,8 @@ impl ThumbnailService {
         let mut thumbhash = generated.as_ref().and_then(|g| g.thumbhash.clone());
 
         if thumbhash.is_none() {
-            if let Ok((image, _, _)) = self.decode_asset_image(&asset, &config, false).await {
-                let oriented = apply_exif_orientation(image, asset.orientation.as_deref());
-                thumbhash = Some(compute_thumbhash_from_image(&oriented)?);
+            if let Ok(decoded) = self.decode_asset_image(&asset, &config, false).await {
+                thumbhash = Some(compute_thumbhash_from_image(&decoded.image)?);
             }
         }
 
@@ -267,33 +270,48 @@ impl ThumbnailService {
         }
 
         let config = self.load_image_config().await?;
-        let mut skip_orientation = false;
-        let decoded = if data.asset_type != "VIDEO"
-            && config.extract_embedded
-            && is_raw_file(&data.original_path)
-        {
+        let (decoded, kind) = if data.asset_type == "VIDEO" {
+            match decode_image_path(&input_path).await {
+                Ok(image) => (image, StillDecodeKind::VideoPreview),
+                Err(err) => {
+                    tracing::error!("person thumbnail decode failed for {person_id}: {err}");
+                    (
+                        extract_with_ffmpeg(&input_path, config.preview_size).await?,
+                        StillDecodeKind::VideoPreview,
+                    )
+                }
+            }
+        } else if config.extract_embedded && is_raw_file(&data.original_path) {
             if let Some(preview) =
                 extract_raw_embedded_preview(&data.original_path, config.preview_size).await?
             {
-                skip_orientation = true;
-                decode_image_bytes(&preview).await?
+                (
+                    decode_image_bytes(&preview.bytes).await?,
+                    StillDecodeKind::EmbeddedPreview,
+                )
             } else {
-                extract_with_ffmpeg(&data.original_path, config.preview_size).await?
+                (
+                    extract_with_ffmpeg(&data.original_path, config.preview_size).await?,
+                    StillDecodeKind::FfmpegAutorotated,
+                )
             }
         } else {
             match decode_image_path(&input_path).await {
-                Ok(image) => image,
+                Ok(image) => (image, StillDecodeKind::ImageFile),
                 Err(err) => {
                     tracing::error!("person thumbnail decode failed for {person_id}: {err}");
-                    extract_with_ffmpeg(&input_path, config.preview_size).await?
+                    (
+                        extract_with_ffmpeg(&input_path, config.preview_size).await?,
+                        StillDecodeKind::FfmpegAutorotated,
+                    )
                 }
             }
         };
 
-        let oriented = if skip_orientation {
-            decoded
-        } else {
+        let oriented = if should_apply_person_orientation(&data.asset_type, kind) {
             apply_exif_orientation(decoded, data.exif_orientation.as_deref())
+        } else {
+            decoded
         };
         let (width, height) = oriented.dimensions();
         let crop = face_crop_from_bbox(
@@ -327,6 +345,7 @@ impl ThumbnailService {
             FACE_THUMBNAIL_SIZE,
             "jpeg",
             config.thumbnail_quality,
+            false,
         )?;
 
         asset_job::update_person_thumbnail_path(
@@ -546,6 +565,8 @@ impl ThumbnailService {
                 config.preview_size = read_u32(preview, "size", config.preview_size);
                 config.preview_quality =
                     read_u32(preview, "quality", config.preview_quality as u32) as u8;
+                config.preview_progressive =
+                    read_bool(preview, "progressive", config.preview_progressive);
             }
             if let Some(thumbnail) = image.get("thumbnail") {
                 config.thumbnail_format =
@@ -553,6 +574,8 @@ impl ThumbnailService {
                 config.thumbnail_size = read_u32(thumbnail, "size", config.thumbnail_size);
                 config.thumbnail_quality =
                     read_u32(thumbnail, "quality", config.thumbnail_quality as u32) as u8;
+                config.thumbnail_progressive =
+                    read_bool(thumbnail, "progressive", config.thumbnail_progressive);
             }
             if let Some(fullsize) = image.get("fullsize") {
                 config.fullsize_enabled = fullsize
@@ -562,7 +585,10 @@ impl ThumbnailService {
                 config.fullsize_format = read_string(fullsize, "format", &config.fullsize_format);
                 config.fullsize_quality =
                     read_u32(fullsize, "quality", config.fullsize_quality as u32) as u8;
+                config.fullsize_progressive =
+                    read_bool(fullsize, "progressive", config.fullsize_progressive);
             }
+            config.colorspace = read_string(&image, "colorspace", &config.colorspace);
             config.extract_embedded = image
                 .get("extractEmbedded")
                 .and_then(|v| v.as_bool())
@@ -602,7 +628,11 @@ impl ThumbnailService {
         );
 
         let (width, height) = match self.decode_asset_image(asset, config, true).await {
-            Ok((_, w, h)) => output_dimensions(&asset.edits, w, h),
+            Ok(decoded) => output_dimensions(
+                &asset.edits,
+                decoded.pre_edit_width,
+                decoded.pre_edit_height,
+            ),
             Err(_) => (
                 asset.exif_image_width.unwrap_or(0) as u32,
                 asset.exif_image_height.unwrap_or(0) as u32,
@@ -638,52 +668,126 @@ impl ThumbnailService {
             &config.thumbnail_format,
             is_edited,
         );
-        let fullsize_path = if should_generate_fullsize(asset, config, is_edited) {
-            Some(self.storage.image_derivative_path(
-                &asset.owner_id,
-                &asset.id,
-                "fullsize",
-                &config.fullsize_format,
-                is_edited,
-            ))
-        } else {
-            None
-        };
-
         if !Path::new(&asset.original_path).exists() {
             return Ok(ThumbnailJobOutcome::Failed);
         }
 
         let decoded = match self.decode_asset_image(asset, config, is_edited).await {
-            Ok((image, _, _)) => image,
+            Ok(decoded) => decoded,
             Err(err) => {
                 tracing::error!("image decode failed for {}, trying ffmpeg: {err}", asset.id);
-                extract_with_ffmpeg(&asset.original_path, config.preview_size).await?
+                let image = extract_with_ffmpeg(&asset.original_path, config.preview_size).await?;
+                let (width, height) = image.dimensions();
+                DecodedStill {
+                    image,
+                    embedded_jpeg: None,
+                    pre_edit_width: width,
+                    pre_edit_height: height,
+                }
             }
         };
 
+        let generate_fullsize = should_generate_fullsize(asset, config, is_edited);
+        let copy_embedded = generate_fullsize && decoded.embedded_jpeg.is_some();
+        let fullsize_path = if generate_fullsize {
+            let (format, edited) =
+                fullsize_derivative(copy_embedded, &config.fullsize_format, is_edited);
+            Some(self.storage.image_derivative_path(
+                &asset.owner_id,
+                &asset.id,
+                "fullsize",
+                format,
+                edited,
+            ))
+        } else {
+            None
+        };
+
         write_resized(
-            &decoded,
+            &decoded.image,
             &preview_path,
             config.preview_size,
             &config.preview_format,
             config.preview_quality,
+            config.preview_progressive,
         )?;
         write_resized(
-            &decoded,
+            &decoded.image,
             &thumbnail_path,
             config.thumbnail_size,
             &config.thumbnail_format,
             config.thumbnail_quality,
+            config.thumbnail_progressive,
         )?;
         if let Some(fullsize) = fullsize_path.as_ref() {
-            write_resized(
-                &decoded,
-                fullsize,
-                u32::MAX,
-                &config.fullsize_format,
-                config.fullsize_quality,
-            )?;
+            if let Some(bytes) = decoded.embedded_jpeg.as_deref() {
+                write_bytes(fullsize, bytes).await?;
+                if let Err(err) = exiftool::write_orientation_and_colorspace(
+                    &fullsize.to_string_lossy(),
+                    asset.orientation.as_deref(),
+                    asset.colorspace.as_deref(),
+                )
+                .await
+                {
+                    tracing::warn!("could not write fullsize exif to {fullsize:?}: {err}");
+                }
+            } else {
+                write_resized(
+                    &decoded.image,
+                    fullsize,
+                    u32::MAX,
+                    &config.fullsize_format,
+                    config.fullsize_quality,
+                    config.fullsize_progressive,
+                )?;
+            }
+        }
+
+        let output_space = output_colorspace(
+            asset.colorspace.as_deref(),
+            asset.profile_description.as_deref(),
+            asset.bits_per_sample,
+            &config.colorspace,
+        );
+        let source_is_srgb = is_srgb(
+            asset.colorspace.as_deref(),
+            asset.profile_description.as_deref(),
+            asset.bits_per_sample,
+        );
+        if should_preserve_source_icc(source_is_srgb, output_space) {
+            let icc_fullsize = if copy_embedded {
+                None
+            } else {
+                fullsize_path.as_deref()
+            };
+            copy_source_icc_profile(
+                &asset.original_path,
+                &preview_path,
+                &thumbnail_path,
+                icc_fullsize,
+            )
+            .await;
+        } else {
+            tracing::debug!(
+                "asset {} is not sRGB and image.colorspace is srgb; thumbnail pixels are left unconverted",
+                asset.id
+            );
+        }
+
+        if asset.projection_type.as_deref() == Some("EQUIRECTANGULAR") {
+            copy_equirectangular_pano_tags(
+                &asset.original_path,
+                &preview_path,
+                fullsize_path.as_deref(),
+            )
+            .await;
+        }
+
+        let is_transparent = image_file_is_transparent(asset, config);
+        warn_transparency_loss(asset.id, is_transparent, &config.preview_format);
+        warn_transparency_loss(asset.id, is_transparent, &config.thumbnail_format);
+        if generate_fullsize && !copy_embedded {
+            warn_transparency_loss(asset.id, is_transparent, &config.fullsize_format);
         }
 
         let thumbhash = if is_edited {
@@ -698,16 +802,22 @@ impl ThumbnailService {
                 path: preview_path.to_string_lossy().into_owned(),
                 file_type: "preview".into(),
                 is_edited,
-                is_progressive: false,
-                is_transparent: false,
+                is_progressive: is_progressive_output(
+                    &config.preview_format,
+                    config.preview_progressive,
+                ),
+                is_transparent,
             },
             UpsertAssetFile {
                 asset_id: asset.id,
                 path: thumbnail_path.to_string_lossy().into_owned(),
                 file_type: "thumbnail".into(),
                 is_edited,
-                is_progressive: false,
-                is_transparent: false,
+                is_progressive: is_progressive_output(
+                    &config.thumbnail_format,
+                    config.thumbnail_progressive,
+                ),
+                is_transparent,
             },
         ];
         if let Some(fullsize) = fullsize_path.as_ref() {
@@ -715,9 +825,12 @@ impl ThumbnailService {
                 asset_id: asset.id,
                 path: fullsize.to_string_lossy().into_owned(),
                 file_type: "fullsize".into(),
-                is_edited,
-                is_progressive: false,
-                is_transparent: false,
+                is_edited: if copy_embedded { false } else { is_edited },
+                is_progressive: is_progressive_output(
+                    &config.fullsize_format,
+                    config.fullsize_progressive,
+                ),
+                is_transparent,
             });
         }
 
@@ -852,31 +965,46 @@ impl ThumbnailService {
         asset: &ThumbnailAssetJob,
         config: &ImageFormatConfig,
         is_edited: bool,
-    ) -> Result<(DynamicImage, u32, u32), String> {
-        let mut skip_orientation = false;
-        let mut image = if config.extract_embedded && is_raw_file(&asset.original_file_name) {
+    ) -> Result<DecodedStill, String> {
+        let mut embedded_jpeg = None;
+        let (mut image, kind) = if config.extract_embedded && is_raw_file(&asset.original_file_name)
+        {
             if let Some(preview) =
                 extract_raw_embedded_preview(&asset.original_path, config.preview_size).await?
             {
-                skip_orientation = true;
-                decode_image_bytes(&preview).await?
+                let image = decode_image_bytes(&preview.bytes).await?;
+                if preview.kind == EmbeddedPreviewKind::Jpeg {
+                    embedded_jpeg = Some(preview.bytes);
+                }
+                (image, StillDecodeKind::EmbeddedPreview)
             } else {
-                extract_with_ffmpeg(&asset.original_path, config.preview_size).await?
+                (
+                    extract_with_ffmpeg(&asset.original_path, config.preview_size).await?,
+                    StillDecodeKind::FfmpegAutorotated,
+                )
             }
         } else {
-            decode_image_path(&asset.original_path).await?
+            (
+                decode_image_path(&asset.original_path).await?,
+                StillDecodeKind::ImageFile,
+            )
         };
 
-        if !is_edited && !skip_orientation {
+        if should_apply_stored_orientation(kind) {
             image = apply_exif_orientation(image, asset.orientation.as_deref());
         }
 
+        let (pre_edit_width, pre_edit_height) = image.dimensions();
         if is_edited {
             image = apply_edits(image, &asset.edits);
         }
 
-        let (width, height) = image.dimensions();
-        Ok((image, width, height))
+        Ok(DecodedStill {
+            image,
+            embedded_jpeg,
+            pre_edit_width,
+            pre_edit_height,
+        })
     }
 
     async fn sync_derivative_files_with_upserts(
@@ -912,26 +1040,204 @@ impl ThumbnailService {
     }
 }
 
+/// Re-attach 360° panorama metadata after JPEG/WebP re-encode strips it.
+/// Failures are warnings: thumbnail generation still succeeds, matching TypeScript.
+async fn copy_equirectangular_pano_tags(source: &str, preview: &Path, fullsize: Option<&Path>) {
+    if let Err(err) =
+        exiftool::copy_tag_group("XMP-GPano", source, &preview.to_string_lossy()).await
+    {
+        tracing::warn!("could not copy XMP-GPano tags to preview {preview:?}: {err}");
+    }
+    if let Some(fullsize) = fullsize {
+        if let Err(err) =
+            exiftool::copy_tag_group("XMP-GPano", source, &fullsize.to_string_lossy()).await
+        {
+            tracing::warn!("could not copy XMP-GPano tags to fullsize {fullsize:?}: {err}");
+        }
+    }
+}
+
+/// TypeScript `MediaService.isSRGB`. Empty strings count as missing metadata.
+fn is_srgb(
+    colorspace: Option<&str>,
+    profile_description: Option<&str>,
+    bits_per_sample: Option<i32>,
+) -> bool {
+    let colorspace = nonempty(colorspace);
+    let profile_description = nonempty(profile_description);
+    if colorspace.is_some() || profile_description.is_some() {
+        return [colorspace, profile_description]
+            .into_iter()
+            .flatten()
+            .any(|value| value.to_ascii_lowercase().contains("srgb"));
+    }
+    match bits_per_sample {
+        Some(bits) => bits == 8,
+        None => true,
+    }
+}
+
+fn output_colorspace(
+    colorspace: Option<&str>,
+    profile_description: Option<&str>,
+    bits_per_sample: Option<i32>,
+    configured: &str,
+) -> &'static str {
+    if is_srgb(colorspace, profile_description, bits_per_sample) {
+        "srgb"
+    } else if configured.eq_ignore_ascii_case("srgb") {
+        "srgb"
+    } else {
+        "p3"
+    }
+}
+
+/// Pixels are not converted. Keep the source ICC profile when that profile
+/// matches the colorspace TypeScript would embed after conversion.
+fn should_preserve_source_icc(source_is_srgb: bool, output_colorspace: &str) -> bool {
+    source_is_srgb || !output_colorspace.eq_ignore_ascii_case("srgb")
+}
+
+/// WebP derivatives are never marked progressive. Matches `format !== ImageFormat.Webp`.
+fn is_progressive_output(format: &str, progressive: bool) -> bool {
+    progressive && !format.eq_ignore_ascii_case("webp")
+}
+
+fn can_be_transparent(filename: &str) -> bool {
+    const EXTENSIONS: &[&str] = &[
+        ".avif", ".bmp", ".gif", ".heic", ".heif", ".hif", ".jxl", ".png", ".svg", ".tif", ".tiff",
+        ".webp",
+    ];
+    has_extension(filename, EXTENSIONS)
+}
+
+fn image_file_is_transparent(asset: &ThumbnailAssetJob, config: &ImageFormatConfig) -> bool {
+    if config.extract_embedded && is_raw_file(&asset.original_file_name) {
+        return false;
+    }
+    can_be_transparent(&asset.original_file_name) && file_has_alpha(&asset.original_path)
+}
+
+fn file_has_alpha(path: &str) -> bool {
+    let Ok(reader) = image::ImageReader::open(path) else {
+        return false;
+    };
+    let Ok(reader) = reader.with_guessed_format() else {
+        return false;
+    };
+    reader
+        .into_decoder()
+        .map(|decoder| decoder.color_type().has_alpha())
+        .unwrap_or(false)
+}
+
+fn warn_transparency_loss(asset_id: Uuid, is_transparent: bool, format: &str) {
+    if is_transparent && is_jpeg(format) {
+        tracing::warn!(
+            "Asset {asset_id} has transparency but the configured format is jpeg which does not support it, consider using a format that does, such as webp"
+        );
+    }
+}
+
+fn is_jpeg(format: &str) -> bool {
+    matches!(format.to_ascii_lowercase().as_str(), "jpeg" | "jpg")
+}
+
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.filter(|text| !text.is_empty())
+}
+
+async fn copy_source_icc_profile(
+    source: &str,
+    preview: &Path,
+    thumbnail: &Path,
+    fullsize: Option<&Path>,
+) {
+    for target in [preview, thumbnail].into_iter().chain(fullsize) {
+        if let Err(err) = exiftool::copy_icc_profile(source, &target.to_string_lossy()).await {
+            tracing::warn!("could not copy ICC profile to {target:?}: {err}");
+        }
+    }
+}
+
 fn should_generate_fullsize(
     asset: &ThumbnailAssetJob,
     config: &ImageFormatConfig,
     is_edited: bool,
 ) -> bool {
-    if asset.asset_type != "IMAGE" {
+    needs_fullsize_derivative(
+        asset.asset_type == "IMAGE",
+        is_edited,
+        config.fullsize_enabled,
+        asset.projection_type.as_deref(),
+        &asset.original_file_name,
+    )
+}
+
+/// TypeScript `isGenerateFullsize`: edits, or (fullsize/360°) on a file the web client cannot show.
+fn needs_fullsize_derivative(
+    is_image: bool,
+    is_edited: bool,
+    fullsize_enabled: bool,
+    projection_type: Option<&str>,
+    filename: &str,
+) -> bool {
+    if !is_image {
         return false;
     }
-    is_edited
-        || config.fullsize_enabled
-        || asset.projection_type.as_deref() == Some("EQUIRECTANGULAR")
-        || is_web_unsupported_file(&asset.original_file_name)
+    if is_edited {
+        return true;
+    }
+    (fullsize_enabled || projection_type == Some("EQUIRECTANGULAR"))
+        && !is_web_supported_file(filename)
+}
+
+/// Camera JPEG embedded in a RAW is stored as the fullsize file. Other fullsize outputs are re-encoded.
+fn fullsize_derivative<'a>(
+    copy_embedded_jpeg: bool,
+    configured_format: &'a str,
+    is_edited: bool,
+) -> (&'a str, bool) {
+    if copy_embedded_jpeg {
+        ("jpeg", false)
+    } else {
+        (configured_format, is_edited)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StillDecodeKind {
+    ImageFile,
+    EmbeddedPreview,
+    FfmpegAutorotated,
+    VideoPreview,
+}
+
+/// `image` does not apply EXIF orientation. ffmpeg `-autorotate 1` and video preview JPEGs already did.
+fn should_apply_stored_orientation(kind: StillDecodeKind) -> bool {
+    matches!(
+        kind,
+        StillDecodeKind::ImageFile | StillDecodeKind::EmbeddedPreview
+    )
+}
+
+fn should_apply_person_orientation(asset_type: &str, kind: StillDecodeKind) -> bool {
+    asset_type != "VIDEO" && should_apply_stored_orientation(kind)
+}
+
+struct DecodedStill {
+    image: DynamicImage,
+    embedded_jpeg: Option<Vec<u8>>,
+    pre_edit_width: u32,
+    pre_edit_height: u32,
 }
 
 fn is_raw_file(filename: &str) -> bool {
     has_extension(filename, RAW_EXTENSIONS)
 }
 
-fn is_web_unsupported_file(filename: &str) -> bool {
-    has_extension(filename, WEB_UNSUPPORTED_EXTENSIONS)
+fn is_web_supported_file(filename: &str) -> bool {
+    has_extension(filename, WEB_SUPPORTED_EXTENSIONS)
 }
 
 fn has_extension(filename: &str, extensions: &[&str]) -> bool {
@@ -956,6 +1262,10 @@ fn read_string(value: &Value, key: &str, default: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or(default)
         .to_string()
+}
+
+fn read_bool(value: &Value, key: &str, default: bool) -> bool {
+    value.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
 }
 
 fn read_u32(value: &Value, key: &str, default: u32) -> u32 {
@@ -984,14 +1294,29 @@ async fn decode_image_bytes(data: &[u8]) -> Result<DynamicImage, String> {
     .map_err(|err| err.to_string())?
 }
 
-const RAW_EMBEDDED_PREVIEW_TAGS: &[&str] =
-    &["JpgFromRaw2", "JpgFromRaw", "PreviewJXL", "PreviewImage"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmbeddedPreviewKind {
+    Jpeg,
+    Jxl,
+}
+
+struct EmbeddedPreview {
+    bytes: Vec<u8>,
+    kind: EmbeddedPreviewKind,
+}
+
+const RAW_EMBEDDED_PREVIEW_TAGS: &[(&str, EmbeddedPreviewKind)] = &[
+    ("JpgFromRaw2", EmbeddedPreviewKind::Jpeg),
+    ("JpgFromRaw", EmbeddedPreviewKind::Jpeg),
+    ("PreviewJXL", EmbeddedPreviewKind::Jxl),
+    ("PreviewImage", EmbeddedPreviewKind::Jpeg),
+];
 
 async fn extract_raw_embedded_preview(
     path: &str,
     min_size: u32,
-) -> Result<Option<Vec<u8>>, String> {
-    for tag in RAW_EMBEDDED_PREVIEW_TAGS {
+) -> Result<Option<EmbeddedPreview>, String> {
+    for (tag, kind) in RAW_EMBEDDED_PREVIEW_TAGS {
         let Ok(data) = exiftool::extract_binary_tag(path, tag).await else {
             continue;
         };
@@ -999,7 +1324,10 @@ async fn extract_raw_embedded_preview(
             continue;
         }
         if should_use_embedded_preview(&data, min_size) {
-            return Ok(Some(data));
+            return Ok(Some(EmbeddedPreview {
+                bytes: data,
+                kind: *kind,
+            }));
         }
     }
     Ok(None)
@@ -1117,12 +1445,79 @@ fn map_jpeg_quality(quality: u8) -> u8 {
     q.round().clamp(2.0, 31.0) as u8
 }
 
+fn jpeg_sampling_factor(quality: u8) -> jpeg_encoder::SamplingFactor {
+    if quality >= 80 {
+        jpeg_encoder::SamplingFactor::R_4_4_4
+    } else {
+        jpeg_encoder::SamplingFactor::R_4_2_0
+    }
+}
+
+fn encode_jpeg(
+    image: &DynamicImage,
+    output: &Path,
+    quality: u8,
+    progressive: bool,
+) -> Result<(), String> {
+    let rgb = image.to_rgb8();
+    let (width, height) = rgb.dimensions();
+    let (Ok(width), Ok(height)) = (u16::try_from(width), u16::try_from(height)) else {
+        tracing::warn!(
+            "image {width}x{height} exceeds the progressive JPEG encoder limit; writing a baseline JPEG"
+        );
+        return encode_jpeg_baseline(image, output, quality);
+    };
+
+    let bytes = encode_jpeg_bytes(rgb.as_raw(), width, height, quality, progressive)?;
+    std::fs::write(output, bytes).map_err(|err| err.to_string())
+}
+
+fn encode_jpeg_bytes(
+    rgb: &[u8],
+    width: u16,
+    height: u16,
+    quality: u8,
+    progressive: bool,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, quality);
+    encoder.set_progressive(progressive);
+    encoder.set_sampling_factor(jpeg_sampling_factor(quality));
+    encoder
+        .encode(rgb, width, height, jpeg_encoder::ColorType::Rgb)
+        .map_err(|err| err.to_string())?;
+    Ok(bytes)
+}
+
+fn encode_jpeg_baseline(image: &DynamicImage, output: &Path, quality: u8) -> Result<(), String> {
+    use image::codecs::jpeg::JpegEncoder;
+    use std::fs::File;
+    use std::io::BufWriter;
+    let file = File::create(output).map_err(|err| err.to_string())?;
+    let encoder = JpegEncoder::new_with_quality(BufWriter::new(file), quality);
+    image
+        .write_with_encoder(encoder)
+        .map_err(|err| err.to_string())
+}
+
+fn jpeg_is_progressive(bytes: &[u8]) -> bool {
+    bytes.windows(2).any(|marker| marker == [0xFF, 0xC2])
+}
+
+async fn write_bytes(output: &Path, bytes: &[u8]) -> Result<(), String> {
+    StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
+    tokio::fs::write(output, bytes)
+        .await
+        .map_err(|err| err.to_string())
+}
+
 fn write_resized(
     image: &DynamicImage,
     output: &Path,
     size: u32,
     format: &str,
     quality: u8,
+    progressive: bool,
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
     let (width, height) = image.dimensions();
@@ -1145,16 +1540,7 @@ fn write_resized(
     };
 
     match format {
-        "jpeg" | "jpg" => {
-            use image::codecs::jpeg::JpegEncoder;
-            use std::fs::File;
-            use std::io::BufWriter;
-            let file = File::create(output).map_err(|err| err.to_string())?;
-            let encoder = JpegEncoder::new_with_quality(BufWriter::new(file), quality);
-            resized
-                .write_with_encoder(encoder)
-                .map_err(|err| err.to_string())
-        }
+        "jpeg" | "jpg" => encode_jpeg(&resized, output, quality, progressive),
         "png" => resized
             .save_with_format(output, ImageFormat::Png)
             .map_err(|err| err.to_string()),
@@ -1221,5 +1607,124 @@ mod tests {
 
         assert!(should_use_embedded_preview(&bytes, 1080));
         assert!(!should_use_embedded_preview(&bytes, 2000));
+    }
+
+    #[test]
+    fn srgb_detection_matches_typescript() {
+        assert!(super::is_srgb(None, None, None));
+        assert!(super::is_srgb(None, None, Some(8)));
+        assert!(!super::is_srgb(None, None, Some(16)));
+        assert!(!super::is_srgb(Some("Display P3"), None, Some(8)));
+        assert!(super::is_srgb(
+            Some(""),
+            Some("sRGB IEC61966-2.1"),
+            Some(16)
+        ));
+        assert_eq!(
+            super::output_colorspace(Some("Display P3"), None, Some(8), "p3"),
+            "p3"
+        );
+        assert_eq!(
+            super::output_colorspace(Some("Display P3"), None, Some(8), "srgb"),
+            "srgb"
+        );
+        assert!(super::should_preserve_source_icc(false, "p3"));
+        assert!(!super::should_preserve_source_icc(false, "srgb"));
+    }
+
+    #[test]
+    fn progressive_and_transparency_flags_match_typescript() {
+        assert!(super::is_progressive_output("jpeg", true));
+        assert!(!super::is_progressive_output("webp", true));
+        assert!(!super::is_progressive_output("jpeg", false));
+        assert!(super::can_be_transparent("photo.PNG"));
+        assert!(!super::can_be_transparent("photo.jpg"));
+    }
+
+    #[test]
+    fn jpeg_encoder_writes_progressive_scans_and_chroma() {
+        use image::{ImageBuffer, Rgb};
+        let image = ImageBuffer::from_fn(8, 8, |x, y| Rgb([(x * 30) as u8, (y * 30) as u8, 40]));
+        let progressive = super::encode_jpeg_bytes(image.as_raw(), 8, 8, 80, true).expect("encode");
+        let baseline = super::encode_jpeg_bytes(image.as_raw(), 8, 8, 80, false).expect("encode");
+        assert!(super::jpeg_is_progressive(&progressive));
+        assert!(!super::jpeg_is_progressive(&baseline));
+        assert_eq!(
+            super::jpeg_sampling_factor(80),
+            jpeg_encoder::SamplingFactor::R_4_4_4
+        );
+        assert_eq!(
+            super::jpeg_sampling_factor(79),
+            jpeg_encoder::SamplingFactor::R_4_2_0
+        );
+    }
+
+    #[test]
+    fn fullsize_and_orientation_match_typescript() {
+        assert!(super::needs_fullsize_derivative(
+            true,
+            false,
+            true,
+            None,
+            "photo.cr3"
+        ));
+        assert!(!super::needs_fullsize_derivative(
+            true,
+            false,
+            true,
+            None,
+            "photo.jpg"
+        ));
+        assert!(super::needs_fullsize_derivative(
+            true,
+            false,
+            false,
+            Some("EQUIRECTANGULAR"),
+            "photo.tif"
+        ));
+        assert!(!super::needs_fullsize_derivative(
+            true,
+            false,
+            false,
+            Some("EQUIRECTANGULAR"),
+            "photo.jpg"
+        ));
+        assert!(super::needs_fullsize_derivative(
+            true,
+            true,
+            false,
+            None,
+            "photo.jpg"
+        ));
+        assert!(!super::needs_fullsize_derivative(
+            false, true, true, None, "clip.mp4"
+        ));
+
+        assert_eq!(
+            super::fullsize_derivative(true, "webp", true),
+            ("jpeg", false)
+        );
+        assert_eq!(
+            super::fullsize_derivative(false, "webp", true),
+            ("webp", true)
+        );
+
+        assert!(super::should_apply_stored_orientation(
+            super::StillDecodeKind::EmbeddedPreview
+        ));
+        assert!(super::should_apply_stored_orientation(
+            super::StillDecodeKind::ImageFile
+        ));
+        assert!(!super::should_apply_stored_orientation(
+            super::StillDecodeKind::FfmpegAutorotated
+        ));
+        assert!(!super::should_apply_person_orientation(
+            "VIDEO",
+            super::StillDecodeKind::VideoPreview
+        ));
+        assert!(super::should_apply_person_orientation(
+            "IMAGE",
+            super::StillDecodeKind::EmbeddedPreview
+        ));
     }
 }

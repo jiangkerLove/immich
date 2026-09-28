@@ -518,11 +518,23 @@ fn region_list(region_info: &Value) -> Option<Vec<&Value>> {
 fn region_area(region: &Value) -> Option<(f64, f64, f64, f64)> {
     let area = region.get("Area")?;
     Some((
-        area.get("X").and_then(|v| v.as_f64())?,
-        area.get("Y").and_then(|v| v.as_f64())?,
-        area.get("W").and_then(|v| v.as_f64())?,
-        area.get("H").and_then(|v| v.as_f64())?,
+        json_f64(area.get("X")?)?,
+        json_f64(area.get("Y")?)?,
+        json_f64(area.get("W")?)?,
+        json_f64(area.get("H")?)?,
     ))
+}
+
+/// ExifTool serializes high-precision EXIF floats as strings. `Number()` in TypeScript accepts both.
+fn json_f64(value: &Value) -> Option<f64> {
+    let number = value.as_f64().or_else(|| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .and_then(|text| text.parse::<f64>().ok())
+    })?;
+    number.is_finite().then_some(number)
 }
 
 fn orient_region_info(region_info: &Value, orientation: Option<i32>) -> Option<(i32, i32)> {
@@ -629,5 +641,30 @@ mod tests {
             assert!((area.w - 0.2).abs() < f64::EPSILON);
             assert!((area.h - 0.1).abs() < f64::EPSILON);
         }
+    }
+
+    #[test]
+    fn parses_region_area_floats_serialized_as_strings() {
+        let region_info = json!({
+            "AppliedToDimensions": { "W": 100, "H": 200 },
+            "RegionList": [{
+                "Name": "Ada",
+                "Area": {
+                    "X": "0.20000000000000001",
+                    "Y": "0.30",
+                    "W": "0.10",
+                    "H": "0.20"
+                }
+            }]
+        });
+
+        let regions = orient_region_list(&region_info, Some(1)).expect("regions should parse");
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].0.as_deref(), Some("Ada"));
+        let area = regions[0].1;
+        assert!((area.x - 0.2).abs() < 1e-12);
+        assert!((area.y - 0.3).abs() < 1e-12);
+        assert!((area.w - 0.1).abs() < 1e-12);
+        assert!((area.h - 0.2).abs() < 1e-12);
     }
 }

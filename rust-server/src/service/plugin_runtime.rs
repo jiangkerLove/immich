@@ -14,8 +14,13 @@ use crate::service::plugin_host::{CallHostContext, HostContext};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::crypto::random_bytes_as_text;
 
+struct LoadedPlugin {
+    plugin: Plugin,
+    label: String,
+}
+
 pub struct PluginRuntime {
-    plugins: Mutex<HashMap<String, Plugin>>,
+    plugins: Mutex<HashMap<String, LoadedPlugin>>,
     context: Arc<HostContext>,
 }
 
@@ -61,29 +66,27 @@ impl PluginRuntime {
 
     fn try_load(&self, row: &PluginLoadRow, host_functions: bool) {
         let key = plugin_key(&row.id, host_functions);
+        let label = plugin_label(&row.name, &row.version, host_functions);
         let wasm = Wasm::data(row.wasm_bytes.clone());
         let manifest = Manifest::new([wasm]);
         let stubs = !host_functions;
         let functions = HostContext::host_functions(self.context.clone(), stubs);
+
+        // Extism log_* calls use the process tracing subscriber. This span is the
+        // Rust stand-in for TypeScript's `Plugin:${label}` logger context.
+        let span = tracing::info_span!("plugin", label = %label);
+        let _enter = span.enter();
 
         match Plugin::new(manifest, functions, true) {
             Ok(plugin) => {
                 let Ok(mut plugins) = self.plugins.lock() else {
                     return;
                 };
-                plugins.insert(key, plugin);
-                let label = if host_functions {
-                    format!("{}@{}/worker", row.name, row.version)
-                } else {
-                    format!("{}@{}", row.name, row.version)
-                };
-                tracing::info!("Loaded workflow plugin: {label}");
+                plugins.insert(key, LoadedPlugin { plugin, label });
+                tracing::info!("Loaded workflow plugin");
             }
             Err(err) => {
-                tracing::error!(
-                    "Unable to load plugin {}@{} (host_functions={host_functions}): {err}",
-                    row.name, row.version
-                );
+                tracing::error!("Unable to load plugin (host_functions={host_functions}): {err}");
             }
         }
     }
@@ -97,10 +100,13 @@ impl PluginRuntime {
     ) -> Result<Value, String> {
         let input_str = serde_json::to_string(input).map_err(|err| err.to_string())?;
         let mut plugins = self.plugins.lock().map_err(|err| err.to_string())?;
-        let plugin = plugins
+        let loaded = plugins
             .get_mut(plugin_key)
             .ok_or_else(|| format!("No loaded plugin found for {plugin_key}"))?;
-        let output: String = plugin
+        let span = tracing::info_span!("plugin", label = %loaded.label);
+        let _enter = span.enter();
+        let output: String = loaded
+            .plugin
             .call_with_host_context(
                 method_name,
                 input_str.as_str(),
@@ -132,5 +138,25 @@ pub fn plugin_key(id: &Uuid, host_functions: bool) -> String {
         format!("{id}/worker")
     } else {
         id.to_string()
+    }
+}
+
+/// Matches TypeScript `PluginRepository.load` labels: `name@version` and `name@version/worker`.
+pub fn plugin_label(name: &str, version: &str, host_functions: bool) -> String {
+    if host_functions {
+        format!("{name}@{version}/worker")
+    } else {
+        format!("{name}@{version}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plugin_label;
+
+    #[test]
+    fn plugin_labels_match_typescript_logger_context() {
+        assert_eq!(plugin_label("faces", "1.2.0", false), "faces@1.2.0");
+        assert_eq!(plugin_label("faces", "1.2.0", true), "faces@1.2.0/worker");
     }
 }

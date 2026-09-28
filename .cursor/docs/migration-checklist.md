@@ -278,6 +278,11 @@ cd rust-server && cargo +stable test --offline --lib
 | 运维 | telemetry `repo`/`io`；tracing；头像缩略图；`smoke.ps1` |
 | P3 | `immich-admin` CLI 行为对齐（list-users / reset / grant / externalDomain / ConfigUpdate） |
 | （续） | Plugin host 边界单测；bootstrap/workers/media 等热路径 `println!`→`tracing`；profile/thumbnail JPEG quality |
+| （续） | 360° 缩略图回写 `XMP-GPano`；EXIF RegionInfo 字符串小数人脸坐标 |
+| （续） | 缩略图：sRGB/P3 选择、源 ICC 回写、透明通道标记、渐进 JPEG（质量 ≥ 80 用 4:4:4，jpeg-encoder 写出 SOF2） |
+| （续） | RAW 全尺寸：仅在网页不能直接显示时生成；内嵌 JPEG 原样落盘并写 Orientation#/ColorSpace。抽出的预览和编辑图先套 EXIF 方向；ffmpeg 已旋转的帧和视频人物预览不再转一次 |
+| （续） | 人脸识别按 cluster group 搜索，并为当前用户补同一 `personGroupId` 的人物行 |
+| （续） | 插件 Extism 日志带上 `name@version` 上下文，对齐 `Plugin:${label}` |
 | 其他 parity | MemoryGenerate 锁、trash/duplicate、ClusterGroup、download Content-Disposition、lockedProperties 等 |
 
 ---

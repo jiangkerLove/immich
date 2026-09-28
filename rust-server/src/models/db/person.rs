@@ -388,7 +388,10 @@ pub struct PersonStatisticsRow {
     pub assets: i64,
 }
 
-pub async fn get_statistics(pool: &Pool<Postgres>, person_id: &Uuid) -> Result<PersonStatisticsRow, sqlx::Error> {
+pub async fn get_statistics(
+    pool: &Pool<Postgres>,
+    person_id: &Uuid,
+) -> Result<PersonStatisticsRow, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let face_col = schema.face_person_col_quoted();
     sqlx::query_as::<_, PersonStatisticsRow>(&format!(
@@ -531,6 +534,34 @@ pub async fn set_face_asset_id(
     Ok(())
 }
 
+/// Insert the owner's person row into an existing cluster person group.
+/// Returns whether a new row was inserted.
+pub async fn ensure_person_in_group(
+    pool: &Pool<Postgres>,
+    owner_id: &Uuid,
+    person_group_id: &Uuid,
+    face_asset_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    let schema = PersonSchema::get(pool).await?;
+    if !schema.is_cluster_groups() {
+        return Ok(false);
+    }
+
+    let inserted = sqlx::query(
+        r#"
+        INSERT INTO person ("ownerId", "personGroupId", "faceAssetId")
+        VALUES ($1, $2, $3)
+        ON CONFLICT ("ownerId", "personGroupId") DO NOTHING
+        "#,
+    )
+    .bind(owner_id)
+    .bind(person_group_id)
+    .bind(face_asset_id)
+    .execute(pool)
+    .await?;
+    Ok(inserted.rows_affected() > 0)
+}
+
 pub async fn create_for_detected_face(
     pool: &Pool<Postgres>,
     owner_id: &Uuid,
@@ -582,10 +613,14 @@ pub async fn vacuum_faces(pool: &Pool<Postgres>, reindex_vectors: bool) -> Resul
     sqlx::query("VACUUM ANALYZE asset_face, face_search, person")
         .execute(pool)
         .await?;
-    sqlx::query("REINDEX TABLE asset_face").execute(pool).await?;
+    sqlx::query("REINDEX TABLE asset_face")
+        .execute(pool)
+        .await?;
     sqlx::query("REINDEX TABLE person").execute(pool).await?;
     if reindex_vectors {
-        sqlx::query("REINDEX TABLE face_search").execute(pool).await?;
+        sqlx::query("REINDEX TABLE face_search")
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }
