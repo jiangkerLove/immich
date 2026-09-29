@@ -620,6 +620,13 @@ impl AssetService {
         dto: &AssetEditsCreateReq,
     ) -> Result<AssetEditsResponse, ErrorResp> {
         require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetEditCreate).await?;
+        let Some(asset) = crate::models::db::asset_edit::get_for_edit(&self.pool, asset_id).await?
+        else {
+            return Err(ErrorResp::BadRequest("Asset not found".to_string()));
+        };
+        if let Some(message) = edit_rejection(&asset, &dto.edits) {
+            return Err(ErrorResp::BadRequest(message.to_string()));
+        }
         let edits: Vec<(String, Value)> = dto
             .edits
             .iter()
@@ -635,6 +642,12 @@ impl AssetService {
 
     pub async fn delete_edits(&self, auth: &AuthDto, asset_id: &Uuid) -> Result<(), ErrorResp> {
         require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetEditDelete).await?;
+        if assets::get_basic_by_id(&self.pool, asset_id)
+            .await?
+            .is_none()
+        {
+            return Err(ErrorResp::BadRequest("Asset not found".to_string()));
+        }
         crate::models::db::asset_edit::delete_all(&self.pool, asset_id).await?;
         let _ = self.jobs.queue_asset_edit_thumbnails(asset_id).await;
         Ok(())
@@ -657,6 +670,76 @@ fn map_metadata_row(
         value: row.value,
         updated_at: row.updated_at.to_rfc3339(),
     }
+}
+
+fn edit_rejection(
+    asset: &crate::models::db::asset_edit::AssetForEdit,
+    edits: &[AssetEditItemReq],
+) -> Option<&'static str> {
+    if asset.asset_type != "IMAGE" {
+        return Some("Only images can be edited");
+    }
+    if asset.live_photo_video_id.is_some() {
+        return Some("Editing live photos is not supported");
+    }
+    if is_panorama(asset.projection_type.as_deref(), &asset.original_file_name) {
+        return Some("Editing panorama images is not supported");
+    }
+    let path = asset.original_path.to_ascii_lowercase();
+    if path.ends_with(".gif") {
+        return Some("Editing GIF images is not supported");
+    }
+    if path.ends_with(".svg") {
+        return Some("Editing SVG images is not supported");
+    }
+
+    let dimensions = crate::service::media::visibility::asset_dimensions_from_exif(
+        asset.exif_image_width,
+        asset.exif_image_height,
+        asset.orientation.as_deref(),
+    );
+    if dimensions.width <= 0.0 || dimensions.height <= 0.0 {
+        return Some("Asset dimensions are not available for editing");
+    }
+
+    if let Some(crop) = edits.iter().find(|edit| edit.action == "crop") {
+        if edits.first().is_none_or(|edit| edit.action != "crop") {
+            return Some("Crop action must be the first edit action");
+        }
+        if crop_exceeds_dimensions(
+            &crop.parameters,
+            dimensions.width as i32,
+            dimensions.height as i32,
+        ) {
+            return Some("Crop parameters are out of bounds");
+        }
+    }
+
+    None
+}
+
+fn is_panorama(projection_type: Option<&str>, file_name: &str) -> bool {
+    projection_type == Some("EQUIRECTANGULAR") || file_name.to_ascii_lowercase().ends_with(".insp")
+}
+
+fn crop_exceeds_dimensions(parameters: &Value, asset_width: i32, asset_height: i32) -> bool {
+    let Some(x) = json_number(parameters.get("x")) else {
+        return false;
+    };
+    let Some(y) = json_number(parameters.get("y")) else {
+        return false;
+    };
+    let Some(width) = json_number(parameters.get("width")) else {
+        return false;
+    };
+    let Some(height) = json_number(parameters.get("height")) else {
+        return false;
+    };
+    x + width > f64::from(asset_width) || y + height > f64::from(asset_height)
+}
+
+fn json_number(value: Option<&Value>) -> Option<f64> {
+    value.and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
 }
 
 fn map_edit_row(row: crate::models::db::asset_edit::AssetEditRow) -> AssetEditResponse {
@@ -780,4 +863,108 @@ async fn on_after_unlink(
     jobs.queue_asset_generate_thumbnails_with_notify(live_photo_video_id, true)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use crate::models::db::asset_edit::AssetForEdit;
+
+    use super::{AssetEditItemReq, edit_rejection};
+
+    fn image() -> AssetForEdit {
+        AssetForEdit {
+            asset_type: "IMAGE".into(),
+            live_photo_video_id: None,
+            original_path: "photo.jpg".into(),
+            original_file_name: "photo.jpg".into(),
+            exif_image_width: Some(100),
+            exif_image_height: Some(80),
+            orientation: None,
+            projection_type: None,
+        }
+    }
+
+    fn crop(x: i64, y: i64, width: i64, height: i64) -> AssetEditItemReq {
+        AssetEditItemReq {
+            action: "crop".into(),
+            parameters: json!({"x": x, "y": y, "width": width, "height": height}),
+        }
+    }
+
+    #[test]
+    fn edit_rejections_match_typescript() {
+        let mut video = image();
+        video.asset_type = "VIDEO".into();
+        assert_eq!(
+            edit_rejection(&video, &[]),
+            Some("Only images can be edited")
+        );
+
+        let mut live = image();
+        live.live_photo_video_id = Some(Uuid::nil());
+        assert_eq!(
+            edit_rejection(&live, &[]),
+            Some("Editing live photos is not supported")
+        );
+
+        let mut pano = image();
+        pano.projection_type = Some("EQUIRECTANGULAR".into());
+        assert_eq!(
+            edit_rejection(&pano, &[]),
+            Some("Editing panorama images is not supported")
+        );
+
+        let mut gif = image();
+        gif.original_path = "clip.GIF".into();
+        assert_eq!(
+            edit_rejection(&gif, &[]),
+            Some("Editing GIF images is not supported")
+        );
+
+        let mut svg = image();
+        svg.original_path = "icon.svg".into();
+        assert_eq!(
+            edit_rejection(&svg, &[]),
+            Some("Editing SVG images is not supported")
+        );
+
+        let mut insp = image();
+        insp.original_file_name = "pano.INSP".into();
+        assert_eq!(
+            edit_rejection(&insp, &[]),
+            Some("Editing panorama images is not supported")
+        );
+
+        let mut missing = image();
+        missing.exif_image_width = None;
+        assert_eq!(
+            edit_rejection(&missing, &[]),
+            Some("Asset dimensions are not available for editing")
+        );
+
+        let rotate = AssetEditItemReq {
+            action: "rotate".into(),
+            parameters: json!({"angle": 90}),
+        };
+        assert_eq!(
+            edit_rejection(&image(), &[rotate, crop(0, 0, 10, 10)]),
+            Some("Crop action must be the first edit action")
+        );
+        assert_eq!(
+            edit_rejection(&image(), &[crop(90, 0, 20, 10)]),
+            Some("Crop parameters are out of bounds")
+        );
+        assert_eq!(edit_rejection(&image(), &[crop(0, 0, 100, 80)]), None);
+
+        let mut flipped = image();
+        flipped.orientation = Some("6".into());
+        assert_eq!(
+            edit_rejection(&flipped, &[crop(0, 0, 100, 80)]),
+            Some("Crop parameters are out of bounds")
+        );
+        assert_eq!(edit_rejection(&flipped, &[crop(0, 0, 80, 100)]), None);
+    }
 }

@@ -285,6 +285,12 @@ cd rust-server && cargo +stable test --offline --lib
 | （续） | 插件 Extism 日志带上 `name@version` 上下文，对齐 `Plugin:${label}` |
 | （续） | 人物合并：姓名或生日冲突则跳过，并按每个 owner 的人物行合并。外部库动态照片视频写入原 `libraryId` |
 | （续） | GPS 仅在经纬度都是 0 时丢弃；`BitsPerSample` 的 `"16 16 16"` 按每通道位深解析 |
+| （续） | 已编辑照片的宽高在元数据重提时分开更新，已有的一边不会被另一边空值带着重写 |
+| （续） | 编辑资产时拒绝视频、实况、全景、GIF、SVG，并检查裁剪必须排在第一步且不超出画面 |
+| （续） | 取消编辑后删除已编辑衍生图并排队删盘；写回宽高时按 EXIF 方向对调 |
+| （续） | RAW 没有可用内嵌预览且要重做全尺寸时，按原图全帧解码，不再先缩成预览尺寸 |
+| （续） | 照片和头像缩略图按短边盖住目标尺寸（sharp `outside`），短边已经更小则不放大 |
+| （续） | EXIF 宽高、方向、ISO、光圈、焦距、评分取列表的第一个数，超出整数范围的值丢掉 |
 | 其他 parity | MemoryGenerate 锁、trash/duplicate、ClusterGroup、download Content-Disposition、lockedProperties 等 |
 
 ---

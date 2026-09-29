@@ -9,6 +9,43 @@ pub struct AssetEditRow {
     pub parameters: Value,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AssetForEdit {
+    pub asset_type: String,
+    pub live_photo_video_id: Option<Uuid>,
+    pub original_path: String,
+    pub original_file_name: String,
+    pub exif_image_width: Option<i32>,
+    pub exif_image_height: Option<i32>,
+    pub orientation: Option<String>,
+    pub projection_type: Option<String>,
+}
+
+pub async fn get_for_edit(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<Option<AssetForEdit>, sqlx::Error> {
+    sqlx::query_as::<_, AssetForEdit>(
+        r#"
+            SELECT
+                asset.type AS asset_type,
+                asset."livePhotoVideoId" AS live_photo_video_id,
+                asset."originalPath" AS original_path,
+                asset."originalFileName" AS original_file_name,
+                asset_exif."exifImageWidth" AS exif_image_width,
+                asset_exif."exifImageHeight" AS exif_image_height,
+                asset_exif.orientation,
+                asset_exif."projectionType" AS projection_type
+            FROM asset
+            INNER JOIN asset_exif ON asset_exif."assetId" = asset.id
+            WHERE asset.id = $1
+        "#,
+    )
+    .bind(asset_id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn list_by_asset(
     pool: &Pool<Postgres>,
     asset_id: &Uuid,

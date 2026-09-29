@@ -11,7 +11,7 @@ use crate::models::db::metadata_job::{self, MetadataExtractionAsset, UpsertAsset
 use crate::models::db::person;
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::JobService;
-use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_value};
+use crate::service::media::exiftool::{self, tag_f64, tag_string, tag_validated_i32, tag_value};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::checksum::sha1_bytes;
 use crate::utils::storage::StoragePaths;
@@ -401,11 +401,12 @@ async fn apply_tagged_faces(
         return Ok(());
     };
     let Some((image_width, image_height)) =
-        orient_region_info(&region_info, tag_i32(tags, "Orientation"))
+        orient_region_info(&region_info, tag_validated_i32(tags, "Orientation"))
     else {
         return Ok(());
     };
-    let Some(regions) = orient_region_list(&region_info, tag_i32(tags, "Orientation")) else {
+    let Some(regions) = orient_region_list(&region_info, tag_validated_i32(tags, "Orientation"))
+    else {
         return Ok(());
     };
 

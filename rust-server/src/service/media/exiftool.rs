@@ -107,6 +107,38 @@ pub fn tag_i32(tags: &Value, name: &str) -> Option<i32> {
     tag_f64(tags, name).map(|v| v.round() as i32)
 }
 
+/// TypeScript `validate`: use the first element of a list, then keep a finite
+/// integer-range number. Numeric strings are still parsed because exiftool JSON
+/// emits them that way.
+pub fn tag_validated_f64(tags: &Value, name: &str) -> Option<f64> {
+    tag_value(tags, name).and_then(|value| validated_f64(&value))
+}
+
+pub fn tag_validated_i32(tags: &Value, name: &str) -> Option<i32> {
+    tag_validated_f64(tags, name).map(|value| value.round() as i32)
+}
+
+fn validated_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Array(items) => items.first().and_then(validated_f64),
+        Value::Number(number) => number.as_f64().and_then(postgres_int_f64),
+        Value::String(text) => text
+            .split_whitespace()
+            .next()
+            .and_then(|token| token.parse::<f64>().ok())
+            .and_then(postgres_int_f64),
+        _ => None,
+    }
+}
+
+fn postgres_int_f64(value: f64) -> Option<f64> {
+    if value.is_finite() && (-2_147_483_648.0..=2_147_483_647.0).contains(&value) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 pub fn tag_string_list(tags: &Value, name: &str) -> Vec<String> {
     let Some(value) = tag_value(tags, name) else {
         return Vec::new();

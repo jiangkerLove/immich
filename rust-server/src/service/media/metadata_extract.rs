@@ -15,7 +15,8 @@ use crate::models::db::system_metadata::get_json;
 use crate::service::job::EntityJob;
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{
-    self, tag_f64, tag_i32, tag_string, tag_string_list, tag_value,
+    self, tag_f64, tag_i32, tag_string, tag_string_list, tag_validated_f64, tag_validated_i32,
+    tag_value,
 };
 use crate::service::media::ffprobe::{self, ProbeResult};
 use crate::service::media::metadata_postprocess;
@@ -124,7 +125,7 @@ impl MetadataExtractService {
         let file_size = metadata.len() as i64;
 
         let (width, height) = image_dimensions(&media_tags);
-        let orientation = tag_i32(&media_tags, "Orientation").map(|v| v.to_string());
+        let orientation = tag_validated_i32(&media_tags, "Orientation").map(|v| v.to_string());
         let is_sideways = orientation
             .as_deref()
             .is_some_and(|v| matches!(v, "5" | "6" | "7" | "8" | "90" | "-90"));
@@ -160,9 +161,9 @@ impl MetadataExtractService {
             date_time_original,
             modify_date,
             lens_model: lens_model(&media_tags),
-            f_number: tag_f64(&media_tags, "FNumber"),
-            focal_length: tag_f64(&media_tags, "FocalLength"),
-            iso: tag_i32(&media_tags, "ISO"),
+            f_number: tag_validated_f64(&media_tags, "FNumber"),
+            focal_length: tag_validated_f64(&media_tags, "FocalLength"),
+            iso: tag_validated_i32(&media_tags, "ISO"),
             latitude,
             longitude,
             city,
@@ -191,7 +192,7 @@ impl MetadataExtractService {
                 .or_else(|| tag_string(&media_tags, "BurstUUID"))
                 .or_else(|| tag_string(&media_tags, "CameraBurstID"))
                 .or_else(|| tag_string(&media_tags, "MediaUniqueID")),
-            rating: tag_i32(&media_tags, "Rating").filter(|v| (1..=5).contains(v)),
+            rating: tag_validated_i32(&media_tags, "Rating").filter(|v| (1..=5).contains(v)),
             tags: if tags.is_empty() { None } else { Some(tags) },
         };
 
@@ -253,8 +254,13 @@ impl MetadataExtractService {
 
         let local_date_time = exif_date.as_ref().map(|date| date.local).or(fallback_date);
 
-        let update_dims = (!asset.is_edited || asset.width.is_none() || asset.height.is_none())
-            .then_some((asset_width, asset_height));
+        let (update_width, update_height) = metadata_dimension_updates(
+            asset.is_edited,
+            asset.width,
+            asset.height,
+            asset_width,
+            asset_height,
+        );
 
         metadata_job::upsert_metadata(
             &self.pool,
@@ -268,8 +274,8 @@ impl MetadataExtractService {
                 local_date_time,
                 file_created_at: exif.date_time_original.or(fallback_date),
                 file_modified_at: modify_date.or(asset.file_modified_at),
-                width: update_dims.and_then(|(w, _)| w),
-                height: update_dims.and_then(|(_, h)| h),
+                width: update_width,
+                height: update_height,
             },
         )
         .await
@@ -464,6 +470,27 @@ fn orientation_from_rotation(rotation: i32) -> Value {
     })
 }
 
+/// TypeScript updates width and height independently. An edited side is kept once it is set.
+fn metadata_dimension_updates(
+    is_edited: bool,
+    current_width: Option<i32>,
+    current_height: Option<i32>,
+    decoded_width: Option<i32>,
+    decoded_height: Option<i32>,
+) -> (Option<i32>, Option<i32>) {
+    let width = if !is_edited || current_width.is_none() {
+        decoded_width
+    } else {
+        None
+    };
+    let height = if !is_edited || current_height.is_none() {
+        decoded_height
+    } else {
+        None
+    };
+    (width, height)
+}
+
 fn image_dimensions(tags: &Value) -> (Option<i32>, Option<i32>) {
     if let Some(size) = tag_string(tags, "ImageSize") {
         let mut dimensions = size.split('x').map(str::trim);
@@ -477,8 +504,9 @@ fn image_dimensions(tags: &Value) -> (Option<i32>, Option<i32>) {
         }
     }
     (
-        tag_i32(tags, "ImageWidth").or_else(|| tag_i32(tags, "ExifImageWidth")),
-        tag_i32(tags, "ImageHeight").or_else(|| tag_i32(tags, "ExifImageHeight")),
+        tag_validated_i32(tags, "ImageWidth").or_else(|| tag_validated_i32(tags, "ExifImageWidth")),
+        tag_validated_i32(tags, "ImageHeight")
+            .or_else(|| tag_validated_i32(tags, "ExifImageHeight")),
     )
 }
 
@@ -720,8 +748,9 @@ mod tests {
     use super::{
         apply_heif_orientation, bits_per_sample, camera_make, camera_model, earliest_file_date,
         extract_exif_date, gps_coordinates, image_dimensions, lens_model, merge_sidecar_tags,
-        parse_exif_date, resolve_time_zone,
+        metadata_dimension_updates, parse_exif_date, resolve_time_zone,
     };
+    use crate::service::media::exiftool::{tag_validated_f64, tag_validated_i32};
 
     #[test]
     fn preserves_exif_offset_and_local_wall_clock_time() {
@@ -802,6 +831,21 @@ mod tests {
         apply_heif_orientation(&mut tags, "photo.heic");
         assert_eq!(image_dimensions(&tags), (Some(6000), Some(4000)));
         assert_eq!(tags["Orientation"], 6);
+    }
+
+    #[test]
+    fn numeric_exif_lists_use_the_first_value() {
+        let tags = json!({
+            "ImageWidth": [6000, 160],
+            "ImageHeight": [4000, 120],
+            "ISO": [200, 400],
+            "FNumber": [2.8, 4.0],
+            "Orientation": [6, 1]
+        });
+        assert_eq!(image_dimensions(&tags), (Some(6000), Some(4000)));
+        assert_eq!(tag_validated_i32(&tags, "ISO"), Some(200));
+        assert_eq!(tag_validated_f64(&tags, "FNumber"), Some(2.8));
+        assert_eq!(tag_validated_i32(&tags, "Orientation"), Some(6));
     }
 
     #[test]
@@ -897,6 +941,26 @@ mod tests {
         assert_eq!(
             bits_per_sample(&json!({"BitsPerSample": [8, 8, 8]})),
             Some(8)
+        );
+    }
+
+    #[test]
+    fn edited_dimensions_update_each_side_independently() {
+        assert_eq!(
+            metadata_dimension_updates(false, Some(100), Some(200), Some(300), Some(400)),
+            (Some(300), Some(400))
+        );
+        assert_eq!(
+            metadata_dimension_updates(true, Some(100), Some(200), Some(300), Some(400)),
+            (None, None)
+        );
+        assert_eq!(
+            metadata_dimension_updates(true, Some(100), None, Some(300), Some(400)),
+            (None, Some(400))
+        );
+        assert_eq!(
+            metadata_dimension_updates(true, None, Some(200), Some(300), Some(400)),
+            (Some(300), None)
         );
     }
 }

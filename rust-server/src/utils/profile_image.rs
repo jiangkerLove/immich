@@ -90,22 +90,11 @@ fn write_resized(
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
     let (width, height) = image.dimensions();
-    let longest = width.max(height).max(1);
-    let resized = if longest <= size {
+    let (new_w, new_h) = cover_resize_dimensions(width, height, size);
+    let resized = if new_w == width && new_h == height {
         image.clone()
     } else {
-        let (new_w, new_h) = if width >= height {
-            (
-                size,
-                ((height as f64 * size as f64) / width as f64).round() as u32,
-            )
-        } else {
-            (
-                ((width as f64 * size as f64) / height as f64).round() as u32,
-                size,
-            )
-        };
-        image.resize(new_w.max(1), new_h.max(1), FilterType::Lanczos3)
+        image.resize(new_w, new_h, FilterType::Lanczos3)
     };
 
     match format {
@@ -129,10 +118,35 @@ fn write_resized(
     }
 }
 
+/// sharp `resize(size, size, { fit: 'outside', withoutEnlargement: true })`.
+/// The short edge becomes `size` when the source is larger; smaller images stay put.
+pub(crate) fn cover_resize_dimensions(width: u32, height: u32, size: u32) -> (u32, u32) {
+    let short = width.min(height);
+    if short == 0 || short <= size {
+        return (width.max(1), height.max(1));
+    }
+    if width <= height {
+        let new_h = ((height as f64 * f64::from(size)) / f64::from(width)).round() as u32;
+        (size.max(1), new_h.max(1))
+    } else {
+        let new_w = ((width as f64 * f64::from(size)) / f64::from(height)).round() as u32;
+        (new_w.max(1), size.max(1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
+
+    #[test]
+    fn cover_resize_matches_sharp_outside() {
+        assert_eq!(cover_resize_dimensions(4000, 3000, 1440), (1920, 1440));
+        assert_eq!(cover_resize_dimensions(3000, 4000, 1440), (1440, 1920));
+        assert_eq!(cover_resize_dimensions(2000, 1000, 1440), (2000, 1000));
+        assert_eq!(cover_resize_dimensions(100, 80, 250), (100, 80));
+        assert_eq!(cover_resize_dimensions(1440, 1440, 1440), (1440, 1440));
+    }
 
     #[test]
     fn jpeg_write_uses_quality_without_error() {

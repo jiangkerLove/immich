@@ -651,6 +651,20 @@ pub async fn delete_asset_file_by_id(
     Ok(())
 }
 
+pub async fn delete_asset_files_by_ids(
+    pool: &Pool<Postgres>,
+    ids: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(r#"DELETE FROM asset_file WHERE id = ANY($1)"#)
+        .bind(ids)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[derive(Debug, FromRow)]
 struct VideoConversionQueryRow {
     id: Uuid,

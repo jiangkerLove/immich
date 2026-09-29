@@ -10,7 +10,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::models::db::asset_edit::AssetEditRow;
-use crate::models::db::asset_job::{self, ThumbnailAssetJob, UpsertAssetFile};
+use crate::models::db::asset_job::{self, AssetFileJobRow, ThumbnailAssetJob, UpsertAssetFile};
 use crate::models::db::asset_ocr;
 use crate::models::db::face;
 use crate::models::db::system_metadata::get_json;
@@ -26,6 +26,7 @@ use crate::service::media::visibility::{
     BoundingBox, FaceForVisibility, OcrForVisibility, asset_dimensions_from_exif,
     check_face_visibility, check_ocr_visibility, visible_ocr_search_text,
 };
+use crate::utils::profile_image::cover_resize_dimensions;
 use crate::utils::storage::StoragePaths;
 use crate::utils::system_config::json_str;
 
@@ -152,9 +153,13 @@ impl ThumbnailService {
             return Ok(ThumbnailJobOutcome::Failed);
         }
 
-        let edited = self
-            .generate_edited_image_derivatives(&asset, &config)
-            .await?;
+        let edited = if asset.asset_type == "IMAGE" && !asset.edits.is_empty() {
+            self.generate_edited_image_derivatives(&asset, &config)
+                .await?
+        } else {
+            self.retire_derivatives(&asset, Some(true), &[]).await?;
+            None
+        };
         if let Some(edited_outputs) = edited {
             if let Some(hash) = edited_outputs.thumbhash.as_ref() {
                 asset_job::update_thumbhash(&self.pool, asset_id, hash)
@@ -191,9 +196,13 @@ impl ThumbnailService {
         };
 
         let config = self.load_image_config().await?;
-        let generated = self
-            .generate_edited_image_derivatives(&asset, &config)
-            .await?;
+        let generated = if asset.asset_type == "IMAGE" && !asset.edits.is_empty() {
+            self.generate_edited_image_derivatives(&asset, &config)
+                .await?
+        } else {
+            self.retire_derivatives(&asset, Some(true), &[]).await?;
+            None
+        };
 
         let mut thumbhash = generated.as_ref().and_then(|g| g.thumbhash.clone());
 
@@ -219,10 +228,7 @@ impl ThumbnailService {
         let (width, height) = if let Some(outputs) = &generated {
             (outputs.width.unwrap_or(0), outputs.height.unwrap_or(0))
         } else {
-            (
-                asset.exif_image_width.unwrap_or(0),
-                asset.exif_image_height.unwrap_or(0),
-            )
+            oriented_pixel_dimensions(&asset)
         };
 
         if width > 0 && height > 0 {
@@ -276,7 +282,7 @@ impl ThumbnailService {
                 Err(err) => {
                     tracing::error!("person thumbnail decode failed for {person_id}: {err}");
                     (
-                        extract_with_ffmpeg(&input_path, config.preview_size).await?,
+                        extract_with_ffmpeg(&input_path, Some(config.preview_size)).await?,
                         StillDecodeKind::VideoPreview,
                     )
                 }
@@ -291,7 +297,7 @@ impl ThumbnailService {
                 )
             } else {
                 (
-                    extract_with_ffmpeg(&data.original_path, config.preview_size).await?,
+                    extract_with_ffmpeg(&data.original_path, None).await?,
                     StillDecodeKind::FfmpegAutorotated,
                 )
             }
@@ -301,7 +307,7 @@ impl ThumbnailService {
                 Err(err) => {
                     tracing::error!("person thumbnail decode failed for {person_id}: {err}");
                     (
-                        extract_with_ffmpeg(&input_path, config.preview_size).await?,
+                        extract_with_ffmpeg(&input_path, Some(config.preview_size)).await?,
                         StillDecodeKind::FfmpegAutorotated,
                     )
                 }
@@ -633,10 +639,10 @@ impl ThumbnailService {
                 decoded.pre_edit_width,
                 decoded.pre_edit_height,
             ),
-            Err(_) => (
-                asset.exif_image_width.unwrap_or(0) as u32,
-                asset.exif_image_height.unwrap_or(0) as u32,
-            ),
+            Err(_) => {
+                let (width, height) = oriented_pixel_dimensions(asset);
+                (width.max(0) as u32, height.max(0) as u32)
+            }
         };
 
         let thumbhash = compute_thumbhash(&thumbnail_path).ok();
@@ -676,7 +682,14 @@ impl ThumbnailService {
             Ok(decoded) => decoded,
             Err(err) => {
                 tracing::error!("image decode failed for {}, trying ffmpeg: {err}", asset.id);
-                let image = extract_with_ffmpeg(&asset.original_path, config.preview_size).await?;
+                let image = extract_with_ffmpeg(
+                    &asset.original_path,
+                    decode_limit_without_embedded(
+                        should_generate_fullsize(asset, config, is_edited),
+                        config.preview_size,
+                    ),
+                )
+                .await?;
                 let (width, height) = image.dimensions();
                 DecodedStill {
                     image,
@@ -908,19 +921,21 @@ impl ThumbnailService {
         render_with_ffmpeg(
             &asset.original_path,
             &preview_path,
-            config.preview_size,
+            Some(config.preview_size),
             &config.preview_format,
             config.preview_quality,
             video_ctx.as_ref(),
+            false,
         )
         .await?;
         render_with_ffmpeg(
             &asset.original_path,
             &thumbnail_path,
-            config.thumbnail_size,
+            Some(config.thumbnail_size),
             &config.thumbnail_format,
             config.thumbnail_quality,
             video_ctx.as_ref(),
+            false,
         )
         .await?;
 
@@ -979,7 +994,14 @@ impl ThumbnailService {
                 (image, StillDecodeKind::EmbeddedPreview)
             } else {
                 (
-                    extract_with_ffmpeg(&asset.original_path, config.preview_size).await?,
+                    extract_with_ffmpeg(
+                        &asset.original_path,
+                        decode_limit_without_embedded(
+                            should_generate_fullsize(asset, config, is_edited),
+                            config.preview_size,
+                        ),
+                    )
+                    .await?,
                     StillDecodeKind::FfmpegAutorotated,
                 )
             }
@@ -1013,29 +1035,30 @@ impl ThumbnailService {
         upserts: &[UpsertAssetFile],
         is_edited: bool,
     ) -> Result<(), String> {
-        let new_paths: Vec<String> = upserts.iter().map(|file| file.path.clone()).collect();
-        let mut paths_to_delete = Vec::new();
-        for file in &asset.files {
-            if file.is_edited != is_edited {
-                continue;
-            }
-            if !new_paths.iter().any(|path| path == &file.path) {
-                paths_to_delete.push(file.path.clone());
-            }
-        }
-
         asset_job::upsert_asset_files(&self.pool, upserts)
             .await
             .map_err(|err| err.to_string())?;
+        self.retire_derivatives(asset, Some(is_edited), upserts)
+            .await?;
 
-        if !paths_to_delete.is_empty() {
-            let _ = self
-                .jobs
-                .queue_file_delete(&paths_to_delete)
+        Ok(())
+    }
+
+    async fn retire_derivatives(
+        &self,
+        asset: &ThumbnailAssetJob,
+        edited_only: Option<bool>,
+        upserts: &[UpsertAssetFile],
+    ) -> Result<(), String> {
+        let retired = retired_derivatives(&asset.files, edited_only, upserts);
+        if !retired.file_ids.is_empty() {
+            asset_job::delete_asset_files_by_ids(&self.pool, &retired.file_ids)
                 .await
-                .map_err(|err| err.to_string());
+                .map_err(|err| err.to_string())?;
         }
-
+        if !retired.paths.is_empty() {
+            let _ = self.jobs.queue_file_delete(&retired.paths).await;
+        }
         Ok(())
     }
 }
@@ -1343,14 +1366,31 @@ fn should_use_embedded_preview(data: &[u8], target_size: u32) -> bool {
         .unwrap_or(false)
 }
 
-async fn extract_with_ffmpeg(input: &str, size: u32) -> Result<DynamicImage, String> {
+async fn extract_with_ffmpeg(input: &str, size: Option<u32>) -> Result<DynamicImage, String> {
     let temp = tempfile::Builder::new()
         .suffix(".png")
         .tempfile()
         .map_err(|err| err.to_string())?;
     let temp_path = temp.path().to_path_buf();
-    render_with_ffmpeg(input, &temp_path, size, "png", 90, None).await?;
+    render_with_ffmpeg(input, &temp_path, size, "png", 90, None, true).await?;
     decode_image_path(temp_path.to_str().unwrap()).await
+}
+
+/// TypeScript `decodeImage` size: full frame when the fullsize file is re-encoded,
+/// otherwise the preview edge. `None` means do not scale.
+/// sharp `fit: 'outside'` for a still frame: short edge is `min(short, size)`.
+fn short_edge_scale(size: u32) -> String {
+    format!(
+        "scale=w=if(gte(iw\\,ih)\\,-1\\,min({size}\\,iw)):h=if(gte(iw\\,ih)\\,min({size}\\,ih)\\,-1)"
+    )
+}
+
+fn decode_limit_without_embedded(convert_fullsize: bool, preview_size: u32) -> Option<u32> {
+    if convert_fullsize {
+        None
+    } else {
+        Some(preview_size)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1362,17 +1402,28 @@ struct VideoThumbnailContext {
 async fn render_with_ffmpeg(
     input: &str,
     output: &Path,
-    size: u32,
+    size: Option<u32>,
     format: &str,
     quality: u8,
     video: Option<&VideoThumbnailContext>,
+    short_edge: bool,
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
 
     let vf = if let Some(video) = video {
-        build_video_thumbnail_vf(&video.tonemap, &video.stream, size)
+        Some(build_video_thumbnail_vf(
+            &video.tonemap,
+            &video.stream,
+            size.unwrap_or(0),
+        ))
     } else {
-        format!("scale={size}:{size}:force_original_aspect_ratio=decrease")
+        size.map(|size| {
+            if short_edge {
+                short_edge_scale(size)
+            } else {
+                format!("scale={size}:{size}:force_original_aspect_ratio=decrease")
+            }
+        })
     };
 
     let mut args = vec![
@@ -1387,13 +1438,11 @@ async fn render_with_ffmpeg(
         append_video_thumbnail_input_args(&mut args, &video.stream);
     }
 
+    args.extend(["-autorotate".into(), "1".into(), "-i".into(), input.into()]);
+    if let Some(vf) = vf {
+        args.extend(["-vf".into(), vf]);
+    }
     args.extend([
-        "-autorotate".into(),
-        "1".into(),
-        "-i".into(),
-        input.into(),
-        "-vf".into(),
-        vf,
         "-frames:v".into(),
         "1".into(),
         "-fps_mode".into(),
@@ -1521,21 +1570,14 @@ fn write_resized(
 ) -> Result<(), String> {
     StoragePaths::ensure_parent(output).map_err(|err| err.to_string())?;
     let (width, height) = image.dimensions();
-    let longest = width.max(height).max(1);
-    let resized = if size == u32::MAX || longest <= size {
+    let (new_w, new_h) = if size == u32::MAX {
+        (width, height)
+    } else {
+        cover_resize_dimensions(width, height, size)
+    };
+    let resized = if new_w == width && new_h == height {
         image.clone()
     } else {
-        let (new_w, new_h) = if width >= height {
-            (
-                size,
-                ((height as f64 * size as f64) / width as f64).round() as u32,
-            )
-        } else {
-            (
-                ((width as f64 * size as f64) / height as f64).round() as u32,
-                size,
-            )
-        };
         image.resize(new_w.max(1), new_h.max(1), FilterType::Lanczos3)
     };
 
@@ -1586,6 +1628,50 @@ fn fit_thumbhash_dimensions(width: u32, height: u32) -> (u32, u32) {
             .max(1.0) as u32;
         (new_w, max)
     }
+}
+
+struct RetiredDerivatives {
+    file_ids: Vec<Uuid>,
+    paths: Vec<String>,
+}
+
+/// TypeScript `syncFiles`: drop rows that are not replaced, and queue the old
+/// path when a replacement writes a different file.
+fn retired_derivatives(
+    files: &[AssetFileJobRow],
+    edited_only: Option<bool>,
+    upserts: &[UpsertAssetFile],
+) -> RetiredDerivatives {
+    let mut file_ids = Vec::new();
+    let mut paths = Vec::new();
+    for file in files {
+        if edited_only.is_some_and(|flag| file.is_edited != flag) {
+            continue;
+        }
+        match upserts
+            .iter()
+            .find(|new| new.file_type == file.file_type && new.is_edited == file.is_edited)
+        {
+            Some(replacement) if replacement.path != file.path => {
+                paths.push(file.path.clone());
+            }
+            Some(_) => {}
+            None => {
+                file_ids.push(file.id);
+                paths.push(file.path.clone());
+            }
+        }
+    }
+    RetiredDerivatives { file_ids, paths }
+}
+
+fn oriented_pixel_dimensions(asset: &ThumbnailAssetJob) -> (i32, i32) {
+    let dimensions = asset_dimensions_from_exif(
+        asset.exif_image_width,
+        asset.exif_image_height,
+        asset.orientation.as_deref(),
+    );
+    (dimensions.width as i32, dimensions.height as i32)
 }
 
 #[cfg(test)]
@@ -1726,5 +1812,75 @@ mod tests {
             "IMAGE",
             super::StillDecodeKind::EmbeddedPreview
         ));
+    }
+
+    #[test]
+    fn raw_reencode_uses_full_frame_when_embedded_preview_is_missing() {
+        assert_eq!(super::decode_limit_without_embedded(true, 1440), None);
+        assert_eq!(
+            super::decode_limit_without_embedded(false, 1440),
+            Some(1440)
+        );
+    }
+
+    #[test]
+    fn cleared_edits_retire_edited_derivatives_and_keep_originals() {
+        let preview_id = uuid::Uuid::new_v4();
+        let thumb_id = uuid::Uuid::new_v4();
+        let original_id = uuid::Uuid::new_v4();
+        let files = vec![
+            super::AssetFileJobRow {
+                id: preview_id,
+                path: "preview_edited.jpg".into(),
+                file_type: "preview".into(),
+                is_edited: true,
+                is_progressive: true,
+                is_transparent: false,
+            },
+            super::AssetFileJobRow {
+                id: thumb_id,
+                path: "thumbnail_edited.webp".into(),
+                file_type: "thumbnail".into(),
+                is_edited: true,
+                is_progressive: false,
+                is_transparent: false,
+            },
+            super::AssetFileJobRow {
+                id: original_id,
+                path: "preview.jpg".into(),
+                file_type: "preview".into(),
+                is_edited: false,
+                is_progressive: false,
+                is_transparent: false,
+            },
+        ];
+
+        let retired = super::retired_derivatives(&files, Some(true), &[]);
+        assert_eq!(retired.file_ids, vec![preview_id, thumb_id]);
+        assert_eq!(
+            retired.paths,
+            vec![
+                "preview_edited.jpg".to_string(),
+                "thumbnail_edited.webp".to_string()
+            ]
+        );
+
+        let replacement = super::UpsertAssetFile {
+            asset_id: uuid::Uuid::nil(),
+            path: "preview_edited_new.jpg".into(),
+            file_type: "preview".into(),
+            is_edited: true,
+            is_progressive: true,
+            is_transparent: false,
+        };
+        let retired = super::retired_derivatives(&files, Some(true), &[replacement]);
+        assert_eq!(retired.file_ids, vec![thumb_id]);
+        assert_eq!(
+            retired.paths,
+            vec![
+                "preview_edited.jpg".to_string(),
+                "thumbnail_edited.webp".to_string()
+            ]
+        );
     }
 }
