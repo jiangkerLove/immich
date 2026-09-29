@@ -380,7 +380,8 @@ impl PersonService {
         require_permission(auth, Permission::PersonReassign)?;
         self.require_person_owner(auth, &[*target_id]).await?;
 
-        let target_face_asset_id = person::get_face_asset_id(&self.pool, &auth.user.id, target_id).await?;
+        let target_face_asset_id =
+            person::get_face_asset_id(&self.pool, &auth.user.id, target_id).await?;
         let mut change_feature_photo = Vec::new();
         if target_face_asset_id.is_none() {
             change_feature_photo.push(*target_id);
@@ -391,7 +392,9 @@ impl PersonService {
             if let Some(face_id) =
                 person::get_face_id_for_asset(&self.pool, &item.person_id, &item.asset_id).await?
             {
-                if person::get_face_asset_id(&self.pool, &auth.user.id, &item.person_id).await? == Some(face_id) {
+                if person::get_face_asset_id(&self.pool, &auth.user.id, &item.person_id).await?
+                    == Some(face_id)
+                {
                     change_feature_photo.push(item.person_id);
                 }
                 person::reassign_face(&self.pool, &face_id, target_id).await?;
@@ -418,18 +421,15 @@ impl PersonService {
         require_permission(auth, Permission::PersonMerge)?;
         self.require_person_owner(auth, &[*target_id]).await?;
 
-        let mut primary = person::get_by_id_for_owner(&self.pool, &auth.user.id, target_id)
-            .await?
-            .ok_or_else(|| ErrorResp::BadRequest("Person not found".to_string()))?;
+        if dto.ids.iter().any(|id| id == target_id) {
+            return Err(ErrorResp::BadRequest(
+                "Cannot merge a person into themselves".to_string(),
+            ));
+        }
 
         let mut results = Vec::new();
+        let mut allowed = Vec::new();
         for merge_id in &dto.ids {
-            if merge_id == target_id {
-                return Err(ErrorResp::BadRequest(
-                    "Cannot merge a person into themselves".to_string(),
-                ));
-            }
-
             if !person::owner_owns_people(&self.pool, &auth.user.id, &[*merge_id]).await? {
                 results.push(BulkIdResponse {
                     id: *merge_id,
@@ -438,49 +438,54 @@ impl PersonService {
                 });
                 continue;
             }
+            allowed.push(*merge_id);
+        }
 
-            let Some(merge_person) =
-                person::get_by_id_for_owner(&self.pool, &auth.user.id, merge_id).await?
-            else {
-                results.push(BulkIdResponse {
-                    id: *merge_id,
-                    success: false,
-                    error: Some(BulkIdErrorReason::NotFound),
-                });
+        let rows = person::list_for_merge(&self.pool, &allowed).await?;
+        let mut current_owner: Option<Uuid> = None;
+        let mut primary: Option<person::PersonRow> = None;
+        for row in rows {
+            if current_owner != Some(row.owner_id) {
+                primary = person::get_by_id_for_owner(&self.pool, &row.owner_id, target_id).await?;
+                current_owner = Some(row.owner_id);
+            }
+            let Some(primary_person) = primary.as_ref() else {
                 continue;
             };
 
-            let mut name = None;
-            let mut birth_date: Option<Option<chrono::NaiveDate>> = None;
-            if primary.name.is_empty() && !merge_person.name.is_empty() {
-                name = Some(merge_person.name.as_str());
+            let decision = merge_decision(
+                &primary_person.name,
+                primary_person.birth_date,
+                &row.name,
+                row.birth_date,
+            );
+            if decision.conflict {
+                continue;
             }
-            if primary.birth_date.is_none() && merge_person.birth_date.is_some() {
-                birth_date = Some(merge_person.birth_date);
-            }
-            if name.is_some() || birth_date.is_some() {
-                primary = person::update(
-                    &self.pool,
-                    target_id,
-                    &auth.user.id,
-                    name,
-                    birth_date,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .await?;
+            if decision.copy_name.is_some() || decision.copy_birth.is_some() {
+                primary = Some(
+                    person::update(
+                        &self.pool,
+                        target_id,
+                        &row.owner_id,
+                        decision.copy_name.as_deref(),
+                        decision.copy_birth.map(Some),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?,
+                );
             }
 
-            person::reassign_faces_by_person(&self.pool, merge_id, target_id, &auth.user.id)
-                .await?;
-            if !merge_person.thumbnail_path.is_empty() {
-                let _ = tokio::fs::remove_file(&merge_person.thumbnail_path).await;
+            person::reassign_faces_by_person(&self.pool, &row.id, target_id, &row.owner_id).await?;
+            if !row.thumbnail_path.is_empty() {
+                let _ = tokio::fs::remove_file(&row.thumbnail_path).await;
             }
-            person::delete_for_owner(&self.pool, &auth.user.id, &[*merge_id]).await?;
+            person::delete_for_owner(&self.pool, &row.owner_id, &[row.id]).await?;
             results.push(BulkIdResponse {
-                id: *merge_id,
+                id: row.id,
                 success: true,
                 error: None,
             });
@@ -633,14 +638,17 @@ impl PersonService {
 
         person::reassign_face(&self.pool, face_id, person_id).await?;
 
-        let target_face_asset_id = face::get_person_face_asset_id(&self.pool, &auth.user.id, person_id).await?;
+        let target_face_asset_id =
+            face::get_person_face_asset_id(&self.pool, &auth.user.id, person_id).await?;
         if target_face_asset_id.is_none() {
             self.create_new_feature_photo(&auth.user.id, &[*person_id])
                 .await?;
         }
 
         if let Some(old_person_id) = face_row.person_id {
-            if face::get_person_face_asset_id(&self.pool, &auth.user.id, &old_person_id).await? == Some(*face_id) {
+            if face::get_person_face_asset_id(&self.pool, &auth.user.id, &old_person_id).await?
+                == Some(*face_id)
+            {
                 self.create_new_feature_photo(&auth.user.id, &[old_person_id])
                     .await?;
             }
@@ -682,7 +690,8 @@ impl PersonService {
     ) -> Result<(), ErrorResp> {
         for person_id in person_ids {
             if let Some(face_id) = face::get_random_face_id(&self.pool, person_id).await? {
-                face::set_person_face_asset_id(&self.pool, owner_id, person_id, Some(face_id)).await?;
+                face::set_person_face_asset_id(&self.pool, owner_id, person_id, Some(face_id))
+                    .await?;
                 self.jobs
                     .queue_person_generate_thumbnail(owner_id, person_id)
                     .await?;
@@ -735,6 +744,36 @@ impl PersonService {
     }
 }
 
+struct MergeDecision {
+    conflict: bool,
+    copy_name: Option<String>,
+    copy_birth: Option<NaiveDate>,
+}
+
+/// TypeScript `mergePerson`: skip when the source has a different name or birth date.
+/// An empty primary name still conflicts with a named source, so the name is not copied.
+fn merge_decision(
+    primary_name: &str,
+    primary_birth: Option<NaiveDate>,
+    merge_name: &str,
+    merge_birth: Option<NaiveDate>,
+) -> MergeDecision {
+    let copy_name =
+        (primary_name.is_empty() && !merge_name.is_empty()).then(|| merge_name.to_string());
+    let copy_birth = if primary_birth.is_none() {
+        merge_birth
+    } else {
+        None
+    };
+    let name_conflict = !merge_name.is_empty() && merge_name != primary_name;
+    let birth_conflict = merge_birth.is_some() && merge_birth != primary_birth;
+    MergeDecision {
+        conflict: name_conflict || birth_conflict,
+        copy_name,
+        copy_birth,
+    }
+}
+
 fn parse_birth_date(value: Option<&str>) -> Result<Option<NaiveDate>, ErrorResp> {
     match value {
         None => Ok(None),
@@ -773,4 +812,47 @@ fn parse_color(value: Option<&str>) -> Result<Option<String>, ErrorResp> {
 fn is_valid_hex_color(value: &str) -> bool {
     let digits = value.strip_prefix('#').unwrap_or(value);
     matches!(digits.len(), 3 | 4 | 6 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+
+    use super::merge_decision;
+
+    fn date(value: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn merge_skips_conflicting_name_or_birth_date() {
+        let same = merge_decision(
+            "Alice",
+            Some(date("1976-06-30")),
+            "Alice",
+            Some(date("1976-06-30")),
+        );
+        assert!(!same.conflict);
+
+        let unnamed_into_named = merge_decision("Alice", None, "", None);
+        assert!(!unnamed_into_named.conflict);
+        assert!(unnamed_into_named.copy_name.is_none());
+
+        let renamed = merge_decision("Alice", None, "Bob", None);
+        assert!(renamed.conflict);
+
+        let named_into_empty = merge_decision("", None, "Alice", None);
+        assert!(named_into_empty.conflict);
+
+        let birth_mismatch = merge_decision(
+            "Alice",
+            Some(date("1976-06-30")),
+            "Alice",
+            Some(date("1980-01-01")),
+        );
+        assert!(birth_mismatch.conflict);
+
+        let birth_onto_unknown = merge_decision("Alice", None, "Alice", Some(date("1976-06-30")));
+        assert!(birth_onto_unknown.conflict);
+    }
 }

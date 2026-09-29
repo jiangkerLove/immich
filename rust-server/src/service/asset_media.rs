@@ -147,6 +147,7 @@ impl AssetMediaService {
             &self.pool,
             NewAsset {
                 owner_id: auth.user.id,
+                library_id: None,
                 asset_type,
                 original_path: upload_path.to_string_lossy().as_ref(),
                 checksum: &checksum,

@@ -14,7 +14,9 @@ use crate::models::db::metadata_job::{
 use crate::models::db::system_metadata::get_json;
 use crate::service::job::EntityJob;
 use crate::service::job::JobService;
-use crate::service::media::exiftool::{self, tag_f64, tag_i32, tag_string, tag_string_list};
+use crate::service::media::exiftool::{
+    self, tag_f64, tag_i32, tag_string, tag_string_list, tag_value,
+};
 use crate::service::media::ffprobe::{self, ProbeResult};
 use crate::service::media::metadata_postprocess;
 use crate::service::websocket::WebSocketHub;
@@ -480,13 +482,18 @@ fn image_dimensions(tags: &Value) -> (Option<i32>, Option<i32>) {
     )
 }
 
+/// TypeScript `hasGeo`: drop only a missing pair or the `(0, 0)` placeholder.
 fn gps_coordinates(tags: &Value) -> (Option<f64>, Option<f64>) {
-    let lat = tag_f64(tags, "GPSLatitude");
-    let lon = tag_f64(tags, "GPSLongitude");
-    if lat.is_some() && lon.is_some() && lat != Some(0.0) && lon != Some(0.0) {
-        (lat, lon)
-    } else {
+    let Some(lat) = tag_f64(tags, "GPSLatitude").filter(|value| value.is_finite()) else {
+        return (None, None);
+    };
+    let Some(lon) = tag_f64(tags, "GPSLongitude").filter(|value| value.is_finite()) else {
+        return (None, None);
+    };
+    if lat == 0.0 && lon == 0.0 {
         (None, None)
+    } else {
+        (Some(lat), Some(lon))
     }
 }
 
@@ -527,11 +534,11 @@ fn lens_model(tags: &Value) -> Option<String> {
 
 fn bits_per_sample(tags: &Value) -> Option<i32> {
     let candidates = [
-        tag_i32(tags, "BitsPerSample"),
-        tag_i32(tags, "ComponentBitDepth"),
+        parse_bit_depth_tag(tags, "BitsPerSample"),
+        parse_bit_depth_tag(tags, "ComponentBitDepth"),
         parse_bit_depth_tag(tags, "ImagePixelDepth"),
-        tag_i32(tags, "BitDepth"),
-        tag_i32(tags, "ColorBitDepth"),
+        parse_bit_depth_tag(tags, "BitDepth"),
+        parse_bit_depth_tag(tags, "ColorBitDepth"),
     ];
 
     let mut bits_per_sample = candidates.into_iter().flatten().next()?;
@@ -542,9 +549,16 @@ fn bits_per_sample(tags: &Value) -> Option<i32> {
 }
 
 fn parse_bit_depth_tag(tags: &Value, name: &str) -> Option<i32> {
-    tag_string(tags, name)
-        .and_then(|value| value.split_whitespace().next()?.parse().ok())
-        .or_else(|| tag_i32(tags, name))
+    match tag_value(tags, name)? {
+        Value::String(text) => text.split_whitespace().next()?.parse().ok(),
+        Value::Number(number) => number.as_i64().map(|value| value as i32),
+        Value::Array(items) => items.iter().find_map(|item| {
+            item.as_i64()
+                .map(|value| value as i32)
+                .or_else(|| item.as_str().and_then(|text| text.parse().ok()))
+        }),
+        _ => None,
+    }
 }
 
 fn tag_nested_string(tags: &Value, object: &str, field: &str) -> Option<String> {
@@ -705,8 +719,8 @@ mod tests {
 
     use super::{
         apply_heif_orientation, bits_per_sample, camera_make, camera_model, earliest_file_date,
-        extract_exif_date, image_dimensions, lens_model, merge_sidecar_tags, parse_exif_date,
-        resolve_time_zone,
+        extract_exif_date, gps_coordinates, image_dimensions, lens_model, merge_sidecar_tags,
+        parse_exif_date, resolve_time_zone,
     };
 
     #[test]
@@ -855,6 +869,35 @@ mod tests {
             None,
         );
         assert_eq!(time_zone.as_deref(), Some("UTC+0"));
+    }
+
+    #[test]
+    fn keeps_equator_or_prime_meridian_gps_and_parses_channel_bit_depth() {
+        assert_eq!(
+            gps_coordinates(&json!({"GPSLatitude": 0.0, "GPSLongitude": 10.5})),
+            (Some(0.0), Some(10.5))
+        );
+        assert_eq!(
+            gps_coordinates(&json!({"GPSLatitude": 51.5, "GPSLongitude": 0.0})),
+            (Some(51.5), Some(0.0))
+        );
+        assert_eq!(
+            gps_coordinates(&json!({"GPSLatitude": 0, "GPSLongitude": 0})),
+            (None, None)
+        );
+
+        assert_eq!(
+            bits_per_sample(&json!({"BitsPerSample": "16 16 16"})),
+            Some(16)
+        );
+        assert_eq!(
+            bits_per_sample(&json!({"BitsPerSample": "24 24 24"})),
+            Some(8)
+        );
+        assert_eq!(
+            bits_per_sample(&json!({"BitsPerSample": [8, 8, 8]})),
+            Some(8)
+        );
     }
 }
 

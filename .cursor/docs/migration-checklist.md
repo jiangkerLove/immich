@@ -283,6 +283,8 @@ cd rust-server && cargo +stable test --offline --lib
 | （续） | RAW 全尺寸：仅在网页不能直接显示时生成；内嵌 JPEG 原样落盘并写 Orientation#/ColorSpace。抽出的预览和编辑图先套 EXIF 方向；ffmpeg 已旋转的帧和视频人物预览不再转一次 |
 | （续） | 人脸识别按 cluster group 搜索，并为当前用户补同一 `personGroupId` 的人物行 |
 | （续） | 插件 Extism 日志带上 `name@version` 上下文，对齐 `Plugin:${label}` |
+| （续） | 人物合并：姓名或生日冲突则跳过，并按每个 owner 的人物行合并。外部库动态照片视频写入原 `libraryId` |
+| （续） | GPS 仅在经纬度都是 0 时丢弃；`BitsPerSample` 的 `"16 16 16"` 按每通道位深解析 |
 | 其他 parity | MemoryGenerate 锁、trash/duplicate、ClusterGroup、download Content-Disposition、lockedProperties 等 |
 
 ---
