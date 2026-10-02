@@ -1,19 +1,19 @@
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType, CoreUserInfoClaims};
 use openidconnect::{
-    reqwest::async_http_client, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret,
-    CsrfToken, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse,
+    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
+    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    reqwest::async_http_client,
 };
-use sqlx::PgPool;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
+use sqlx::PgPool;
 
 use crate::constants::MOBILE_REDIRECT;
 use crate::ext::bcrypt::hash_bcrypt;
 use crate::models::db::sessions::{NewSession, SessionPO};
-use crate::models::db::system_metadata::{get_oauth_config, OAuthConfig};
+use crate::models::db::system_metadata::{OAuthConfig, get_oauth_config};
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{map_user_admin_with_license, NewUserDb, UserDb};
+use crate::models::db::users::{NewUserDb, UserDb, map_user_admin_with_license};
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::auth::LoginReq;
 use crate::models::response::auth::LoginResp;
@@ -21,7 +21,6 @@ use crate::models::response::response::ErrorResp;
 use crate::models::response::user::UserAdminResponse;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
-
 
 #[derive(Clone)]
 pub struct OAuthService {
@@ -76,7 +75,10 @@ impl OAuthService {
 
         Ok(OAuthAuthorizeResp {
             url: auth_url.to_string(),
-            state: dto.state.clone().unwrap_or_else(|| csrf_state.secret().clone()),
+            state: dto
+                .state
+                .clone()
+                .unwrap_or_else(|| csrf_state.secret().clone()),
             code_verifier: Some(pkce_verifier.secret().clone()),
         })
     }
@@ -112,7 +114,9 @@ impl OAuthService {
 
         let token_response = client
             .exchange_code(code)
-            .set_pkce_verifier(pkce_verifier.unwrap_or_else(|| PkceCodeVerifier::new(String::new())))
+            .set_pkce_verifier(
+                pkce_verifier.unwrap_or_else(|| PkceCodeVerifier::new(String::new())),
+            )
             .request_async(async_http_client)
             .await
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
@@ -124,20 +128,20 @@ impl OAuthService {
             .await
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
 
-        let sub = userinfo
-            .subject()
-            .as_str()
-            .to_string();
+        let sub = userinfo.subject().as_str().to_string();
         let email = userinfo
             .email()
             .map(|m| m.as_str().trim().to_lowercase())
             .filter(|e| !e.is_empty());
 
-        let user = self.find_or_register_user(&oauth, &sub, email.as_deref()).await?;
+        let user = self
+            .find_or_register_user(&oauth, &sub, email.as_deref())
+            .await?;
         let oauth_sid = token_response
             .id_token()
             .and_then(|token| extract_sid_from_jwt(token.to_string().as_str()));
-        self.create_login_response(user, login_details, oauth_sid).await
+        self.create_login_response(user, login_details, oauth_sid)
+            .await
     }
 
     pub async fn link(
@@ -171,7 +175,9 @@ impl OAuthService {
 
         let token_response = client
             .exchange_code(code)
-            .set_pkce_verifier(pkce_verifier.unwrap_or_else(|| PkceCodeVerifier::new(String::new())))
+            .set_pkce_verifier(
+                pkce_verifier.unwrap_or_else(|| PkceCodeVerifier::new(String::new())),
+            )
             .request_async(async_http_client)
             .await
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
@@ -239,7 +245,10 @@ impl OAuthService {
     }
 
     pub fn mobile_redirect(request_url: &str) -> String {
-        format!("{MOBILE_REDIRECT}?{}", request_url.split('?').nth(1).unwrap_or(""))
+        format!(
+            "{MOBILE_REDIRECT}?{}",
+            request_url.split('?').nth(1).unwrap_or("")
+        )
     }
 
     pub async fn backchannel_logout(&self, logout_token: &str) -> Result<(), ErrorResp> {
@@ -265,12 +274,9 @@ impl OAuthService {
             ));
         }
 
-        let deleted_session_ids = SessionPO::invalidate_oauth(
-            &self.pool,
-            claims.sid.as_deref(),
-            claims.sub.as_deref(),
-        )
-        .await?;
+        let deleted_session_ids =
+            SessionPO::invalidate_oauth(&self.pool, claims.sid.as_deref(), claims.sub.as_deref())
+                .await?;
 
         for session_id in deleted_session_ids {
             self.websocket.emit_session_delete(session_id);
@@ -388,7 +394,10 @@ impl OAuthService {
         let redirect = RedirectUrl::new(redirect_uri.to_string())
             .map_err(|_| ErrorResp::BadRequest("Invalid redirect URI".to_string()))?;
 
-        Ok(CoreClient::from_provider_metadata(metadata, client_id, client_secret).set_redirect_uri(redirect))
+        Ok(
+            CoreClient::from_provider_metadata(metadata, client_id, client_secret)
+                .set_redirect_uri(redirect),
+        )
     }
 
     async fn find_or_register_user(
@@ -401,7 +410,8 @@ impl OAuthService {
             return Ok(user);
         }
 
-        if let Some(email) = email {
+        let email = email.map(crate::service::auth::normalize_email);
+        if let Some(email) = email.as_deref() {
             if let Some(user) = UserDb::select_full_by_email(&self.pool, email).await? {
                 if user.oauth_id.is_empty() {
                     sqlx::query(r#"UPDATE "user" SET "oauthId" = $1 WHERE id = $2"#)
@@ -413,12 +423,16 @@ impl OAuthService {
                         .await?
                         .ok_or_else(|| ErrorResp::ServerError("User not found".to_string()));
                 }
-                return Err(ErrorResp::BadRequest("OAuth authentication failed".to_string()));
+                return Err(ErrorResp::BadRequest(
+                    "OAuth authentication failed".to_string(),
+                ));
             }
         }
 
         if !oauth.auto_register {
-            return Err(ErrorResp::BadRequest("OAuth authentication failed".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "OAuth authentication failed".to_string(),
+            ));
         }
 
         let email = email.ok_or_else(|| {

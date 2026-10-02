@@ -2,12 +2,13 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::constants::{LOGIN_DUMMY_HASH, LOGIN_URL};
-use crate::ext::bcrypt::{hash_bcrypt, BcryptCompare};
+use crate::ext::bcrypt::{BcryptCompare, hash_bcrypt};
 use crate::models::db::api_key::ApiKeyRow;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::sessions::{AuthSession, NewSession, SessionPO};
 use crate::models::db::shared_links;
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{map_user_admin_with_license, NewUserDb, UserDb};
+use crate::models::db::users::{NewUserDb, UserDb, map_user_admin_with_license};
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::auth::{
     ChangePasswordReq, LoginCredentialReq, LoginReq, PinCodeChangeReq, PinCodeResetReq,
@@ -18,12 +19,11 @@ use crate::models::response::auth::{
 };
 use crate::models::response::response::ErrorResp;
 use crate::models::response::user::UserAdminResponse;
-use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
+use crate::service::websocket::WebSocketHub;
 use crate::utils::checksum::decode_share_key;
+use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
 use crate::utils::headers::AuthTokens;
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
-use crate::service::websocket::WebSocketHub;
 
 #[derive(Clone)]
 pub struct AuthService {
@@ -51,6 +51,15 @@ impl AuthService {
         login_credential: &LoginCredentialReq,
         login_details: &LoginReq,
     ) -> Result<LoginResp, ErrorResp> {
+        if !crate::models::db::system_metadata::password_login_enabled(&self.db_pool)
+            .await
+            .map_err(ErrorResp::from)?
+        {
+            return Err(ErrorResp::Unauthorized(
+                "Password login has been disabled".to_string(),
+            ));
+        }
+
         let email = normalize_email(&login_credential.email);
         let user_option = UserDb::select_full_by_email(&self.db_pool, &email)
             .await
@@ -68,7 +77,9 @@ impl AuthService {
             .is_ok_and(|ok| ok);
 
         if user_option.is_none()
-            || user_option.as_ref().is_some_and(|user| user.password.is_empty())
+            || user_option
+                .as_ref()
+                .is_some_and(|user| user.password.is_empty())
             || !authenticated
         {
             return Err(ErrorResp::Unauthorized(
@@ -87,8 +98,8 @@ impl AuthService {
             ));
         }
 
-        let hashed_password = hash_bcrypt(&dto.password)
-            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        let hashed_password =
+            hash_bcrypt(&dto.password).map_err(|err| ErrorResp::ServerError(err.to_string()))?;
 
         let user = UserDb::insert(
             &self.db_pool,
@@ -131,9 +142,7 @@ impl AuthService {
     }
 
     pub fn validate_access_token() -> ValidateAccessTokenResp {
-        ValidateAccessTokenResp {
-            auth_status: true,
-        }
+        ValidateAccessTokenResp { auth_status: true }
     }
 
     pub async fn get_auth_status(&self, auth: &AuthDto) -> Result<AuthStatusResp, ErrorResp> {
@@ -192,17 +201,15 @@ impl AuthService {
         let hashed_password = hash_bcrypt(&dto.new_password)
             .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
 
-        let updated = UserDb::update_password(&self.db_pool, &auth.user.id, &hashed_password).await?;
+        let updated =
+            UserDb::update_password(&self.db_pool, &auth.user.id, &hashed_password).await?;
 
-        let current_session_id = auth.session.as_ref().and_then(|session| {
-            uuid::Uuid::parse_str(&session.id).ok()
-        });
-        SessionPO::invalidate_all_except(
-            &self.db_pool,
-            &auth.user.id,
-            current_session_id.as_ref(),
-        )
-        .await?;
+        let current_session_id = auth
+            .session
+            .as_ref()
+            .and_then(|session| uuid::Uuid::parse_str(&session.id).ok());
+        SessionPO::invalidate_all_except(&self.db_pool, &auth.user.id, current_session_id.as_ref())
+            .await?;
 
         Ok(map_user_admin_with_license(&self.db_pool, updated).await?)
     }
@@ -223,11 +230,13 @@ impl AuthService {
             .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
 
         if user.pin_code.is_some() {
-            return Err(ErrorResp::BadRequest("User already has a PIN code".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "User already has a PIN code".to_string(),
+            ));
         }
 
-        let hashed = hash_bcrypt(&dto.pin_code)
-            .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        let hashed =
+            hash_bcrypt(&dto.pin_code).map_err(|err| ErrorResp::ServerError(err.to_string()))?;
         UserDb::update_pin_code(&self.db_pool, &auth.user.id, Some(&hashed)).await?;
         Ok(())
     }
@@ -278,26 +287,22 @@ impl AuthService {
         auth: &AuthDto,
         dto: &SessionUnlockReq,
     ) -> Result<(), ErrorResp> {
-        let session = auth
-            .session
-            .as_ref()
-            .ok_or_else(|| {
-                ErrorResp::BadRequest(
-                    "This endpoint can only be used with a session token".to_string(),
-                )
-            })?;
+        let session = auth.session.as_ref().ok_or_else(|| {
+            ErrorResp::BadRequest("This endpoint can only be used with a session token".to_string())
+        })?;
 
         let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
             .await?
             .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
 
-        let pin_code = dto
-            .pin_code
-            .as_deref()
-            .ok_or_else(|| ErrorResp::BadRequest("Either password or pinCode is required".to_string()))?;
+        let pin_code = dto.pin_code.as_deref().ok_or_else(|| {
+            ErrorResp::BadRequest("Either password or pinCode is required".to_string())
+        })?;
 
         if user.pin_code.is_none() {
-            return Err(ErrorResp::BadRequest("User does not have a PIN code".to_string()));
+            return Err(ErrorResp::BadRequest(
+                "User does not have a PIN code".to_string(),
+            ));
         }
 
         if !validate_secret(pin_code, user.pin_code.as_deref()) {
@@ -318,14 +323,9 @@ impl AuthService {
     }
 
     pub async fn lock_session(&self, auth: &AuthDto) -> Result<(), ErrorResp> {
-        let session = auth
-            .session
-            .as_ref()
-            .ok_or_else(|| {
-                ErrorResp::BadRequest(
-                    "This endpoint can only be used with a session token".to_string(),
-                )
-            })?;
+        let session = auth.session.as_ref().ok_or_else(|| {
+            ErrorResp::BadRequest("This endpoint can only be used with a session token".to_string())
+        })?;
 
         let session_id = uuid::Uuid::parse_str(&session.id)
             .map_err(|_| ErrorResp::BadRequest("Invalid session".to_string()))?;
@@ -386,7 +386,8 @@ impl AuthService {
         path: &str,
         shared_link_tokens: &[String],
     ) -> Result<AuthDto, ErrorResp> {
-        let bytes = decode_share_key(key).map_err(|_| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
+        let bytes = decode_share_key(key)
+            .map_err(|_| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
         let result = shared_links::get_by_key(&self.db_pool, &bytes)
             .await?
             .ok_or_else(|| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
@@ -430,9 +431,8 @@ impl AuthService {
         }
 
         if let Some(password) = &shared_link.password {
-            let link_id = uuid::Uuid::parse_str(&shared_link.id).map_err(|_| {
-                ErrorResp::ServerError("Invalid shared link".to_string())
-            })?;
+            let link_id = uuid::Uuid::parse_str(&shared_link.id)
+                .map_err(|_| ErrorResp::ServerError("Invalid shared link".to_string()))?;
             let token = crate::utils::crypto::shared_link_login_token(&link_id, password);
             if !shared_link_tokens.contains(&token) {
                 return Err(ErrorResp::Unauthorized("Password required".to_string()));
@@ -502,7 +502,7 @@ impl AuthService {
 
 use crate::models::db::users::AuthUserDb;
 
-fn normalize_email(email: &str) -> String {
+pub(crate) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
 }
 
@@ -523,7 +523,9 @@ fn validate_pin_code_auth(
     password: Option<&str>,
 ) -> Result<(), ErrorResp> {
     if user.pin_code.is_none() {
-        return Err(ErrorResp::BadRequest("User does not have a PIN code".to_string()));
+        return Err(ErrorResp::BadRequest(
+            "User does not have a PIN code".to_string(),
+        ));
     }
 
     if let Some(password) = password {

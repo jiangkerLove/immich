@@ -61,7 +61,11 @@ impl UserService {
     ) -> Result<UserAdminResponse, ErrorResp> {
         require_permission(auth, Permission::UserUpdate)?;
 
-        if let Some(email) = &dto.email {
+        let email = dto
+            .email
+            .as_ref()
+            .map(|value| crate::service::auth::normalize_email(value));
+        if let Some(email) = &email {
             if let Some(existing) = UserDb::get_by_email(&self.db.pool, email).await? {
                 if existing.id != auth.user.id {
                     return Err(ErrorResp::BadRequest("Email is not available".to_string()));
@@ -83,7 +87,7 @@ impl UserService {
         let user = UserDb::update_me(
             &self.db.pool,
             &auth.user.id,
-            dto.email.as_deref(),
+            email.as_deref(),
             dto.name.as_deref(),
             avatar_color,
             password_hash.as_deref(),

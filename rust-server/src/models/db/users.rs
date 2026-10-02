@@ -96,9 +96,8 @@ impl UserDb {
         pool: &Pool<Postgres>,
         user_email: &str,
     ) -> Result<Option<UserDb>, sqlx::Error> {
-        let query = format!(
-            r#"{USER_SELECT} WHERE lower(email) = lower($1) AND "deletedAt" IS NULL"#
-        );
+        let query =
+            format!(r#"{USER_SELECT} WHERE lower(email) = lower($1) AND "deletedAt" IS NULL"#);
         sqlx::query_as::<_, Self>(&query)
             .bind(user_email)
             .fetch_optional(pool)
@@ -117,12 +116,9 @@ impl UserDb {
     }
 
     pub async fn get_admin(pool: &Pool<Postgres>) -> Result<Option<UserDb>, sqlx::Error> {
-        let query = format!(
-            r#"{USER_SELECT} WHERE "isAdmin" = true AND "deletedAt" IS NULL LIMIT 1"#
-        );
-        sqlx::query_as::<_, Self>(&query)
-            .fetch_optional(pool)
-            .await
+        let query =
+            format!(r#"{USER_SELECT} WHERE "isAdmin" = true AND "deletedAt" IS NULL LIMIT 1"#);
+        sqlx::query_as::<_, Self>(&query).fetch_optional(pool).await
     }
 
     pub async fn get_for_pin_code(
@@ -145,9 +141,8 @@ impl UserDb {
         pool: &Pool<Postgres>,
         email: &str,
     ) -> Result<Option<UserDb>, sqlx::Error> {
-        let query = format!(
-            r#"{USER_SELECT} WHERE lower(email) = lower($1) AND "deletedAt" IS NULL"#
-        );
+        let query =
+            format!(r#"{USER_SELECT} WHERE lower(email) = lower($1) AND "deletedAt" IS NULL"#);
         sqlx::query_as::<_, Self>(&query)
             .bind(email)
             .fetch_optional(pool)
@@ -267,7 +262,10 @@ impl UserDb {
             .await
     }
 
-    pub async fn clear_profile_image(pool: &Pool<Postgres>, id: &Uuid) -> Result<UserDb, sqlx::Error> {
+    pub async fn clear_profile_image(
+        pool: &Pool<Postgres>,
+        id: &Uuid,
+    ) -> Result<UserDb, sqlx::Error> {
         Self::update_profile_image(pool, id, "").await
     }
 
@@ -399,9 +397,7 @@ impl UserDb {
         pool: &Pool<Postgres>,
         storage_label: &str,
     ) -> Result<Option<UserDb>, sqlx::Error> {
-        let query = format!(
-            r#"{USER_SELECT} WHERE "storageLabel" = $1 AND "deletedAt" IS NULL"#
-        );
+        let query = format!(r#"{USER_SELECT} WHERE "storageLabel" = $1 AND "deletedAt" IS NULL"#);
         sqlx::query_as::<_, UserDb>(&query)
             .bind(storage_label)
             .fetch_optional(pool)
@@ -659,12 +655,10 @@ impl UserDb {
     }
 
     pub async fn admin_restore(pool: &Pool<Postgres>, id: &Uuid) -> Result<UserDb, sqlx::Error> {
-        sqlx::query(
-            r#"UPDATE album SET "deletedAt" = NULL WHERE "ownerId" = $1"#,
-        )
-        .bind(id)
-        .execute(pool)
-        .await?;
+        sqlx::query(r#"UPDATE album SET "deletedAt" = NULL WHERE "ownerId" = $1"#)
+            .bind(id)
+            .execute(pool)
+            .await?;
 
         sqlx::query_as::<_, UserDb>(
             r#"

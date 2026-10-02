@@ -21,6 +21,7 @@ COPY rust-server/Cargo.toml rust-server/build.rs ./
 # Lockfile is optional in the git tree; generate when missing.
 COPY rust-server/Cargo.lock* ./
 COPY rust-server/src ./src
+COPY rust-server/regexes.yaml ./regexes.yaml
 COPY rust-server/migrations ./migrations
 COPY rust-server/schema ./schema
 COPY rust-server/config ./config

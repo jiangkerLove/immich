@@ -110,7 +110,8 @@ impl UserAdminService {
             return Err(ErrorResp::BadRequest("password is required".to_string()));
         }
 
-        if let Some(existing) = UserDb::get_by_email(&self.pool, &dto.email).await? {
+        let email = crate::service::auth::normalize_email(&dto.email);
+        if let Some(existing) = UserDb::get_by_email(&self.pool, &email).await? {
             if existing.deleted_at.is_none() {
                 return Err(ErrorResp::BadRequest("Email is not available".to_string()));
             }
@@ -146,7 +147,7 @@ impl UserAdminService {
 
         let user = UserDb::admin_create(
             &self.pool,
-            &dto.email,
+            &email,
             &password_hash,
             &dto.name,
             dto.is_admin.unwrap_or(false),
@@ -202,7 +203,11 @@ impl UserAdminService {
             }
         }
 
-        if let Some(email) = &dto.email {
+        let email = dto
+            .email
+            .as_ref()
+            .map(|value| crate::service::auth::normalize_email(value));
+        if let Some(email) = &email {
             if let Some(existing) = UserDb::get_by_email(&self.pool, email).await? {
                 if existing.id != *id {
                     return Err(ErrorResp::BadRequest("Email is not available".to_string()));
@@ -247,7 +252,7 @@ impl UserAdminService {
         let user = UserDb::admin_update(
             &self.pool,
             id,
-            dto.email.as_deref(),
+            email.as_deref(),
             password_hash.as_deref(),
             dto.name.as_deref(),
             dto.avatar_color

@@ -28,7 +28,8 @@ pub async fn user_agent(mut req: Request, next: Next) -> Response {
 }
 
 fn parse_user_agent(req: &Request) -> LoginReq {
-    let addr_ip = if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+    let addr_ip = if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>()
+    {
         addr.ip().to_string()
     } else {
         req.headers()

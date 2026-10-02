@@ -65,7 +65,9 @@ pub struct ServerLicense {
     pub activated_at: String,
 }
 
-pub async fn get_server_license(pool: &Pool<Postgres>) -> Result<Option<ServerLicense>, sqlx::Error> {
+pub async fn get_server_license(
+    pool: &Pool<Postgres>,
+) -> Result<Option<ServerLicense>, sqlx::Error> {
     let value = get_json(pool, LICENSE_KEY).await?;
     Ok(value.and_then(|json| serde_json::from_value::<ServerLicense>(json).ok()))
 }
@@ -74,7 +76,12 @@ pub async fn set_server_license(
     pool: &Pool<Postgres>,
     license: &ServerLicense,
 ) -> Result<(), sqlx::Error> {
-    set_json(pool, LICENSE_KEY, &serde_json::to_value(license).unwrap_or_default()).await
+    set_json(
+        pool,
+        LICENSE_KEY,
+        &serde_json::to_value(license).unwrap_or_default(),
+    )
+    .await
 }
 
 pub async fn delete_server_license(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
@@ -223,10 +230,21 @@ struct SystemConfigRoot {
     pub theme: ThemeConfig,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PasswordLoginConfig {
+    #[serde(default = "default_password_login_enabled")]
     pub enabled: bool,
+}
+
+fn default_password_login_enabled() -> bool {
+    true
+}
+
+impl Default for PasswordLoginConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 pub async fn get_oauth_config(pool: &Pool<Postgres>) -> Result<Option<OAuthConfig>, sqlx::Error> {
