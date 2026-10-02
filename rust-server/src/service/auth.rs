@@ -51,7 +51,8 @@ impl AuthService {
         login_credential: &LoginCredentialReq,
         login_details: &LoginReq,
     ) -> Result<LoginResp, ErrorResp> {
-        let user_option = UserDb::select_full_by_email(&self.db_pool, &login_credential.email)
+        let email = normalize_email(&login_credential.email);
+        let user_option = UserDb::select_full_by_email(&self.db_pool, &email)
             .await
             .map_err(ErrorResp::from)?;
 
@@ -92,7 +93,7 @@ impl AuthService {
         let user = UserDb::insert(
             &self.db_pool,
             &NewUserDb {
-                email: dto.email.clone(),
+                email: normalize_email(&dto.email),
                 password: hashed_password,
                 name: dto.name.clone(),
                 is_admin: true,
@@ -500,6 +501,10 @@ impl AuthService {
 }
 
 use crate::models::db::users::AuthUserDb;
+
+fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
 
 fn is_valid_pin_code(pin_code: &str) -> bool {
     pin_code.len() == 6 && pin_code.chars().all(|c| c.is_ascii_digit())

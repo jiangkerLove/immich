@@ -97,7 +97,7 @@ impl UserDb {
         user_email: &str,
     ) -> Result<Option<UserDb>, sqlx::Error> {
         let query = format!(
-            r#"{USER_SELECT} WHERE email = $1 AND "deletedAt" IS NULL"#
+            r#"{USER_SELECT} WHERE lower(email) = lower($1) AND "deletedAt" IS NULL"#
         );
         sqlx::query_as::<_, Self>(&query)
             .bind(user_email)
@@ -146,7 +146,7 @@ impl UserDb {
         email: &str,
     ) -> Result<Option<UserDb>, sqlx::Error> {
         let query = format!(
-            r#"{USER_SELECT} WHERE email = $1 AND "deletedAt" IS NULL"#
+            r#"{USER_SELECT} WHERE lower(email) = lower($1) AND "deletedAt" IS NULL"#
         );
         sqlx::query_as::<_, Self>(&query)
             .bind(email)

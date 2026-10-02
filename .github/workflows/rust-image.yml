@@ -48,8 +48,6 @@ jobs:
           platforms: linux/amd64
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=immich
-          cache-to: type=gha,scope=immich,mode=max
           tags: |
             registry.cn-hangzhou.aliyuncs.com/jiangker/immich:latest
             registry.cn-hangzhou.aliyuncs.com/jiangker/immich:${{ github.sha }}

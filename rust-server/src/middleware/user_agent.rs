@@ -12,7 +12,10 @@ use crate::models::request::auth::LoginReq;
 static UA_PARSER: OnceLock<UserAgentParser> = OnceLock::new();
 
 fn ua_parser() -> &'static UserAgentParser {
-    UA_PARSER.get_or_init(|| UserAgentParser::from_path("regexes.yaml").unwrap())
+    UA_PARSER.get_or_init(|| {
+        UserAgentParser::from_str(include_str!("../../regexes.yaml"))
+            .expect("embedded user-agent regexes")
+    })
 }
 
 pub async fn user_agent(mut req: Request, next: Next) -> Response {
