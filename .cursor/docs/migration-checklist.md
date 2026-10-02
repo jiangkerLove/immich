@@ -16,7 +16,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | 判断 | 说明 |
 |------|------|
 | **代码面** | HTTP 全领域、66 JobName、19 队列、媒体/库/同步/搜索 API、WS、HLS、sqlx baseline、CLI — **已到位** |
-| **切流路径** | **服务器**：仓库根目录 `./deploy`。**本机 Docker**：`cd rust-server && docker compose up -d --build`。**不用 Docker**：`cargo run` + Vite。说明只维护在 `rust-server/README.md` |
+| **切流路径** | **服务器**：空目录里放 `docker-compose.yml` + `.env`，`docker compose up -d`（不克隆仓库）。**本机 Docker**：`cd rust-server && docker compose up -d --build`。**不用 Docker**：`cargo run` + Vite。说明只维护在 `rust-server/README.md` |
 | **真正阻塞** | 不是缺 API，而是：**真实 compose 冒烟未跑通**、**现有库 baseline 未验证锁定**、**维护模式 AppRestart 重启链路未在你的部署上确认** |
 | **下一步** | **仅剩 Cutover（需本机 compose/DB）**：C2 → C1 → C3；可选 P4。代码侧可迁移项已清空。 |
 

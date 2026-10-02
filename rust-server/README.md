@@ -4,25 +4,96 @@
 
 网页和 API 是同一个 `rust-server` 进程：构建时把 `web/` 编成静态文件，运行时由 Rust 在 **2283** 读这些文件。开发时也可以让 Vite 单独起页面，把 `/api` 代理到 2283。
 
-## 服务器（拉镜像，一台机器）
+## 服务器：只建两个文件
 
-`dev-rust` 上相关提交后，GitHub Actions 编译并上传一个镜像（里面已含网页）。仓库 Secrets：`ALIYUN_REGISTRY_USER`、`ALIYUN_REGISTRY_PASSWORD`。
+不用克隆仓库，也不用在服务器上编译。网页和 API 已经打进镜像。在空目录里建下面两个文件，放在一起。
 
-镜像：`registry.cn-hangzhou.aliyuncs.com/jiangker/immich:latest`
+镜像都在 `registry.cn-hangzhou.aliyuncs.com/jiangker/`。`immich` 由 `dev-rust` 提交后自动编译。另外三张是转存：在 GitHub Actions 里手动运行 **Mirror runtime images** 一次（Secrets 仍是 `ALIYUN_REGISTRY_USER`、`ALIYUN_REGISTRY_PASSWORD`）。阿里云若没有自动建仓库，先建好 `immich-machine-learning`、`valkey`、`immich-postgres`。
 
-在**仓库根目录**（不要在服务器上编译）：
+**`.env`**
 
 ```bash
-cp rust-server/example.env .env   # 首次，改 DB_PASSWORD
-./deploy
+UPLOAD_LOCATION=./library
+DB_DATA_LOCATION=./postgres
+DB_PASSWORD=改成一串字母和数字
+DB_USERNAME=postgres
+DB_DATABASE_NAME=immich
 ```
 
-浏览器打开 `http://<服务器>:2283`。Postgres、Redis、机器学习与 API 由根目录 `docker-compose.yml` 一起启动。
+**`docker-compose.yml`**
+
+Postgres、Redis、机器学习、API 和网页在这一份里一起启动。文件第一行必须是 `services:`。不要把 \`\`\`yaml、`cat` 命令写进文件；镜像地址里的冒号要用引号包起来。
+
+```yaml
+services:
+  immich-server:
+    container_name: immich_server
+    image: "registry.cn-hangzhou.aliyuncs.com/jiangker/immich:latest"
+    command: ["rust-server"]
+    volumes:
+      - ${UPLOAD_LOCATION}:/data
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - .env
+    environment:
+      DB_HOSTNAME: database
+      REDIS_HOSTNAME: redis
+      IMMICH_MEDIA_LOCATION: /data
+      IMMICH_SERVER_PATH: /usr/src/app/server
+      IMMICH_WEB_ROOT: /build/www
+    ports:
+      - "2283:2283"
+    depends_on:
+      - redis
+      - database
+    restart: always
+
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    image: "registry.cn-hangzhou.aliyuncs.com/jiangker/immich-machine-learning:release"
+    volumes:
+      - model-cache:/cache
+    env_file:
+      - .env
+    restart: always
+
+  redis:
+    container_name: immich_redis
+    image: "registry.cn-hangzhou.aliyuncs.com/jiangker/valkey:9"
+    restart: always
+
+  database:
+    container_name: immich_postgres
+    image: "registry.cn-hangzhou.aliyuncs.com/jiangker/immich-postgres:14-vectorchord0.4.3-pgvectors0.2.0"
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_DB: ${DB_DATABASE_NAME}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
+    shm_size: 128mb
+    restart: always
+
+volumes:
+  model-cache:
+```
 
 ```bash
-docker compose exec immich-server rust-server immich-admin migration-status
+docker login registry.cn-hangzhou.aliyuncs.com
+docker compose pull
+docker compose up -d
+```
+
+浏览器打开 `http://<服务器>:2283`。照片在 `./library`，数据库在 `./postgres`。
+
+```bash
+docker compose ps
+docker compose logs -f immich-server
 docker compose down
 ```
+
+已经克隆了仓库时，在根目录 `cp rust-server/example.env .env` 后执行 `./deploy`，效果一样。
 
 ## 本机 Docker
 
