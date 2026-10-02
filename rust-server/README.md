@@ -8,7 +8,7 @@
 
 不用克隆仓库，也不用在服务器上编译。网页和 API 已经打进镜像。在空目录里建下面两个文件，放在一起。
 
-镜像都在 `registry.cn-hangzhou.aliyuncs.com/jiangker/`。`immich` 由 `dev-rust` 提交后自动编译。另外三张是转存：在 GitHub Actions 里手动运行 **Mirror runtime images** 一次（Secrets 仍是 `ALIYUN_REGISTRY_USER`、`ALIYUN_REGISTRY_PASSWORD`）。阿里云若没有自动建仓库，先建好 `immich-machine-learning`、`valkey`、`immich-postgres`。
+镜像都在 `registry.cn-hangzhou.aliyuncs.com/jiangker/`。`immich` 由 `dev-rust` 提交后自动编译。另外三张是转存：在 GitHub Actions 里手动运行 **Mirror runtime images**（Secrets 仍是 `ALIYUN_REGISTRY_USER`、`ALIYUN_REGISTRY_PASSWORD`）。三张镜像分开检查，摘要没变就跳过，只有上游变了才重新下载并上传。阿里云若没有自动建仓库，先建好 `immich-machine-learning`、`valkey`、`immich-postgres`。
 
 **`.env`**
 

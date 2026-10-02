@@ -3,17 +3,28 @@ name: Mirror runtime images
 on:
   workflow_dispatch:
 
-concurrency:
-  group: mirror-images
-  cancel-in-progress: true
-
 jobs:
   mirror:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: mirror-${{ matrix.name }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: machine-learning
+            src: ghcr.io/immich-app/immich-machine-learning:release
+            dst: registry.cn-hangzhou.aliyuncs.com/jiangker/immich-machine-learning:release
+          - name: valkey
+            src: docker.io/valkey/valkey:9@sha256:70739f85ad2ee01a726a965584a0f94895f01b0c60b3cc8b0aeef11eaa6888cf
+            dst: registry.cn-hangzhou.aliyuncs.com/jiangker/valkey:9
+          - name: postgres
+            src: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+            dst: registry.cn-hangzhou.aliyuncs.com/jiangker/immich-postgres:14-vectorchord0.4.3-pgvectors0.2.0
     steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
@@ -21,22 +32,46 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      - name: Pull and push linux/amd64 images
+      - name: Pull and push only when the upstream digest changed
+        env:
+          SRC: ${{ matrix.src }}
+          DST: ${{ matrix.dst }}
         run: |
           set -euo pipefail
-          mirror() {
-            src="$1"
-            dst="$2"
-            docker pull --platform linux/amd64 "$src"
-            docker tag "$src" "$dst"
-            docker push "$dst"
+
+          amd64_digest() {
+            raw=$(docker buildx imagetools inspect --raw "$1")
+            digest=$(printf '%s' "$raw" | jq -r '
+              if (.manifests | type) == "array" then
+                [ .manifests[]
+                  | select(.platform.os == "linux" and .platform.architecture == "amd64")
+                  | select((.platform.variant // "") == "")
+                  | select((.annotations["vnd.docker.reference.type"] // "") == "")
+                  | .digest
+                ] | first // ""
+              else
+                ""
+              end')
+            if [ -n "$digest" ]; then
+              printf '%s\n' "$digest"
+            else
+              docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1"
+            fi
           }
-          mirror \
-            "ghcr.io/immich-app/immich-machine-learning:release" \
-            "registry.cn-hangzhou.aliyuncs.com/jiangker/immich-machine-learning:release"
-          mirror \
-            "docker.io/valkey/valkey:9@sha256:70739f85ad2ee01a726a965584a0f94895f01b0c60b3cc8b0aeef11eaa6888cf" \
-            "registry.cn-hangzhou.aliyuncs.com/jiangker/valkey:9"
-          mirror \
-            "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23" \
-            "registry.cn-hangzhou.aliyuncs.com/jiangker/immich-postgres:14-vectorchord0.4.3-pgvectors0.2.0"
+
+          src_digest=$(amd64_digest "$SRC")
+          repo=${DST%:*}
+          marker="${repo}:synced-${src_digest#sha256:}"
+          if docker buildx imagetools inspect "$marker" >/dev/null 2>&1; then
+            echo "unchanged ${DST} (${src_digest}), skip download"
+            exit 0
+          fi
+
+          echo "upstream changed, mirroring ${SRC}"
+          echo "  digest ${src_digest}"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker pull --platform linux/amd64 "$SRC"
+          docker tag "$SRC" "$DST"
+          docker tag "$SRC" "$marker"
+          docker push "$DST"
+          docker push "$marker"
