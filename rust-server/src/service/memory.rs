@@ -4,20 +4,20 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::models::db::assets;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::memory::{
     self, MemoryCreateData, MemoryRow, MemorySearchFilter, MemoryUpdateData,
 };
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::asset::map_assets;
 use crate::models::response::memory::{
-    format_datetime, format_optional_datetime, parse_memory_data, MemoryResponse,
-    MemoryStatisticsResponse,
+    MemoryResponse, MemoryStatisticsResponse, format_datetime, format_optional_datetime,
+    parse_memory_data,
 };
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::service::album::{BulkIdErrorReason, BulkIdResponse, BulkIdsReq};
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct MemoryService {
@@ -94,11 +94,7 @@ impl MemoryService {
         Ok(MemoryStatisticsResponse { total })
     }
 
-    pub async fn get(
-        &self,
-        auth: &AuthDto,
-        id: &Uuid,
-    ) -> Result<MemoryResponse, ErrorResp> {
+    pub async fn get(&self, auth: &AuthDto, id: &Uuid) -> Result<MemoryResponse, ErrorResp> {
         require_memory_access(&self.pool, auth, id, Permission::MemoryRead).await?;
         let memory = memory::get_by_id(&self.pool, id)
             .await?
@@ -245,13 +241,13 @@ impl MemoryService {
 
         let existing = memory::filter_asset_ids_in_memory(&self.pool, id, &dto.ids).await?;
         let existing_set: HashSet<Uuid> = existing.iter().copied().collect();
-        let can_always_remove =
-            memory::owner_has_memory(&self.pool, &auth.user.id, id).await?;
+        let can_always_remove = memory::owner_has_memory(&self.pool, &auth.user.id, id).await?;
 
         let allowed: HashSet<Uuid> = if can_always_remove {
             existing_set.clone()
         } else {
-            filter_share_accessible_ids(&self.pool, auth, &existing).await?
+            filter_share_accessible_ids(&self.pool, auth, &existing)
+                .await?
                 .into_iter()
                 .collect()
         };
@@ -338,11 +334,7 @@ async fn filter_share_accessible_ids(
 
 fn build_filter(query: &MemorySearchQuery) -> Result<MemorySearchFilter, ErrorResp> {
     Ok(MemorySearchFilter {
-        for_date: query
-            .for_date
-            .as_deref()
-            .map(parse_datetime)
-            .transpose()?,
+        for_date: query.for_date.as_deref().map(parse_datetime).transpose()?,
         is_trashed: parse_bool(&query.is_trashed),
         is_saved: parse_bool(&query.is_saved),
         memory_type: query.r#type.clone(),
@@ -420,7 +412,11 @@ async fn map_memory(
         .map(|asset| (asset.id, asset))
         .collect();
 
-    Ok(build_memory_response(&memory, &assets_by_memory, &asset_map))
+    Ok(build_memory_response(
+        &memory,
+        &assets_by_memory,
+        &asset_map,
+    ))
 }
 
 fn build_memory_response(
@@ -462,11 +458,28 @@ fn parse_bool(value: &Option<String>) -> Option<bool> {
 }
 
 fn parse_datetime(value: &str) -> Result<DateTime<Utc>, ErrorResp> {
-    chrono::DateTime::parse_from_rfc3339(value)
-        .map(|value| value.with_timezone(&Utc))
-        .or_else(|_| {
-            value
-                .parse::<DateTime<Utc>>()
-                .map_err(|_| ErrorResp::BadRequest("Invalid datetime".to_string()))
-        })
+    if let Ok(value) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(value.with_timezone(&Utc));
+    }
+    if let Ok(value) = value.parse::<DateTime<Utc>>() {
+        return Ok(value);
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return date
+            .and_hms_opt(0, 0, 0)
+            .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+            .ok_or_else(|| ErrorResp::BadRequest("Invalid datetime".to_string()));
+    }
+    Err(ErrorResp::BadRequest("Invalid datetime".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_datetime;
+
+    #[test]
+    fn photos_memory_lane_sends_a_date() {
+        let parsed = parse_datetime("2026-10-02").expect("date");
+        assert_eq!(parsed.to_rfc3339(), "2026-10-02T00:00:00+00:00");
+    }
 }
