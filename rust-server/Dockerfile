@@ -1,6 +1,19 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.85-bookworm AS rust-builder
+# Cargo.lock is not in git, so resolution picks current crates.
+# extism → wasmtime 43+ needs rustc >= 1.91; 1.85 fails immediately (exit 101).
+FROM rust:1.96-bookworm AS rust-builder
+
+# aws-lc-sys (rustls) builds with cmake and libclang.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    clang \
+    cmake \
+    libclang-dev \
+    nasm \
+    pkg-config \
+    protobuf-compiler \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build/rust-server
 COPY rust-server/Cargo.toml rust-server/build.rs ./
