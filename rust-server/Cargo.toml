@@ -17,7 +17,10 @@ sqlx = { version = "0.8.3", features = ["runtime-tokio", "tls-rustls-ring", "pos
 
 chrono = { version = "0.4.39", features = ["serde"] }
 chrono-tz = "0.10.4"
-tzf-rs = "1.3.7"
+# 2.x matches tzf-dist's current data API. Exact pins: Cargo.lock is not in git,
+# and 1.3.7 cannot compile against tzf-dist >= 0.0.2026-c-tzb1.
+tzf-rs = "=2.1.2"
+tzf-dist = "=0.0.2026-d-fix1"
 image = { version = "0.25.5", features = ["jpeg", "webp", "png", "gif"] }
 jpeg-encoder = "0.7.1"
 thumbhash = "0.1"

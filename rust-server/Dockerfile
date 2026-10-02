@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # Cargo.lock is not in git, so resolution picks current crates.
-# extism → wasmtime 43+ needs rustc >= 1.91; 1.85 fails immediately (exit 101).
-FROM rust:1.96-bookworm AS rust-builder
+# extism → wasmtime needs rustc >= 1.91 (latest wasmtime wants 1.96).
+# 1.85 fails immediately (exit 101). 1.99-bookworm is the current official tag.
+FROM rust:1.99-bookworm AS rust-builder
 
 # aws-lc-sys (rustls) builds with cmake and libclang.
 RUN apt-get update \
