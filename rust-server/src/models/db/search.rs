@@ -8,6 +8,8 @@ use super::person_schema::PersonSchema;
 pub struct SearchFilter {
     pub user_ids: Vec<Uuid>,
     pub visibility: Option<String>,
+    /// Elevated sessions omit the visibility predicate, matching upstream `undefined`.
+    pub omit_visibility: bool,
     pub library_id: Option<Uuid>,
     pub asset_id: Option<Uuid>,
     pub asset_type: Option<String>,
@@ -316,7 +318,10 @@ pub async fn get_explore_recent_asset_ids(
     .bind(max_assets)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|row| (row.id, row.created_at)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.id, row.created_at))
+        .collect())
 }
 
 pub async fn get_exif_suggestions(
@@ -413,13 +418,15 @@ fn append_search_filters(
     filter: &SearchFilter,
     schema: &PersonSchema,
 ) {
-    let visibility = filter
-        .visibility
-        .clone()
-        .unwrap_or_else(|| "timeline".to_string());
-    query.push(r#" AND asset.visibility = "#);
-    query.push_bind(visibility);
-    query.push("::asset_visibility_enum");
+    if !filter.omit_visibility {
+        if filter.visibility.as_deref() == Some("not-locked") || filter.visibility.is_none() {
+            query.push(" AND asset.visibility <> 'locked'");
+        } else if let Some(visibility) = &filter.visibility {
+            query.push(r#" AND asset.visibility = "#);
+            query.push_bind(visibility.clone());
+            query.push("::asset_visibility_enum");
+        }
+    }
 
     if !filter.user_ids.is_empty() {
         query.push(r#" AND asset."ownerId" = ANY("#);
@@ -480,34 +487,45 @@ fn append_search_filters(
     if let Some(person_ids) = &filter.person_ids {
         if !person_ids.is_empty() {
             let face_col = schema.face_person_col_quoted();
-            query.push(
-                format!(
-                    r#"
+            query.push(format!(
+                r#"
                 AND EXISTS (
                     SELECT 1 FROM asset_face
                     WHERE asset_face."assetId" = asset.id
                       AND asset_face.{face_col} = ANY(
                 "#
-                ),
-            );
+            ));
             query.push_bind(person_ids.clone());
-            query.push(
-                format!(
-                    r#")
+            query.push(format!(
+                r#")
                       AND asset_face."deletedAt" IS NULL
                       AND asset_face."isVisible" = TRUE
                     GROUP BY asset_face."assetId"
                     HAVING COUNT(DISTINCT asset_face.{face_col}) = "#
-                ),
-            );
+            ));
             query.push_bind(person_ids.len() as i64);
             query.push(") ");
         }
     }
 
-    append_date_filter(query, r#"asset."createdAt""#, filter.created_before, filter.created_after);
-    append_date_filter(query, r#"asset."updatedAt""#, filter.updated_before, filter.updated_after);
-    append_date_filter(query, r#"asset."deletedAt""#, filter.trashed_before, filter.trashed_after);
+    append_date_filter(
+        query,
+        r#"asset."createdAt""#,
+        filter.created_before,
+        filter.created_after,
+    );
+    append_date_filter(
+        query,
+        r#"asset."updatedAt""#,
+        filter.updated_before,
+        filter.updated_after,
+    );
+    append_date_filter(
+        query,
+        r#"asset."deletedAt""#,
+        filter.trashed_before,
+        filter.trashed_after,
+    );
     append_date_filter(
         query,
         r#"asset."fileCreatedAt""#,

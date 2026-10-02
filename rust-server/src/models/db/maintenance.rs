@@ -14,6 +14,7 @@ const AUDIT_TABLES: &[&str] = &[
     "memory_asset_audit",
     "partner_audit",
     "person_audit",
+    "person_group_audit",
     "stack_audit",
     "user_audit",
     "user_metadata_audit",
@@ -42,9 +43,8 @@ pub async fn cleanup_audit_tables(
 ) -> Result<u64, sqlx::Error> {
     let mut total = 0u64;
     for table in AUDIT_TABLES {
-        let query = format!(
-            r#"DELETE FROM {table} WHERE "deletedAt" < NOW() - ($1 * INTERVAL '1 day')"#
-        );
+        let query =
+            format!(r#"DELETE FROM {table} WHERE "deletedAt" < NOW() - ($1 * INTERVAL '1 day')"#);
         let result = sqlx::query(&query).bind(days_ago).execute(pool).await?;
         total += result.rows_affected();
     }
@@ -74,7 +74,10 @@ pub async fn list_expired_hls_sessions(
     .await
 }
 
-pub async fn delete_hls_session(pool: &Pool<Postgres>, session_id: &Uuid) -> Result<(), sqlx::Error> {
+pub async fn delete_hls_session(
+    pool: &Pool<Postgres>,
+    session_id: &Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query(r#"DELETE FROM video_stream_session WHERE id = $1"#)
         .bind(session_id)
         .execute(pool)

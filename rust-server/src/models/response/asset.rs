@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::models::db::assets::{self, AssetDetailRow, AssetStackRow};
 use crate::models::db::person;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::search::{map_person, PersonResponse};
+use crate::models::response::search::{PersonResponse, map_person};
 use crate::service::tag::TagResponse;
 
 #[derive(Debug, Serialize, Clone)]
@@ -175,7 +175,11 @@ pub fn map_asset(
         visibility: row.visibility.clone(),
         exif_info: row.exif_json.clone(),
         tags: row.tags_json.as_ref().map(parse_tags),
-        people: Some(people.unwrap_or(&[]).to_vec()),
+        people: if auth.shared_link.is_some() {
+            Some(vec![])
+        } else {
+            Some(people.unwrap_or(&[]).to_vec())
+        },
         checksum: base64_encode(&row.checksum),
         stack: stack.map(map_stack),
         duplicate_id: row.duplicate_id,
@@ -202,16 +206,8 @@ fn parse_tags(value: &serde_json::Value) -> Vec<TagResponse> {
                     Some(TagResponse {
                         id: Uuid::parse_str(item.get("id")?.as_str()?).ok()?,
                         value: item.get("value")?.as_str()?.to_string(),
-                        created_at: item
-                            .get("createdAt")?
-                            .as_str()?
-                            .parse()
-                            .ok()?,
-                        updated_at: item
-                            .get("updatedAt")?
-                            .as_str()?
-                            .parse()
-                            .ok()?,
+                        created_at: item.get("createdAt")?.as_str()?.parse().ok()?,
+                        updated_at: item.get("updatedAt")?.as_str()?.parse().ok()?,
                         color: item
                             .get("color")
                             .and_then(|v| v.as_str())
@@ -240,6 +236,24 @@ fn encode_optional_base64(bytes: Option<&[u8]>) -> Option<String> {
     bytes.map(base64_encode)
 }
 
+pub async fn map_folder_assets(
+    _pool: &Pool<Postgres>,
+    rows: &[AssetDetailRow],
+    auth: &AuthDto,
+) -> Result<Vec<AssetResponse>, sqlx::Error> {
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let mut asset = map_asset(row, None, auth, false, None);
+            asset.owner = None;
+            asset.people = None;
+            asset.stack = None;
+            asset.tags = None;
+            asset
+        })
+        .collect())
+}
+
 pub async fn map_assets(
     pool: &Pool<Postgres>,
     rows: &[AssetDetailRow],
@@ -251,7 +265,7 @@ pub async fn map_assets(
     }
 
     let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
-    let people_map = if strip_metadata {
+    let people_map = if strip_metadata || auth.shared_link.is_some() {
         std::collections::HashMap::new()
     } else {
         person::get_people_by_asset_ids(pool, &ids)
@@ -274,13 +288,7 @@ pub async fn map_assets(
             None
         };
         let people = people_map.get(&row.id).map(|items| items.as_slice());
-        responses.push(map_asset(
-            row,
-            stack.as_ref(),
-            auth,
-            strip_metadata,
-            people,
-        ));
+        responses.push(map_asset(row, stack.as_ref(), auth, strip_metadata, people));
     }
     Ok(responses)
 }

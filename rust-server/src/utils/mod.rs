@@ -4,6 +4,7 @@ pub mod checksum;
 pub mod clip;
 pub mod config_visibility;
 pub mod cookie;
+pub mod country_name;
 pub mod cron;
 pub mod crypto;
 pub mod database_backups;

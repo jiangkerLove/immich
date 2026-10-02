@@ -5,8 +5,8 @@ use uuid::Uuid;
 use super::person_schema::PersonSchema;
 use crate::models::dto::search::{
     BoolFilter, DateFilter, DateFilterNullable, EnumFilterString, IdFilter, IdFilterNullable,
-    IdsFilter, NumberFilter, NumberFilterNullable, SearchFilter, SearchFilterBranch,
-    SearchOrder, SearchOrderDirection, SearchOrderField, StringFilter, StringFilterNullable,
+    IdsFilter, NumberFilter, NumberFilterNullable, SearchFilter, SearchFilterBranch, SearchOrder,
+    SearchOrderDirection, SearchOrderField, StringFilter, StringFilterNullable,
     StringPatternFilter, is_album_confined,
 };
 
@@ -38,7 +38,7 @@ pub async fn search_metadata_v3_ids(
     let schema = PersonSchema::get(pool).await?;
     let limit = pagination.take + 1;
     let mut query = QueryBuilder::new(r#"SELECT asset.id FROM asset "#);
-    append_search_asset_builder(&mut query, options, scope, &schema);
+    append_search_asset_builder(&mut query, options, scope, &schema, "");
     append_search_order(&mut query, order);
     query.push(" LIMIT ");
     query.push_bind(limit);
@@ -54,7 +54,7 @@ pub async fn search_statistics_v3_count(
 ) -> Result<i64, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let mut query = QueryBuilder::new(r#"SELECT COUNT(*)::bigint FROM asset "#);
-    append_search_asset_builder(&mut query, options, scope, &schema);
+    append_search_asset_builder(&mut query, options, scope, &schema, "");
     query.build_query_scalar().fetch_one(pool).await
 }
 
@@ -66,7 +66,7 @@ pub async fn search_random_v3_ids(
 ) -> Result<Vec<Uuid>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let mut query = QueryBuilder::new(r#"SELECT asset.id FROM asset "#);
-    append_search_asset_builder(&mut query, options, scope, &schema);
+    append_search_asset_builder(&mut query, options, scope, &schema, "");
     query.push(" ORDER BY random() LIMIT ");
     query.push_bind(size);
     query.build_query_scalar().fetch_all(pool).await
@@ -87,8 +87,13 @@ pub async fn search_smart_v3_ids(
         .await;
 
     let mut query = QueryBuilder::new(r#"SELECT asset.id FROM asset "#);
-    append_search_asset_builder(&mut query, options, scope, &schema);
-    query.push(r#" INNER JOIN smart_search ON asset.id = smart_search."assetId" "#);
+    append_search_asset_builder(
+        &mut query,
+        options,
+        scope,
+        &schema,
+        r#" INNER JOIN smart_search ON asset.id = smart_search."assetId" "#,
+    );
     query.push(" ORDER BY smart_search.embedding <=> CAST(");
     query.push_bind(embedding);
     query.push(r#" AS vector), asset.id ASC LIMIT "#);
@@ -104,8 +109,12 @@ fn append_search_asset_builder(
     options: &AssetSearchBuilderOptions,
     scope: &AssetSearchScope,
     schema: &PersonSchema,
+    extra_joins: &str,
 ) {
     query.push(r#" LEFT JOIN asset_exif ON asset.id = asset_exif."assetId" "#);
+    if !extra_joins.is_empty() {
+        query.push(extra_joins);
+    }
 
     let filter = options.filter.clone().unwrap_or_default();
     let branches = filter.or.clone().unwrap_or_default();
@@ -122,9 +131,7 @@ fn append_search_asset_builder(
         query.push(" WHERE 1=1 ");
     }
 
-    query.push(
-        r#" AND (asset.visibility != 'locked' OR asset."ownerId" = "#,
-    );
+    query.push(r#" AND (asset.visibility != 'locked' OR asset."ownerId" = "#);
     query.push_bind(scope.locked_owner_id);
     query.push(") ");
 
@@ -132,7 +139,14 @@ fn append_search_asset_builder(
         query.push(r#" AND asset."stackId" IS NULL "#);
     }
 
-    append_branch_group(query, &filter.branch, scope, scope_per_branch, false, schema);
+    append_branch_group(
+        query,
+        &filter.branch,
+        scope,
+        scope_per_branch,
+        false,
+        schema,
+    );
 
     if !branches.is_empty() {
         query.push(" AND (FALSE ");
@@ -170,8 +184,13 @@ fn append_branch_predicates(
 ) {
     append_id_filter(query, r#"asset.id"#, branch.id.as_ref());
     append_id_nullable_filter(query, r#"asset."libraryId""#, branch.library_id.as_ref());
-    append_enum_filter(query, r#"asset.type"#, branch.asset_type.as_ref());
-    append_enum_filter(query, r#"asset.visibility"#, branch.visibility.as_ref());
+    append_enum_filter(query, r#"asset.type"#, branch.asset_type.as_ref(), None);
+    append_enum_filter(
+        query,
+        r#"asset.visibility"#,
+        branch.visibility.as_ref(),
+        Some("asset_visibility_enum"),
+    );
 
     if let Some(filter) = &branch.is_favorite {
         query.push(r#" AND asset."isFavorite" = "#);
@@ -238,10 +257,26 @@ fn append_branch_predicates(
     append_string_nullable_filter(query, r#"asset_exif.country"#, branch.country.as_ref());
     append_string_nullable_filter(query, r#"asset_exif.make"#, branch.make.as_ref());
     append_string_nullable_filter(query, r#"asset_exif.model"#, branch.model.as_ref());
-    append_string_nullable_filter(query, r#"asset_exif."lensModel""#, branch.lens_model.as_ref());
-    append_string_pattern_filter(query, r#"asset_exif.description"#, branch.description.as_ref());
-    append_string_pattern_filter(query, r#"asset."originalFileName""#, branch.original_file_name.as_ref());
-    append_string_pattern_filter(query, r#"asset."originalPath""#, branch.original_path.as_ref());
+    append_string_nullable_filter(
+        query,
+        r#"asset_exif."lensModel""#,
+        branch.lens_model.as_ref(),
+    );
+    append_string_pattern_filter(
+        query,
+        r#"asset_exif.description"#,
+        branch.description.as_ref(),
+    );
+    append_string_pattern_filter(
+        query,
+        r#"asset."originalFileName""#,
+        branch.original_file_name.as_ref(),
+    );
+    append_string_pattern_filter(
+        query,
+        r#"asset."originalPath""#,
+        branch.original_path.as_ref(),
+    );
 
     if let Some(filter) = &branch.ocr {
         let tokens = crate::utils::search::tokenize_for_search(&filter.matches).join(" ");
@@ -257,14 +292,28 @@ fn append_branch_predicates(
     }
 
     append_number_nullable_filter(query, r#"asset_exif.rating"#, branch.rating.as_ref());
-    append_number_filter(query, r#"asset_exif."fileSizeInByte""#, branch.file_size_in_bytes.as_ref());
+    append_number_filter(
+        query,
+        r#"asset_exif."fileSizeInByte""#,
+        branch.file_size_in_bytes.as_ref(),
+    );
     append_date_filter(query, r#"asset."fileCreatedAt""#, branch.taken_at.as_ref());
     append_date_filter(query, r#"asset."createdAt""#, branch.created_at.as_ref());
     append_date_filter(query, r#"asset."updatedAt""#, branch.updated_at.as_ref());
     append_date_nullable_filter(query, r#"asset."deletedAt""#, branch.trashed_at.as_ref());
 
-    append_ids_filter(query, IdsFilterKind::Album, branch.album_ids.as_ref(), schema);
-    append_ids_filter(query, IdsFilterKind::Person, branch.person_ids.as_ref(), schema);
+    append_ids_filter(
+        query,
+        IdsFilterKind::Album,
+        branch.album_ids.as_ref(),
+        schema,
+    );
+    append_ids_filter(
+        query,
+        IdsFilterKind::Person,
+        branch.person_ids.as_ref(),
+        schema,
+    );
     append_ids_filter(query, IdsFilterKind::Tag, branch.tag_ids.as_ref(), schema);
     append_checksum_filter(query, branch.checksum.as_ref());
 
@@ -289,6 +338,16 @@ enum IdsFilterKind {
     Tag,
 }
 
+fn unique_ids(ids: &[Uuid]) -> Vec<Uuid> {
+    let mut unique = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !unique.contains(id) {
+            unique.push(*id);
+        }
+    }
+    unique
+}
+
 fn append_ids_filter(
     query: &mut QueryBuilder<'_, Postgres>,
     kind: IdsFilterKind,
@@ -300,41 +359,39 @@ fn append_ids_filter(
 
     if let Some(ids) = &filter.any {
         if !ids.is_empty() {
-        match kind {
-            IdsFilterKind::Album => {
-                query.push(
-                    r#"
+            match kind {
+                IdsFilterKind::Album => {
+                    query.push(
+                        r#"
                     AND EXISTS (
                         SELECT 1 FROM album_asset
                         WHERE album_asset."assetId" = asset.id
                           AND album_asset."albumId" = ANY(
                     "#,
-                );
-                query.push_bind(ids.clone());
-                query.push(") ) ");
-            }
-            IdsFilterKind::Person => {
-                query.push(
-                    format!(
+                    );
+                    query.push_bind(ids.clone());
+                    query.push(") ) ");
+                }
+                IdsFilterKind::Person => {
+                    query.push(format!(
                         r#"
                     AND EXISTS (
                         SELECT 1 FROM asset_face
                         WHERE asset_face."assetId" = asset.id
                           AND asset_face.{face_col} = ANY(
                     "#
-                    ),
-                );
-                query.push_bind(ids.clone());
-                query.push(
-                    r#")
+                    ));
+                    query.push_bind(ids.clone());
+                    query.push(
+                        r#")
                           AND asset_face."deletedAt" IS NULL
                           AND asset_face."isVisible" = TRUE
                     ) "#,
-                );
-            }
-            IdsFilterKind::Tag => {
-                query.push(
-                    r#"
+                    );
+                }
+                IdsFilterKind::Tag => {
+                    query.push(
+                        r#"
                     AND EXISTS (
                         SELECT 1
                         FROM tag_closure
@@ -342,62 +399,59 @@ fn append_ids_filter(
                         WHERE tag_asset."assetId" = asset.id
                           AND tag_closure.id_ancestor = ANY(
                     "#,
-                );
-                query.push_bind(ids.clone());
-                query.push(") ) ");
+                    );
+                    query.push_bind(ids.clone());
+                    query.push(") ) ");
+                }
             }
-        }
         }
     }
 
-    if let Some(ids) = &filter.all {
+    if let Some(raw_ids) = &filter.all {
+        let ids = unique_ids(raw_ids);
         if !ids.is_empty() {
-        match kind {
-            IdsFilterKind::Album => {
-                query.push(
-                    r#"
+            match kind {
+                IdsFilterKind::Album => {
+                    query.push(
+                        r#"
                     AND EXISTS (
                         SELECT 1 FROM album_asset
                         WHERE album_asset."assetId" = asset.id
                           AND album_asset."albumId" = ANY(
                     "#,
-                );
-                query.push_bind(ids.clone());
-                query.push(
-                    r#")
+                    );
+                    query.push_bind(ids.clone());
+                    query.push(
+                        r#")
                         GROUP BY album_asset."assetId"
                         HAVING COUNT(DISTINCT album_asset."albumId") = "#,
-                );
-                query.push_bind(ids.len() as i64);
-                query.push(") ");
-            }
-            IdsFilterKind::Person => {
-                query.push(
-                    format!(
+                    );
+                    query.push_bind(ids.len() as i64);
+                    query.push(") ");
+                }
+                IdsFilterKind::Person => {
+                    query.push(format!(
                         r#"
                     AND EXISTS (
                         SELECT 1 FROM asset_face
                         WHERE asset_face."assetId" = asset.id
                           AND asset_face.{face_col} = ANY(
                     "#
-                    ),
-                );
-                query.push_bind(ids.clone());
-                query.push(
-                    format!(
+                    ));
+                    query.push_bind(ids.clone());
+                    query.push(format!(
                         r#")
                           AND asset_face."deletedAt" IS NULL
                           AND asset_face."isVisible" = TRUE
                         GROUP BY asset_face."assetId"
                         HAVING COUNT(DISTINCT asset_face.{face_col}) = "#
-                    ),
-                );
-                query.push_bind(ids.len() as i64);
-                query.push(") ");
-            }
-            IdsFilterKind::Tag => {
-                query.push(
-                    r#"
+                    ));
+                    query.push_bind(ids.len() as i64);
+                    query.push(") ");
+                }
+                IdsFilterKind::Tag => {
+                    query.push(
+                        r#"
                     AND EXISTS (
                         SELECT 1
                         FROM tag_closure
@@ -405,57 +459,55 @@ fn append_ids_filter(
                         WHERE tag_asset."assetId" = asset.id
                           AND tag_closure.id_ancestor = ANY(
                     "#,
-                );
-                query.push_bind(ids.clone());
-                query.push(
-                    r#")
+                    );
+                    query.push_bind(ids.clone());
+                    query.push(
+                        r#")
                         GROUP BY tag_asset."assetId"
                         HAVING COUNT(DISTINCT tag_closure.id_ancestor) = "#,
-                );
-                query.push_bind(ids.len() as i64);
-                query.push(") ");
+                    );
+                    query.push_bind(ids.len() as i64);
+                    query.push(") ");
+                }
             }
-        }
         }
     }
 
     if let Some(ids) = &filter.none {
         if !ids.is_empty() {
-        match kind {
-            IdsFilterKind::Album => {
-                query.push(
-                    r#"
+            match kind {
+                IdsFilterKind::Album => {
+                    query.push(
+                        r#"
                     AND NOT EXISTS (
                         SELECT 1 FROM album_asset
                         WHERE album_asset."assetId" = asset.id
                           AND album_asset."albumId" = ANY(
                     "#,
-                );
-                query.push_bind(ids.clone());
-                query.push(") ) ");
-            }
-            IdsFilterKind::Person => {
-                query.push(
-                    format!(
+                    );
+                    query.push_bind(ids.clone());
+                    query.push(") ) ");
+                }
+                IdsFilterKind::Person => {
+                    query.push(format!(
                         r#"
                     AND NOT EXISTS (
                         SELECT 1 FROM asset_face
                         WHERE asset_face."assetId" = asset.id
                           AND asset_face.{face_col} = ANY(
                     "#
-                    ),
-                );
-                query.push_bind(ids.clone());
-                query.push(
-                    r#")
+                    ));
+                    query.push_bind(ids.clone());
+                    query.push(
+                        r#")
                           AND asset_face."deletedAt" IS NULL
                           AND asset_face."isVisible" = TRUE
                     ) "#,
-                );
-            }
-            IdsFilterKind::Tag => {
-                query.push(
-                    r#"
+                    );
+                }
+                IdsFilterKind::Tag => {
+                    query.push(
+                        r#"
                     AND NOT EXISTS (
                         SELECT 1
                         FROM tag_closure
@@ -463,16 +515,20 @@ fn append_ids_filter(
                         WHERE tag_asset."assetId" = asset.id
                           AND tag_closure.id_ancestor = ANY(
                     "#,
-                );
-                query.push_bind(ids.clone());
-                query.push(") ) ");
+                    );
+                    query.push_bind(ids.clone());
+                    query.push(") ) ");
+                }
             }
-        }
         }
     }
 }
 
-fn append_exists_filter(query: &mut QueryBuilder<'_, Postgres>, filter: Option<&BoolFilter>, exists_sql: &str) {
+fn append_exists_filter(
+    query: &mut QueryBuilder<'_, Postgres>,
+    filter: Option<&BoolFilter>,
+    exists_sql: &str,
+) {
     let Some(filter) = filter else { return };
     if filter.eq {
         query.push(" AND ");
@@ -483,7 +539,11 @@ fn append_exists_filter(query: &mut QueryBuilder<'_, Postgres>, filter: Option<&
     }
 }
 
-fn append_id_filter(query: &mut QueryBuilder<'_, Postgres>, column: &str, filter: Option<&IdFilter>) {
+fn append_id_filter(
+    query: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    filter: Option<&IdFilter>,
+) {
     let Some(filter) = filter else { return };
     if let Some(value) = filter.eq {
         query.push(format!(" AND {column} = "));
@@ -521,25 +581,54 @@ fn append_id_nullable_filter(
     }
 }
 
-fn append_enum_filter(query: &mut QueryBuilder<'_, Postgres>, column: &str, filter: Option<&EnumFilterString>) {
+fn append_enum_filter(
+    query: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    filter: Option<&EnumFilterString>,
+    enum_name: Option<&str>,
+) {
     let Some(filter) = filter else { return };
     if let Some(value) = &filter.eq {
         query.push(format!(" AND {column} = "));
-        query.push_bind(value.clone());
+        push_enum_value(query, value, enum_name);
     }
     if let Some(value) = &filter.ne {
         query.push(format!(" AND {column} != "));
-        query.push_bind(value.clone());
+        push_enum_value(query, value, enum_name);
     }
     if let Some(values) = &filter.in_values {
         query.push(format!(" AND {column} = ANY("));
-        query.push_bind(values.clone());
+        push_enum_array(query, values, enum_name);
         query.push(") ");
     }
     if let Some(values) = &filter.not_in {
         query.push(format!(" AND NOT ({column} = ANY("));
-        query.push_bind(values.clone());
+        push_enum_array(query, values, enum_name);
         query.push(")) ");
+    }
+}
+
+fn push_enum_value(query: &mut QueryBuilder<'_, Postgres>, value: &str, enum_name: Option<&str>) {
+    query.push_bind(value.to_string());
+    if let Some(enum_name) = enum_name {
+        query.push(format!("::{enum_name}"));
+    }
+}
+
+fn push_enum_array(
+    query: &mut QueryBuilder<'_, Postgres>,
+    values: &[String],
+    enum_name: Option<&str>,
+) {
+    match enum_name {
+        Some(enum_name) => {
+            query.push(format!("SELECT v::{enum_name} FROM unnest("));
+            query.push_bind(values.to_vec());
+            query.push(") AS v");
+        }
+        None => {
+            query.push_bind(values.to_vec());
+        }
     }
 }
 
@@ -612,12 +701,16 @@ fn append_string_pattern_filter(
     let Some(filter) = filter else { return };
     append_string_nullable_filter(query, column, Some(&filter.base));
     if let Some(value) = &filter.like {
-        query.push(format!(" AND f_unaccent({column}) ILIKE '%' || f_unaccent("));
+        query.push(format!(
+            " AND f_unaccent({column}) ILIKE '%' || f_unaccent("
+        ));
         query.push_bind(value.clone());
         query.push(") || '%' ");
     }
     if let Some(value) = &filter.not_like {
-        query.push(format!(" AND f_unaccent({column}) NOT ILIKE '%' || f_unaccent("));
+        query.push(format!(
+            " AND f_unaccent({column}) NOT ILIKE '%' || f_unaccent("
+        ));
         query.push_bind(value.clone());
         query.push(") || '%' ");
     }
@@ -627,13 +720,19 @@ fn append_string_pattern_filter(
         query.push(") || '%' ");
     }
     if let Some(value) = &filter.ends_with {
-        query.push(format!(" AND f_unaccent({column}) ILIKE '%' || f_unaccent("));
+        query.push(format!(
+            " AND f_unaccent({column}) ILIKE '%' || f_unaccent("
+        ));
         query.push_bind(value.clone());
         query.push(") ");
     }
 }
 
-fn append_number_filter(query: &mut QueryBuilder<'_, Postgres>, column: &str, filter: Option<&NumberFilter>) {
+fn append_number_filter(
+    query: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    filter: Option<&NumberFilter>,
+) {
     let Some(filter) = filter else { return };
     append_number_comparison(query, column, filter);
 }
@@ -665,7 +764,11 @@ fn append_number_nullable_filter(
     append_number_comparison(query, column, filter);
 }
 
-fn append_number_comparison<T: NumberComparison>(query: &mut QueryBuilder<'_, Postgres>, column: &str, filter: &T) {
+fn append_number_comparison<T: NumberComparison>(
+    query: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    filter: &T,
+) {
     if let Some(value) = filter.lt() {
         query.push(format!(" AND {column} < "));
         query.push_bind(value);
@@ -765,7 +868,11 @@ impl NumberComparison for NumberFilterNullable {
     }
 }
 
-fn append_date_filter(query: &mut QueryBuilder<'_, Postgres>, column: &str, filter: Option<&DateFilter>) {
+fn append_date_filter(
+    query: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    filter: Option<&DateFilter>,
+) {
     let Some(filter) = filter else { return };
     append_date_comparison(query, column, filter);
 }
@@ -892,7 +999,10 @@ fn append_checksum_filter(query: &mut QueryBuilder<'_, Postgres>, filter: Option
         }
     }
     if let Some(values) = &filter.in_values {
-        let checksums: Vec<Vec<u8>> = values.iter().filter_map(|value| decode_checksum(value)).collect();
+        let checksums: Vec<Vec<u8>> = values
+            .iter()
+            .filter_map(|value| decode_checksum(value))
+            .collect();
         if !checksums.is_empty() {
             query.push(r#" AND asset.checksum = ANY("#);
             query.push_bind(checksums);
@@ -900,7 +1010,10 @@ fn append_checksum_filter(query: &mut QueryBuilder<'_, Postgres>, filter: Option
         }
     }
     if let Some(values) = &filter.not_in {
-        let checksums: Vec<Vec<u8>> = values.iter().filter_map(|value| decode_checksum(value)).collect();
+        let checksums: Vec<Vec<u8>> = values
+            .iter()
+            .filter_map(|value| decode_checksum(value))
+            .collect();
         if !checksums.is_empty() {
             query.push(r#" AND NOT (asset.checksum = ANY("#);
             query.push_bind(checksums);
@@ -912,9 +1025,7 @@ fn append_checksum_filter(query: &mut QueryBuilder<'_, Postgres>, filter: Option
 fn decode_checksum(value: &str) -> Option<Vec<u8>> {
     use base64::Engine;
     if value.len() == 28 {
-        base64::engine::general_purpose::STANDARD
-            .decode(value)
-            .ok()
+        base64::engine::general_purpose::STANDARD.decode(value).ok()
     } else {
         hex::decode(value).ok()
     }

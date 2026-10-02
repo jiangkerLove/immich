@@ -12,12 +12,14 @@ use crate::models::db::search_v3::{
 use crate::models::db::system_metadata::{get_machine_learning_config, is_smart_search_enabled};
 use crate::models::db::timeline::get_timeline_partner_ids;
 use crate::models::dto::auth::AuthDto;
-use crate::models::dto::search::{is_new_shape_request, FilterIdsField, SearchFilter as SearchFilterDto, SearchOrder};
-use crate::models::response::asset::{map_assets, AssetResponse};
+use crate::models::dto::search::{
+    FilterIdsField, SearchFilter as SearchFilterDto, SearchOrder, is_new_shape_request,
+};
+use crate::models::response::asset::{AssetResponse, map_assets};
 use crate::models::response::response::ErrorResp;
 use crate::models::response::search::{
-    empty_search_response, map_person, PersonResponse, PlacesResponse, SearchExploreResponse,
-    SearchResponse, SearchStatisticsResponse,
+    PersonResponse, PlacesResponse, SearchExploreResponse, SearchResponse,
+    SearchStatisticsResponse, empty_search_response, map_person,
 };
 use crate::service::access::require_album_ids_access;
 use crate::service::access::require_asset_access;
@@ -178,10 +180,21 @@ impl SearchService {
 
         self.require_locked_access(auth, dto.result.base.visibility.as_deref())?;
 
-        let user_ids = self
-            .get_user_ids(auth, dto.result.base.visibility.as_deref())
-            .await?;
-        let mut filter = build_filter_from_result(&dto.result, user_ids);
+        let album_ids = dto.result.base.album_ids.clone().unwrap_or_default();
+        let user_ids = if album_ids.is_empty() {
+            if auth.shared_link.is_some() {
+                return Err(ErrorResp::BadRequest(
+                    "Shared link access is only allowed in combination with an albumIds filter"
+                        .to_string(),
+                ));
+            }
+            self.get_user_ids(auth, dto.result.base.visibility.as_deref())
+                .await?
+        } else {
+            require_album_ids_access(&self.pool, auth, &album_ids, Permission::AlbumRead).await?;
+            Vec::new()
+        };
+        let mut filter = build_filter_from_result(&dto.result, user_ids, has_elevated(auth));
         filter.asset_id = dto.id;
         filter.description = dto.description.clone();
         filter.original_file_name = dto.original_file_name.clone();
@@ -212,7 +225,9 @@ impl SearchService {
         dto: &MetadataSearchReq,
     ) -> Result<SearchResponse, ErrorResp> {
         validate_metadata_shape_exclusivity(dto)?;
-        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let (filter, scope) = self
+            .resolve_search_scope_v3(auth, dto.filter.clone())
+            .await?;
         let offset = decode_search_cursor(dto.cursor.as_deref())?;
         let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
 
@@ -224,7 +239,10 @@ impl SearchService {
             },
             &scope,
             dto.order_by.as_ref(),
-            &SearchPagination { take: size, skip: offset },
+            &SearchPagination {
+                take: size,
+                skip: offset,
+            },
         )
         .await?;
 
@@ -249,8 +267,11 @@ impl SearchService {
             return self.search_statistics_v3(auth, dto).await;
         }
 
-        let user_ids = self.get_user_ids(auth, None).await?;
-        let mut filter = build_filter_from_base(&dto.base, user_ids);
+        self.require_locked_access(auth, dto.base.visibility.as_deref())?;
+        let user_ids = self
+            .get_user_ids(auth, dto.base.visibility.as_deref())
+            .await?;
+        let mut filter = build_filter_from_base(&dto.base, user_ids, has_elevated(auth));
         filter.description = dto.description.clone();
         let total = search::search_statistics_count(&self.pool, &filter).await?;
         Ok(SearchStatisticsResponse { total })
@@ -262,7 +283,9 @@ impl SearchService {
         dto: &StatisticsSearchReq,
     ) -> Result<SearchStatisticsResponse, ErrorResp> {
         validate_statistics_shape_exclusivity(dto)?;
-        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let (filter, scope) = self
+            .resolve_search_scope_v3(auth, dto.filter.clone())
+            .await?;
         let total = search_v3::search_statistics_v3_count(
             &self.pool,
             &AssetSearchBuilderOptions {
@@ -290,7 +313,7 @@ impl SearchService {
         let user_ids = self
             .get_user_ids(auth, dto.result.base.visibility.as_deref())
             .await?;
-        let filter = build_filter_from_result(&dto.result, user_ids);
+        let filter = build_filter_from_result(&dto.result, user_ids, has_elevated(auth));
         let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
         let ids = search::search_random_ids(&self.pool, &filter, size).await?;
         self.load_assets(auth, &ids).await
@@ -302,7 +325,9 @@ impl SearchService {
         dto: &RandomSearchReq,
     ) -> Result<Vec<AssetResponse>, ErrorResp> {
         validate_random_shape_exclusivity(dto)?;
-        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
+        let (filter, scope) = self
+            .resolve_search_scope_v3(auth, dto.filter.clone())
+            .await?;
         let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
         let ids = search_v3::search_random_v3_ids(
             &self.pool,
@@ -328,7 +353,7 @@ impl SearchService {
         let user_ids = self
             .get_user_ids(auth, dto.result.base.visibility.as_deref())
             .await?;
-        let mut filter = build_filter_from_result(&dto.result, user_ids);
+        let mut filter = build_filter_from_result(&dto.result, user_ids, has_elevated(auth));
         filter.min_file_size = dto.min_file_size;
         let size = dto.result.size.unwrap_or(250).clamp(1, 1000);
         let ids = search::search_large_asset_ids(&self.pool, &filter, size).await?;
@@ -354,7 +379,7 @@ impl SearchService {
             ));
         }
 
-        let embedding = if let Some(query) = dto.query.as_ref().filter(|q| !q.trim().is_empty()) {
+        let embedding = if let Some(query) = dto.query.as_ref().filter(|q| !q.is_empty()) {
             encode_clip_text(&ml, query, dto.language.as_deref()).await?
         } else if let Some(asset_id) = dto.query_asset_id {
             require_asset_access(&self.pool, auth, &asset_id, Permission::AssetRead).await?;
@@ -372,17 +397,13 @@ impl SearchService {
         let user_ids = self
             .get_user_ids(auth, dto.result.base.visibility.as_deref())
             .await?;
-        let filter = build_filter_from_result(&dto.result, user_ids);
+        let filter = build_filter_from_result(&dto.result, user_ids, has_elevated(auth));
         let page = dto.page.unwrap_or(1).max(1);
         let size = dto.result.size.unwrap_or(100).clamp(1, 1000);
 
-        let ids = search::search_smart_ids(
-            &self.pool,
-            &filter,
-            &embedding,
-            &SearchPage { page, size },
-        )
-        .await?;
+        let ids =
+            search::search_smart_ids(&self.pool, &filter, &embedding, &SearchPage { page, size })
+                .await?;
 
         let (ids, next_page) = paginate_ids(ids, size, page);
         let items = self.load_assets(auth, &ids).await?;
@@ -403,8 +424,10 @@ impl SearchService {
             ));
         }
 
-        let (filter, scope) = self.resolve_search_scope_v3(auth, dto.filter.clone()).await?;
-        let embedding = if let Some(query) = dto.query.as_ref().filter(|q| !q.trim().is_empty()) {
+        let (filter, scope) = self
+            .resolve_search_scope_v3(auth, dto.filter.clone())
+            .await?;
+        let embedding = if let Some(query) = dto.query.as_ref().filter(|q| !q.is_empty()) {
             encode_clip_text(&ml, query, dto.language.as_deref()).await?
         } else if let Some(asset_id) = dto.query_asset_id {
             require_asset_access(&self.pool, auth, &asset_id, Permission::AssetRead).await?;
@@ -447,19 +470,14 @@ impl SearchService {
 
         if auth.shared_link.is_some() && !is_fully_album_confined(&effective_filter) {
             return Err(ErrorResp::BadRequest(
-                "Shared link access is only allowed in combination with an albumIds filter".to_string(),
+                "Shared link access is only allowed in combination with an albumIds filter"
+                    .to_string(),
             ));
         }
 
         let album_ids = collect_filter_ids(&effective_filter, FilterIdsField::AlbumIds);
         if !album_ids.is_empty() {
-            require_album_ids_access(
-                &self.pool,
-                auth,
-                &album_ids,
-                Permission::AlbumRead,
-            )
-            .await?;
+            require_album_ids_access(&self.pool, auth, &album_ids, Permission::AlbumRead).await?;
         }
 
         let fully_confined = is_fully_album_confined(&effective_filter);
@@ -493,10 +511,7 @@ impl SearchService {
             .into_iter()
             .filter_map(|(id, city)| {
                 city_assets.remove(&id).map(|data| {
-                    crate::models::response::search::SearchExploreItemResponse {
-                        value: city,
-                        data,
-                    }
+                    crate::models::response::search::SearchExploreItemResponse { value: city, data }
                 })
             })
             .collect();
@@ -632,7 +647,9 @@ impl SearchService {
                 .as_ref()
                 .is_some_and(|s| s.has_elevated_permission);
             if !elevated {
-                return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+                return Err(ErrorResp::Unauthorized(
+                    "Elevated permission is required".to_string(),
+                ));
             }
         }
         Ok(())
@@ -647,10 +664,7 @@ impl SearchService {
             return Ok(vec![]);
         }
         let rows = assets::get_details_by_ids(&self.pool, ids).await?;
-        let hide_exif = auth
-            .shared_link
-            .as_ref()
-            .is_some_and(|sl| !sl.show_exif);
+        let hide_exif = auth.shared_link.as_ref().is_some_and(|sl| !sl.show_exif);
         map_assets(&self.pool, &rows, auth, hide_exif)
             .await
             .map_err(ErrorResp::from)
@@ -666,8 +680,18 @@ impl SearchService {
     }
 }
 
-fn build_filter_from_base(base: &BaseSearchReq, user_ids: Vec<Uuid>) -> SearchFilter {
-    SearchFilter {
+fn has_elevated(auth: &AuthDto) -> bool {
+    auth.session
+        .as_ref()
+        .is_some_and(|session| session.has_elevated_permission)
+}
+
+fn build_filter_from_base(
+    base: &BaseSearchReq,
+    user_ids: Vec<Uuid>,
+    elevated: bool,
+) -> SearchFilter {
+    let mut filter = SearchFilter {
         user_ids,
         visibility: base.visibility.clone(),
         library_id: base.library_id,
@@ -697,11 +721,23 @@ fn build_filter_from_base(base: &BaseSearchReq, user_ids: Vec<Uuid>) -> SearchFi
         tag_ids: base.tag_ids.clone(),
         album_ids: base.album_ids.clone(),
         ..Default::default()
+    };
+    if filter.visibility.is_none() {
+        if elevated {
+            filter.omit_visibility = true;
+        } else {
+            filter.visibility = Some("not-locked".to_string());
+        }
     }
+    filter
 }
 
-fn build_filter_from_result(dto: &ResultSearchReq, user_ids: Vec<Uuid>) -> SearchFilter {
-    let mut filter = build_filter_from_base(&dto.base, user_ids);
+fn build_filter_from_result(
+    dto: &ResultSearchReq,
+    user_ids: Vec<Uuid>,
+    elevated: bool,
+) -> SearchFilter {
+    let mut filter = build_filter_from_base(&dto.base, user_ids, elevated);
     filter.with_deleted = dto.with_deleted.unwrap_or(false)
         || dto.base.trashed_before.is_some()
         || dto.base.trashed_after.is_some()
@@ -724,9 +760,7 @@ fn paginate_ids(ids: Vec<Uuid>, size: i64, page: i64) -> (Vec<Uuid>, Option<Stri
 fn decode_checksum(value: &str) -> Option<Vec<u8>> {
     use base64::Engine;
     if value.len() == 28 {
-        base64::engine::general_purpose::STANDARD
-            .decode(value)
-            .ok()
+        base64::engine::general_purpose::STANDARD.decode(value).ok()
     } else {
         hex::decode(value).ok()
     }

@@ -137,7 +137,7 @@ impl DownloadService {
     ) -> Result<axum::response::Response, ErrorResp> {
         require_assets_access(&self.pool, auth, &dto.asset_ids, Permission::AssetDownload).await?;
 
-        let edited = dto.edited.unwrap_or(false) || auth.shared_link.is_some();
+        let edited = dto.edited.unwrap_or(false);
         let assets = assets::get_for_originals(&self.pool, &dto.asset_ids, edited).await?;
         let asset_map: std::collections::HashMap<Uuid, _> =
             assets.into_iter().map(|asset| (asset.id, asset)).collect();

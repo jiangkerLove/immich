@@ -1,7 +1,10 @@
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
 
-pub async fn cleanup_singleton_groups(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<(), sqlx::Error> {
+pub async fn cleanup_singleton_groups(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
             WITH singletons AS (
@@ -113,6 +116,29 @@ pub async fn clear_duplicate_groups(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn user_owns_duplicate_group(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+    duplicate_id: &Uuid,
+) -> Result<bool, sqlx::Error> {
+    let exists: bool = sqlx::query_scalar(
+        r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM asset
+                WHERE "duplicateId" = $1
+                  AND "ownerId" = $2
+                  AND "deletedAt" IS NULL
+            )
+        "#,
+    )
+    .bind(duplicate_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
 }
 
 pub async fn duplicate_group_exists(

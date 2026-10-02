@@ -248,18 +248,16 @@ impl Default for PasswordLoginConfig {
 }
 
 pub async fn get_oauth_config(pool: &Pool<Postgres>) -> Result<Option<OAuthConfig>, sqlx::Error> {
-    let json = get_json(pool, "system-config").await?;
-    Ok(json.and_then(|value| {
-        serde_json::from_value::<SystemConfigRoot>(value)
-            .ok()
-            .map(|cfg| cfg.oauth)
-    }))
+    let value = crate::utils::system_config::get_merged(pool).await?;
+    Ok(serde_json::from_value::<SystemConfigRoot>(value)
+        .ok()
+        .map(|cfg| cfg.oauth))
 }
 
 pub async fn password_login_enabled(pool: &Pool<Postgres>) -> Result<bool, sqlx::Error> {
-    let json = get_json(pool, "system-config").await?;
-    Ok(json
-        .and_then(|value| serde_json::from_value::<SystemConfigRoot>(value).ok())
+    let json = crate::utils::system_config::get_merged(pool).await?;
+    Ok(serde_json::from_value::<SystemConfigRoot>(json)
+        .ok()
         .map(|cfg| cfg.password_login.enabled)
         .unwrap_or(true))
 }
@@ -267,9 +265,9 @@ pub async fn password_login_enabled(pool: &Pool<Postgres>) -> Result<bool, sqlx:
 pub async fn get_machine_learning_config(
     pool: &Pool<Postgres>,
 ) -> Result<MachineLearningConfig, sqlx::Error> {
-    let json = get_json(pool, "system-config").await?;
-    Ok(json
-        .and_then(|value| serde_json::from_value::<SystemConfigRoot>(value).ok())
+    let json = crate::utils::system_config::get_merged(pool).await?;
+    Ok(serde_json::from_value::<SystemConfigRoot>(json)
+        .ok()
         .map(|cfg| cfg.machine_learning)
         .unwrap_or_default())
 }
@@ -394,11 +392,12 @@ pub async fn set_facial_recognition_state(
 }
 
 pub async fn get_custom_css(pool: &Pool<Postgres>) -> Result<String, sqlx::Error> {
-    let json = get_json(pool, "system-config").await?;
-    Ok(json
-        .and_then(|value| serde_json::from_value::<SystemConfigRoot>(value).ok())
-        .map(|cfg| cfg.theme.custom_css)
-        .unwrap_or_default())
+    let config = crate::utils::system_config::get_merged(pool).await?;
+    Ok(config
+        .pointer("/theme/customCss")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 const SYSTEM_FLAGS_KEY: &str = "system-flags";

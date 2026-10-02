@@ -236,10 +236,10 @@ impl PersonService {
         require_permission(auth, Permission::PersonRead)?;
         let row = person::get_by_id_for_owner(&self.pool, &auth.user.id, id)
             .await?
-            .ok_or_else(|| ErrorResp::NotFound("Person not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Not Found".to_string()))?;
 
         if row.thumbnail_path.is_empty() {
-            return Err(ErrorResp::NotFound("Person not found".to_string()));
+            return Err(ErrorResp::NotFound("Not Found".to_string()));
         }
 
         let path = row.thumbnail_path.clone();
@@ -341,15 +341,13 @@ impl PersonService {
                     id: item.id,
                     success: true,
                     error: None,
+                    error_message: None,
                 }),
-                Err(err) => results.push(BulkIdResponse {
+                Err(_) => results.push(BulkIdResponse {
                     id: item.id,
                     success: false,
-                    error: Some(match err {
-                        ErrorResp::BadRequest(_) => BulkIdErrorReason::NotFound,
-                        ErrorResp::Forbidden(_) => BulkIdErrorReason::NoPermission,
-                        _ => BulkIdErrorReason::Unknown,
-                    }),
+                    error: Some(BulkIdErrorReason::Unknown),
+                    error_message: None,
                 }),
             }
         }
@@ -392,6 +390,11 @@ impl PersonService {
             if let Some(face_id) =
                 person::get_face_id_for_asset(&self.pool, &item.person_id, &item.asset_id).await?
             {
+                if !face::owner_owns_face(&self.pool, &auth.user.id, &face_id).await? {
+                    return Err(ErrorResp::BadRequest(
+                        "Not found or no person.create access".to_string(),
+                    ));
+                }
                 if person::get_face_asset_id(&self.pool, &auth.user.id, &item.person_id).await?
                     == Some(face_id)
                 {
@@ -408,7 +411,8 @@ impl PersonService {
                 .await?;
         }
 
-        Ok(vec![self.find_or_fail(auth, target_id).await?])
+        let person = self.find_or_fail(auth, target_id).await?;
+        Ok(vec![person; dto.data.len()])
     }
 
     pub async fn merge(
@@ -435,6 +439,7 @@ impl PersonService {
                     id: *merge_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NoPermission),
+                    error_message: None,
                 });
                 continue;
             }
@@ -488,13 +493,8 @@ impl PersonService {
                 id: row.id,
                 success: true,
                 error: None,
+                error_message: None,
             });
-        }
-
-        if results.iter().any(|result| result.success) {
-            if let Err(err) = person::vacuum_faces(&self.pool, false).await {
-                tracing::error!("person merge: vacuum_faces failed: {err}");
-            }
         }
 
         Ok(results)
@@ -630,7 +630,11 @@ impl PersonService {
         require_permission(auth, Permission::FaceUpdate)?;
         require_permission(auth, Permission::PersonUpdate)?;
         self.require_person_owner(auth, &[*person_id]).await?;
-        self.require_face_owner(auth, face_id).await?;
+        if !face::owner_owns_face(&self.pool, &auth.user.id, face_id).await? {
+            return Err(ErrorResp::BadRequest(
+                "Not found or no person.create access".to_string(),
+            ));
+        }
 
         let face_row = face::get_face_by_id(&self.pool, face_id)
             .await?
@@ -812,6 +816,41 @@ fn parse_color(value: Option<&str>) -> Result<Option<String>, ErrorResp> {
 fn is_valid_hex_color(value: &str) -> bool {
     let digits = value.strip_prefix('#').unwrap_or(value);
     matches!(digits.len(), 3 | 4 | 6 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+/// Official `handlePersonCleanup`: drop people with no faces, then empty groups.
+pub(crate) async fn cleanup_people(pool: &PgPool) -> Result<(), String> {
+    let people = person::list_without_faces(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    for (_, thumbnail_path) in &people {
+        if !thumbnail_path.is_empty() {
+            let _ = tokio::fs::remove_file(thumbnail_path).await;
+        }
+    }
+
+    if !people.is_empty() {
+        let ids: Vec<Uuid> = people.into_iter().map(|(id, _)| id).collect();
+        let deleted = ids.len();
+        person::delete_by_ids(pool, &ids)
+            .await
+            .map_err(|err| err.to_string())?;
+        tracing::info!("deleted {deleted} people without faces");
+    }
+
+    let person_groups = person::delete_empty_groups(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    let cluster_groups = person::delete_orphaned_cluster_groups(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    if person_groups > 0 || cluster_groups > 0 {
+        tracing::info!(
+            "Deleted {person_groups} empty person groups and {cluster_groups} orphaned cluster groups"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ use crate::models::db::partner;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_album_access;
+use crate::utils::country_name::english_country_name;
 use crate::utils::permission::require_permission;
 use crate::utils::query::parse_query_bool;
 
@@ -68,8 +69,13 @@ impl MapService {
         require_permission(auth, Permission::MapRead)?;
 
         let mut owner_ids = vec![auth.user.id];
-        if query.with_partners.as_deref().and_then(parse_query_bool).unwrap_or(false) {
-            owner_ids.extend(partner::get_timeline_partner_ids(&self.pool, &auth.user.id).await?);
+        if query
+            .with_partners
+            .as_deref()
+            .and_then(parse_query_bool)
+            .unwrap_or(false)
+        {
+            owner_ids.extend(partner::get_partner_ids(&self.pool, &auth.user.id).await?);
         }
 
         let album_ids = if query
@@ -143,13 +149,15 @@ impl MapService {
         &self,
         query: &MapReverseGeocodeQuery,
     ) -> Result<Vec<MapReverseGeocodeResponse>, ErrorResp> {
-        if let Some(place) =
-            map::reverse_geocode_places(&self.pool, query.lat, query.lon).await?
-        {
+        if let Some(place) = map::reverse_geocode_places(&self.pool, query.lat, query.lon).await? {
             return Ok(vec![MapReverseGeocodeResponse {
                 city: place.city,
                 state: place.state,
-                country: place.country_code,
+                country: place
+                    .country_code
+                    .as_deref()
+                    .and_then(english_country_name)
+                    .map(str::to_string),
             }]);
         }
 
@@ -159,14 +167,10 @@ impl MapService {
             return Ok(vec![MapReverseGeocodeResponse {
                 city: None,
                 state: None,
-                country: Some(country.admin),
+                country: english_country_name(&country.admin_a3).map(str::to_string),
             }]);
         }
 
-        Ok(vec![MapReverseGeocodeResponse {
-            city: None,
-            state: None,
-            country: None,
-        }])
+        Ok(vec![])
     }
 }

@@ -20,7 +20,9 @@ pub fn apply_locked_visibility_policy(
         .iter()
         .any(|condition| can_match_visibility(condition, VISIBILITY_LOCKED))
     {
-        return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+        return Err(ErrorResp::Unauthorized(
+            "Elevated permission is required".to_string(),
+        ));
     }
 
     if filter.branch.visibility.is_some() {

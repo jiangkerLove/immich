@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::view;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_assets, AssetResponse};
+use crate::models::response::asset::{AssetResponse, map_folder_assets};
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::require_permission;
 
@@ -17,7 +17,10 @@ impl ViewService {
         Self { pool }
     }
 
-    pub async fn get_unique_original_paths(&self, auth: &AuthDto) -> Result<Vec<String>, ErrorResp> {
+    pub async fn get_unique_original_paths(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<Vec<String>, ErrorResp> {
         require_permission(auth, Permission::FolderRead)?;
         Ok(view::get_unique_original_paths(&self.pool, &auth.user.id).await?)
     }
@@ -29,6 +32,6 @@ impl ViewService {
     ) -> Result<Vec<AssetResponse>, ErrorResp> {
         require_permission(auth, Permission::FolderRead)?;
         let rows = view::get_assets_by_original_path(&self.pool, &auth.user.id, path).await?;
-        Ok(map_assets(&self.pool, &rows, auth, false).await?)
+        Ok(map_folder_assets(&self.pool, &rows, auth).await?)
     }
 }

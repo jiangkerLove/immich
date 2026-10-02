@@ -7,7 +7,6 @@ use flate2::write::GzEncoder;
 use sqlx::PgPool;
 use tokio::task::spawn_blocking;
 
-use crate::models::db::system_metadata::get_json;
 use crate::models::dto::env::EnvDto;
 use crate::service::server::ServerService;
 use crate::utils::database_backups::{
@@ -15,6 +14,7 @@ use crate::utils::database_backups::{
     is_valid_database_routine_backup_name,
 };
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::get_merged;
 
 #[derive(Debug)]
 pub enum BackupRunnerError {
@@ -272,17 +272,14 @@ impl DatabaseBackupRunner {
     }
 
     async fn backup_keep_last_amount(&self) -> Result<usize, BackupRunnerError> {
-        let config = get_json(&self.pool, "system-config")
+        let config = get_merged(&self.pool)
             .await
             .map_err(|err| BackupRunnerError::Sql(err.to_string()))?;
         Ok(config
-            .and_then(|value| {
-                value
-                    .get("backup")
-                    .and_then(|backup| backup.get("database"))
-                    .and_then(|database| database.get("keepLastAmount"))
-                    .and_then(|amount| amount.as_u64())
-            })
+            .get("backup")
+            .and_then(|backup| backup.get("database"))
+            .and_then(|database| database.get("keepLastAmount"))
+            .and_then(|amount| amount.as_u64())
             .unwrap_or(14) as usize)
     }
 

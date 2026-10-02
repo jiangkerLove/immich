@@ -119,7 +119,7 @@ impl SharedLinkService {
 
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
-            results.push(self.build_response(&row, auth, false, Some(1)).await?);
+            results.push(self.build_response(&row, auth, false, None).await?);
         }
         Ok(results)
     }
@@ -133,7 +133,7 @@ impl SharedLinkService {
     pub async fn get_mine(
         &self,
         auth: &AuthDto,
-        _auth_tokens: &[String],
+        auth_tokens: &[String],
     ) -> Result<SharedLinkResponse, ErrorResp> {
         let shared_link = auth
             .shared_link
@@ -143,6 +143,13 @@ impl SharedLinkService {
         let link_id = Uuid::parse_str(&shared_link.id)
             .map_err(|_| ErrorResp::ServerError("Invalid shared link".to_string()))?;
         let row = self.find_or_fail(&auth.user.id, &link_id).await?;
+
+        if let Some(password) = row.password.as_deref() {
+            let token = shared_link_login_token(&link_id, password);
+            if !auth_tokens.contains(&token) {
+                return Err(ErrorResp::Unauthorized("Password required".to_string()));
+            }
+        }
 
         self.build_response(&row, auth, !row.show_exif, None).await
     }
@@ -188,10 +195,7 @@ impl SharedLinkService {
                 let album_id = dto
                     .album_id
                     .ok_or_else(|| ErrorResp::BadRequest("Invalid albumId".to_string()))?;
-                if dto.asset_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
-                    return Err(ErrorResp::BadRequest("Invalid assetIds".to_string()));
-                }
-                // Match TS Permission.AlbumShare: album owner or editor.
+                // Album links may also carry asset ids; they are stored with the link.
                 require_album_access(&self.pool, auth, &album_id, Permission::AlbumShare).await?;
             }
             "INDIVIDUAL" => {

@@ -195,11 +195,13 @@ impl AssetService {
                 .as_ref()
                 .is_some_and(|s| s.has_elevated_permission);
             if !elevated {
-                return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+                return Err(ErrorResp::Unauthorized(
+                    "Elevated permission is required".to_string(),
+                ));
             }
         }
 
-        require_permission(auth, Permission::AssetRead)?;
+        require_permission(auth, Permission::AssetStatistics)?;
 
         let stats = assets::get_statistics(
             &self.pool,
@@ -306,7 +308,10 @@ impl AssetService {
             .and_then(crate::utils::date::extract_fixed_time_zone);
         let exif_fields = ExifUpdateFields {
             description: dto.description.clone(),
-            date_time_original: dto.date_time_original.as_ref().and_then(|s| s.parse().ok()),
+            date_time_original: dto
+                .date_time_original
+                .as_deref()
+                .and_then(crate::utils::date::parse_exif_datetime),
             time_zone: extracted_time_zone.clone(),
             latitude: dto.latitude,
             longitude: dto.longitude,
@@ -474,9 +479,7 @@ impl AssetService {
             .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
 
         assets::upsert_sidecar_file(&self.pool, &target.id, &dest_path).await?;
-        self.jobs
-            .queue_asset_extract_metadata_with_source(&target.id, "sidecar-write")
-            .await?;
+        self.jobs.queue_asset_extract_metadata(&target.id).await?;
 
         Ok(())
     }
@@ -497,9 +500,25 @@ impl AssetService {
         asset_id: &Uuid,
     ) -> Result<Vec<crate::models::db::asset_ocr::AssetOcrRow>, ErrorResp> {
         require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetRead).await?;
-        crate::models::db::asset_ocr::get_by_asset_id(&self.pool, asset_id)
-            .await
-            .map_err(ErrorResp::from)
+        let rows = crate::models::db::asset_ocr::get_by_asset_id(&self.pool, asset_id).await?;
+        let Some(asset) = crate::models::db::asset_edit::get_for_edit(&self.pool, asset_id).await?
+        else {
+            return Err(ErrorResp::BadRequest("Asset not found".to_string()));
+        };
+        let edits = crate::models::db::asset_edit::list_by_asset(&self.pool, asset_id).await?;
+        let exif_dimensions = crate::service::media::visibility::asset_dimensions_from_exif(
+            asset.exif_image_width,
+            asset.exif_image_height,
+            asset.orientation.as_deref(),
+        );
+        let dimensions = crate::utils::transform::ImageDimensions {
+            width: exif_dimensions.width as i32,
+            height: exif_dimensions.height as i32,
+        };
+        Ok(rows
+            .into_iter()
+            .map(|row| crate::utils::transform::transform_ocr_bounding_box(row, &edits, dimensions))
+            .collect())
     }
 
     pub async fn get_metadata_by_key(
@@ -770,7 +789,10 @@ fn build_exif_fields(dto: &UpdateAssetReq) -> ExifUpdateFields {
         .and_then(crate::utils::date::extract_fixed_time_zone);
     ExifUpdateFields {
         description: dto.description.clone(),
-        date_time_original: dto.date_time_original.as_ref().and_then(|s| s.parse().ok()),
+        date_time_original: dto
+            .date_time_original
+            .as_deref()
+            .and_then(crate::utils::date::parse_exif_datetime),
         time_zone,
         latitude: dto.latitude,
         longitude: dto.longitude,
@@ -787,7 +809,7 @@ fn validate_lat_lon(latitude: Option<f64>, longitude: Option<f64>) -> Result<(),
     }
 }
 
-async fn on_before_link(
+pub(crate) async fn on_before_link(
     pool: &PgPool,
     user_id: &Uuid,
     live_photo_video_id: &Uuid,

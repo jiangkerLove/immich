@@ -15,7 +15,7 @@ pub struct FileResponse {
 
 pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorResp> {
     if !Path::new(&file.path).exists() {
-        return Err(ErrorResp::BadRequest("Asset media not found".to_string()));
+        return Err(ErrorResp::NotFound("Not Found".to_string()));
     }
 
     let content_type = file.content_type;

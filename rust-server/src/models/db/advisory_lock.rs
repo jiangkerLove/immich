@@ -41,6 +41,28 @@ pub async fn wait_for_free_maintenance_lock(pool: &Pool<Postgres>) {
     }
 }
 
+pub async fn is_busy(pool: &Pool<Postgres>, lock_id: i64) -> bool {
+    match try_acquire(pool, lock_id).await {
+        Ok(Some(mut conn)) => {
+            let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+                .bind(lock_id)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap_or(false);
+            false
+        }
+        Ok(None) => true,
+        Err(err) => {
+            tracing::error!("advisory lock busy check failed: {err}");
+            false
+        }
+    }
+}
+
+pub async fn wait_until_free(pool: &Pool<Postgres>, lock_id: i64) -> Result<(), sqlx::Error> {
+    run_with_lock(pool, lock_id, || async {}).await
+}
+
 pub async fn try_acquire(
     pool: &Pool<Postgres>,
     lock_id: i64,
@@ -51,11 +73,7 @@ pub async fn try_acquire(
         .fetch_one(&mut *conn)
         .await?;
 
-    if acquired {
-        Ok(Some(conn))
-    } else {
-        Ok(None)
-    }
+    if acquired { Ok(Some(conn)) } else { Ok(None) }
 }
 
 pub async fn run_with_try_lock<F, Fut, T>(

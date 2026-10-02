@@ -141,20 +141,18 @@ impl MemoryService {
     ) -> Result<MemoryResponse, ErrorResp> {
         require_memory_access(&self.pool, auth, id, Permission::MemoryUpdate).await?;
 
-        if dto.is_saved.is_none() && dto.memory_at.is_none() && dto.seen_at.is_none() {
-            return Err(ErrorResp::BadRequest("No fields to update".to_string()));
+        if dto.is_saved.is_some() || dto.memory_at.is_some() || dto.seen_at.is_some() {
+            memory::update(
+                &self.pool,
+                id,
+                &MemoryUpdateData {
+                    is_saved: dto.is_saved,
+                    memory_at: dto.memory_at,
+                    seen_at: dto.seen_at,
+                },
+            )
+            .await?;
         }
-
-        memory::update(
-            &self.pool,
-            id,
-            &MemoryUpdateData {
-                is_saved: dto.is_saved,
-                memory_at: dto.memory_at,
-                seen_at: dto.seen_at,
-            },
-        )
-        .await?;
 
         self.get(auth, id).await
     }
@@ -201,6 +199,7 @@ impl MemoryService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::Duplicate),
+                    error_message: None,
                 });
                 continue;
             }
@@ -210,6 +209,7 @@ impl MemoryService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NoPermission),
+                    error_message: None,
                 });
                 continue;
             }
@@ -219,6 +219,7 @@ impl MemoryService {
                 id: *asset_id,
                 success: true,
                 error: None,
+                error_message: None,
             });
         }
 
@@ -261,6 +262,7 @@ impl MemoryService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NotFound),
+                    error_message: None,
                 });
                 continue;
             }
@@ -270,6 +272,7 @@ impl MemoryService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NoPermission),
+                    error_message: None,
                 });
                 continue;
             }
@@ -279,6 +282,7 @@ impl MemoryService {
                 id: *asset_id,
                 success: true,
                 error: None,
+                error_message: None,
             });
         }
 

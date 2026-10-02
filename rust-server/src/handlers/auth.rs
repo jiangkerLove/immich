@@ -9,9 +9,7 @@ use crate::models::request::auth::{
     ChangePasswordReq, LoginCredentialReq, LoginReq, PinCodeChangeReq, PinCodeResetReq,
     PinCodeSetupReq, SessionUnlockReq, SignUpReq,
 };
-use crate::models::response::auth::{
-    AuthStatusResp, ValidateAccessTokenResp,
-};
+use crate::models::response::auth::{AuthStatusResp, ValidateAccessTokenResp};
 use crate::models::response::response::ErrorResp;
 use crate::models::response::user::UserAdminResponse;
 use crate::service::auth::AuthService;
@@ -48,8 +46,12 @@ pub async fn logout_handler(
     Extension(auth): Extension<AuthDto>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response<Body>, ErrorResp> {
-    let _auth_type = get_auth_type(&headers);
-    let body = state.services.auth.logout(&auth).await?;
+    let auth_type = get_auth_type(&headers);
+    let body = state
+        .services
+        .auth
+        .logout(&auth, auth_type.as_deref())
+        .await?;
     Ok(respond_without_auth_cookies(&body))
 }
 

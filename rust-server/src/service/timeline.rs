@@ -1,14 +1,14 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::timeline::{
-    get_timeline_partner_ids, get_time_bucket_json, get_time_buckets, user_has_album_access,
-    user_owns_person, user_owns_tag, BoundingBox, TimeBucketItem, TimelineFilter,
+    BoundingBox, TimeBucketItem, TimelineFilter, get_time_bucket_json, get_time_buckets,
+    get_timeline_partner_ids, user_has_album_access, user_owns_person, user_owns_tag,
 };
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct TimelineService {
@@ -64,8 +64,8 @@ impl TimelineService {
     ) -> Result<String, ErrorResp> {
         let filter = self.build_filter(auth, &query.base).await?;
         let include_exif = auth.shared_link.as_ref().is_none_or(|sl| sl.show_exif);
-        let include_coordinates = parse_bool(&query.base.with_coordinates).unwrap_or(false)
-            && include_exif;
+        let include_coordinates =
+            parse_bool(&query.base.with_coordinates).unwrap_or(false) && include_exif;
 
         let json = get_time_bucket_json(
             &self.pool,
@@ -77,7 +77,11 @@ impl TimelineService {
         )
         .await?;
 
-        Ok(if json.is_empty() { "{}".to_string() } else { json })
+        Ok(if json.is_empty() {
+            "{}".to_string()
+        } else {
+            json
+        })
     }
 
     async fn build_filter(
@@ -114,7 +118,9 @@ impl TimelineService {
 
         if let Some(tag_id) = query.tag_id {
             require_permission(auth, Permission::TagRead)?;
-            if auth.shared_link.is_none() && !user_owns_tag(&self.pool, &auth.user.id, &tag_id).await? {
+            if auth.shared_link.is_none()
+                && !user_owns_tag(&self.pool, &auth.user.id, &tag_id).await?
+            {
                 return Err(ErrorResp::BadRequest(
                     "Not found or no tag.read access".to_string(),
                 ));
@@ -133,11 +139,7 @@ impl TimelineService {
             }
         }
 
-        let bbox = query
-            .bbox
-            .as_deref()
-            .map(parse_bbox)
-            .transpose()?;
+        let bbox = query.bbox.as_deref().map(parse_bbox).transpose()?;
 
         let is_trashed = parse_bool(&query.is_trashed).unwrap_or(false);
         let visibility = query.visibility.clone();
@@ -148,7 +150,16 @@ impl TimelineService {
                 .as_ref()
                 .is_some_and(|s| s.has_elevated_permission);
             if !elevated {
-                return Err(ErrorResp::Forbidden("Forbidden".to_string()));
+                return Err(ErrorResp::Unauthorized(
+                    "Elevated permission is required".to_string(),
+                ));
+            }
+            if let Some(user_id) = query.user_id {
+                if user_id != auth.user.id {
+                    return Err(ErrorResp::BadRequest(
+                        "You may not access another user's locked timeline".to_string(),
+                    ));
+                }
             }
         }
 

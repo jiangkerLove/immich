@@ -131,49 +131,34 @@ pub fn record_http_request(duration_ms: f64, status: u16) {
     if !api_metrics_enabled() {
         return;
     }
-    metrics::counter!("immich.http.requests.total").increment(1);
-    metrics::histogram!("immich.http.request.duration_ms").record(duration_ms);
-    metrics::counter!("immich.http.responses.total", "status" => status_group(status)).increment(1);
-}
-
-pub fn record_job_finished(queue: &str, job_name: &str, success: bool) {
-    if !job_metrics_enabled() {
-        return;
-    }
-    let queue = sanitize_metric_name(queue);
-    let job_name = sanitize_metric_name(job_name);
-    metrics::counter!("immich.queues.started", "queue" => queue.clone()).increment(1);
-    if success {
-        metrics::counter!("immich.queues.completed", "queue" => queue, "job" => job_name)
-            .increment(1);
-    } else {
-        metrics::counter!("immich.queues.failed", "queue" => queue, "job" => job_name).increment(1);
-    }
-}
-
-pub fn record_job_started(queue: &str, job_name: &str) {
-    if !job_metrics_enabled() {
-        return;
-    }
-    let queue = sanitize_metric_name(queue);
-    let job_name = sanitize_metric_name(job_name);
-    metrics::counter!(
-        "immich.queues.jobs.started",
-        "queue" => queue,
-        "job" => job_name
+    metrics::histogram!(
+        "http.server.request.duration",
+        "http.response.status_code" => status.to_string()
     )
-    .increment(1);
+    .record(duration_ms / 1000.0);
+}
+
+pub fn record_job_finished(_queue: &str, _job_name: &str, _success: bool) {}
+
+pub fn record_job_started(_queue: &str, _job_name: &str) {}
+
+pub fn record_queue_started(queue: &str) {
+    if !job_metrics_enabled() {
+        return;
+    }
+    let name = metric_name(&format!("immich.queues.{}.started", snake_case(queue)));
+    metrics::counter!(name).increment(1);
 }
 
 pub fn record_queue_active_delta(queue: &str, delta: i64) {
     if !job_metrics_enabled() {
         return;
     }
-    let queue = sanitize_metric_name(queue);
+    let name = metric_name(&format!("immich.queues.{}.active", snake_case(queue)));
     if delta >= 0 {
-        metrics::gauge!("immich.queues.active", "queue" => queue).increment(delta as f64);
+        metrics::gauge!(name).increment(delta as f64);
     } else {
-        metrics::gauge!("immich.queues.active", "queue" => queue).decrement((-delta) as f64);
+        metrics::gauge!(name).decrement((-delta) as f64);
     }
 }
 
@@ -181,9 +166,11 @@ pub fn record_job_status(job_name: &str, status: &str) {
     if !job_metrics_enabled() {
         return;
     }
-    let job_name = sanitize_metric_name(job_name);
-    let status = sanitize_metric_name(status);
-    metrics::counter!("immich.jobs", "job" => job_name, "status" => status).increment(1);
+    if !matches!(status, "success" | "failed" | "skipped") {
+        return;
+    }
+    let name = metric_name(&format!("immich.jobs.{}.{}", snake_case(job_name), status));
+    metrics::counter!(name).increment(1);
 }
 
 /// Repository / DB layer duration (mirrors TS `repo` method histograms).
@@ -193,19 +180,31 @@ pub fn record_repo_duration(operation: &str, duration_ms: f64) {
     }
     let operation = sanitize_metric_name(operation);
     metrics::histogram!(
-        "immich.repo.duration_ms",
-        "operation" => operation
+        "db.client.operation.duration",
+        "db.system.name" => "postgresql",
+        "db.operation.name" => operation
     )
-    .record(duration_ms);
+    .record(duration_ms / 1000.0);
 }
 
 pub fn record_db_pool_stats(size: u32, idle: usize, max: u32) {
     if !repo_metrics_enabled() {
         return;
     }
-    metrics::gauge!("immich.repo.db.pool.size").set(f64::from(size));
-    metrics::gauge!("immich.repo.db.pool.idle").set(idle as f64);
-    metrics::gauge!("immich.repo.db.pool.max").set(f64::from(max));
+    let used = size.saturating_sub(u32::try_from(idle).unwrap_or(0));
+    metrics::gauge!(
+        "db.client.connection.count",
+        "db.system.name" => "postgresql",
+        "state" => "used"
+    )
+    .set(f64::from(used));
+    metrics::gauge!(
+        "db.client.connection.count",
+        "db.system.name" => "postgresql",
+        "state" => "idle"
+    )
+    .set(idle as f64);
+    let _ = max;
 }
 
 /// Redis / IO layer (mirrors TS IORedis instrumentation behind `io`).
@@ -215,17 +214,13 @@ pub fn record_redis_command(operation: &str, duration_ms: f64, success: bool) {
     }
     let operation = sanitize_metric_name(operation);
     let status = if success { "ok" } else { "error" };
-    metrics::counter!(
-        "immich.io.redis.commands.total",
-        "operation" => operation.clone(),
-        "status" => status
-    )
-    .increment(1);
     metrics::histogram!(
-        "immich.io.redis.command.duration_ms",
-        "operation" => operation
+        "db.client.operation.duration",
+        "db.system.name" => "redis",
+        "db.operation.name" => operation,
+        "error.type" => status
     )
-    .record(duration_ms);
+    .record(duration_ms / 1000.0);
 }
 
 pub fn set_users_total(count: i64) {
@@ -246,12 +241,51 @@ pub fn add_users_total(delta: i64) {
     }
 }
 
-fn status_group(status: u16) -> String {
-    format!("{}xx", status / 100)
-}
-
 fn sanitize_metric_name(value: &str) -> String {
     value.replace('.', "_").replace('-', "_")
+}
+
+/// lodash `snakeCase` for ASCII identifiers used as queue and job names.
+fn snake_case(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::new();
+    for (index, &ch) in chars.iter().enumerate() {
+        if ch == '-' || ch == ' ' || ch == '.' {
+            if !out.is_empty() && !out.ends_with('_') {
+                out.push('_');
+            }
+            continue;
+        }
+        if ch.is_ascii_uppercase() {
+            let prev_lower = index > 0 && chars[index - 1].is_ascii_lowercase();
+            let prev_upper = index > 0 && chars[index - 1].is_ascii_uppercase();
+            let next_lower = chars
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_lowercase());
+            if index > 0 && (prev_lower || (prev_upper && next_lower)) && !out.ends_with('_') {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn metric_name(name: &str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|err| err.into_inner());
+    if let Some(existing) = guard.get(name) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    guard.insert(name.to_string(), leaked);
+    leaked
 }
 
 #[cfg(test)]
@@ -280,5 +314,16 @@ mod tests {
         assert!(config.metrics.contains(&ImmichTelemetry::Api));
         assert!(config.metrics.contains(&ImmichTelemetry::Repo));
         assert!(!config.metrics.contains(&ImmichTelemetry::Io));
+    }
+
+    #[test]
+    fn snake_case_matches_queue_and_job_names() {
+        assert_eq!(snake_case("thumbnailGeneration"), "thumbnail_generation");
+        assert_eq!(snake_case("notifications"), "notifications");
+        assert_eq!(
+            snake_case("AssetDetectFacesQueueAll"),
+            "asset_detect_faces_queue_all"
+        );
+        assert_eq!(snake_case("ocr"), "ocr");
     }
 }

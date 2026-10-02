@@ -12,7 +12,6 @@ use crate::models::db::system_metadata;
 use crate::models::db::version_history;
 use crate::models::dto::env::EnvDto;
 use crate::models::response::response::ErrorResp;
-use crate::service::hls::is_maintenance_mode;
 use crate::utils::bytes::as_human_readable;
 use crate::utils::disk::check_disk_usage;
 use crate::utils::mime_types::{
@@ -351,7 +350,6 @@ impl ServerService {
         .await?;
 
         let admin_onboarding = system_metadata::get_admin_onboarding(&self.pool).await?;
-        let maintenance_mode = is_maintenance_mode(&self.pool).await?;
 
         Ok(ServerConfigResponse {
             login_page_message: json_str(&config, &["server", "loginPageMessage"], ""),
@@ -373,7 +371,7 @@ impl ServerService {
                 &["map", "lightStyle"],
                 "https://tiles.immich.cloud/v1/style/light.json",
             ),
-            maintenance_mode,
+            maintenance_mode: false,
             min_faces: json_i32(
                 &config,
                 &["machineLearning", "facialRecognition", "minFaces"],
@@ -433,9 +431,10 @@ impl ServerService {
         &self,
         auth: &crate::models::dto::auth::AuthDto,
     ) -> Result<ServerStorageResponse, ErrorResp> {
-        if !auth.user.is_admin {
-            return Err(ErrorResp::Forbidden("Forbidden".to_string()));
-        }
+        crate::utils::permission::require_permission(
+            auth,
+            crate::models::db::auth_permission::Permission::ServerStorage,
+        )?;
 
         let disk = check_disk_usage(&self.library_path)
             .ok_or_else(|| ErrorResp::ServerError("Failed to read disk usage".to_string()))?;
@@ -521,7 +520,7 @@ impl ServerService {
         let license = system_metadata::get_server_license(&self.pool)
             .await
             .map_err(ErrorResp::from)?
-            .ok_or_else(|| ErrorResp::NotFound("License not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Not Found".to_string()))?;
 
         let activated_at = chrono::DateTime::parse_from_rfc3339(&license.activated_at)
             .map(|value| value.with_timezone(&chrono::Utc))

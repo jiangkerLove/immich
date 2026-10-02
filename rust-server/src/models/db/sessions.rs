@@ -9,8 +9,10 @@ pub struct NewSession {
     pub token: Vec<u8>,
     pub device_os: String,
     pub device_type: String,
+    pub app_version: Option<String>,
     pub user_id: Uuid,
     pub oauth_sid: Option<String>,
+    pub oauth_bearer_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,19 +30,23 @@ pub struct SessionPO {
     pub user_id: Uuid,
     pub device_os: String,
     pub device_type: String,
+    pub app_version: Option<String>,
     pub pin_expires_at: Option<DateTime<Utc>>,
+    pub oauth_bearer_token: Option<String>,
 }
 
 impl NewSession {
     pub async fn insert(&self, pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            r#"INSERT INTO session (token, "deviceOS", "deviceType", "userId", "oauthSid") VALUES ($1, $2, $3, $4, $5)"#,
+            r#"INSERT INTO session (token, "deviceOS", "deviceType", "appVersion", "userId", "oauthSid", "oauthBearerToken") VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
         )
         .bind(&self.token)
         .bind(&self.device_os)
         .bind(&self.device_type)
+        .bind(&self.app_version)
         .bind(&self.user_id)
         .bind(&self.oauth_sid)
+        .bind(&self.oauth_bearer_token)
         .execute(pool)
         .await?;
 
@@ -63,7 +69,9 @@ impl SessionPO {
                     "userId" as "user_id",
                     "deviceOS" as "device_os",
                     "deviceType" as "device_type",
-                    "pinExpiresAt" as "pin_expires_at"
+                    "appVersion" as "app_version",
+                    "pinExpiresAt" as "pin_expires_at",
+                    "oauthBearerToken" as "oauth_bearer_token"
                 FROM session
                 WHERE token = $1
                   AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
@@ -89,7 +97,9 @@ impl SessionPO {
                     "userId" as "user_id",
                     "deviceOS" as "device_os",
                     "deviceType" as "device_type",
-                    "pinExpiresAt" as "pin_expires_at"
+                    "appVersion" as "app_version",
+                    "pinExpiresAt" as "pin_expires_at",
+                    "oauthBearerToken" as "oauth_bearer_token"
                 FROM session
                 WHERE id = $1
             "#,
@@ -108,6 +118,29 @@ impl SessionPO {
         Ok(())
     }
 
+    pub async fn update_device(
+        pool: &Pool<Postgres>,
+        id: &Uuid,
+        device_os: &str,
+        device_type: &str,
+        app_version: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+                UPDATE session
+                SET "updatedAt" = NOW(), "deviceOS" = $2, "deviceType" = $3, "appVersion" = $4
+                WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(device_os)
+        .bind(device_type)
+        .bind(app_version)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn update_pin_expires_at(
         pool: &Pool<Postgres>,
         id: &Uuid,
@@ -121,13 +154,14 @@ impl SessionPO {
         Ok(())
     }
 
-    pub async fn lock_all_for_user(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"UPDATE session SET "pinExpiresAt" = NULL WHERE "userId" = $1"#,
-        )
-        .bind(user_id)
-        .execute(pool)
-        .await?;
+    pub async fn lock_all_for_user(
+        pool: &Pool<Postgres>,
+        user_id: &Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(r#"UPDATE session SET "pinExpiresAt" = NULL WHERE "userId" = $1"#)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
         Ok(())
     }
 
@@ -137,13 +171,11 @@ impl SessionPO {
         exclude_id: Option<&Uuid>,
     ) -> Result<(), sqlx::Error> {
         if let Some(exclude_id) = exclude_id {
-            sqlx::query(
-                r#"DELETE FROM session WHERE "userId" = $1 AND id != $2"#,
-            )
-            .bind(user_id)
-            .bind(exclude_id)
-            .execute(pool)
-            .await?;
+            sqlx::query(r#"DELETE FROM session WHERE "userId" = $1 AND id != $2"#)
+                .bind(user_id)
+                .bind(exclude_id)
+                .execute(pool)
+                .await?;
         } else {
             sqlx::query(r#"DELETE FROM session WHERE "userId" = $1"#)
                 .bind(user_id)
@@ -159,8 +191,9 @@ impl SessionPO {
         oauth_id: Option<&str>,
     ) -> Result<Vec<Uuid>, sqlx::Error> {
         match (oauth_sid, oauth_id) {
-            (Some(sid), Some(sub)) => sqlx::query_scalar(
-                r#"
+            (Some(sid), Some(sub)) => {
+                sqlx::query_scalar(
+                    r#"
                     DELETE FROM session
                     USING "user"
                     WHERE session."userId" = "user".id
@@ -168,29 +201,32 @@ impl SessionPO {
                       AND "user"."oauthId" = $2
                     RETURNING session.id
                 "#,
-            )
-            .bind(sid)
-            .bind(sub)
-            .fetch_all(pool)
-            .await,
-            (None, Some(sub)) => sqlx::query_scalar(
-                r#"
+                )
+                .bind(sid)
+                .bind(sub)
+                .fetch_all(pool)
+                .await
+            }
+            (None, Some(sub)) => {
+                sqlx::query_scalar(
+                    r#"
                     DELETE FROM session
                     USING "user"
                     WHERE session."userId" = "user".id
                       AND "user"."oauthId" = $1
                     RETURNING session.id
                 "#,
-            )
-            .bind(sub)
-            .fetch_all(pool)
-            .await,
-            (Some(sid), None) => sqlx::query_scalar(
-                r#"DELETE FROM session WHERE "oauthSid" = $1 RETURNING id"#,
-            )
-            .bind(sid)
-            .fetch_all(pool)
-            .await,
+                )
+                .bind(sub)
+                .fetch_all(pool)
+                .await
+            }
+            (Some(sid), None) => {
+                sqlx::query_scalar(r#"DELETE FROM session WHERE "oauthSid" = $1 RETURNING id"#)
+                    .bind(sid)
+                    .fetch_all(pool)
+                    .await
+            }
             (None, None) => Ok(vec![]),
         }
     }
@@ -199,12 +235,11 @@ impl SessionPO {
         pool: &Pool<Postgres>,
         id: &Uuid,
     ) -> Result<bool, sqlx::Error> {
-        let value: Option<bool> = sqlx::query_scalar(
-            r#"SELECT "isPendingSyncReset" FROM session WHERE id = $1"#,
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+        let value: Option<bool> =
+            sqlx::query_scalar(r#"SELECT "isPendingSyncReset" FROM session WHERE id = $1"#)
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
         Ok(value.unwrap_or(false))
     }
 
@@ -213,18 +248,14 @@ impl SessionPO {
         session_id: &Uuid,
     ) -> Result<(), sqlx::Error> {
         let mut tx = pool.begin().await?;
-        sqlx::query(
-            r#"UPDATE session SET "isPendingSyncReset" = false WHERE id = $1"#,
-        )
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            r#"DELETE FROM session_sync_checkpoint WHERE "sessionId" = $1"#,
-        )
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query(r#"UPDATE session SET "isPendingSyncReset" = false WHERE id = $1"#)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(r#"DELETE FROM session_sync_checkpoint WHERE "sessionId" = $1"#)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -243,10 +274,7 @@ impl SessionPO {
     }
 }
 
-pub async fn is_pending_sync_reset(
-    pool: &Pool<Postgres>,
-    id: &Uuid,
-) -> Result<bool, sqlx::Error> {
+pub async fn is_pending_sync_reset(pool: &Pool<Postgres>, id: &Uuid) -> Result<bool, sqlx::Error> {
     SessionPO::is_pending_sync_reset(pool, id).await
 }
 

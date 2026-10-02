@@ -8,8 +8,8 @@ use image::{DynamicImage, GenericImageView, ImageFormat};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::db::system_metadata::get_json;
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::get_merged;
 
 #[derive(Debug, Clone)]
 struct ThumbnailConfig {
@@ -60,14 +60,8 @@ pub async fn generate_profile_image(
 
 async fn load_thumbnail_config(pool: &PgPool) -> Result<ThumbnailConfig, String> {
     let mut config = ThumbnailConfig::default();
-    let stored = get_json(pool, "system-config")
-        .await
-        .map_err(|err| err.to_string())?;
-    if let Some(thumbnail) = stored
-        .as_ref()
-        .and_then(|value| value.get("image"))
-        .and_then(|image| image.get("thumbnail"))
-    {
+    let stored = get_merged(pool).await.map_err(|err| err.to_string())?;
+    if let Some(thumbnail) = stored.get("image").and_then(|image| image.get("thumbnail")) {
         if let Some(format) = thumbnail.get("format").and_then(|v| v.as_str()) {
             config.format = format.to_string();
         }

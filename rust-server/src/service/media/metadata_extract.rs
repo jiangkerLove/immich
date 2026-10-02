@@ -11,7 +11,6 @@ use crate::models::db::metadata_job::{
     self, UpdateAssetAfterMetadata, UpsertAssetAudio, UpsertAssetExif, UpsertAssetKeyframe,
     UpsertAssetVideo,
 };
-use crate::models::db::system_metadata::get_json;
 use crate::service::job::EntityJob;
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{
@@ -23,6 +22,7 @@ use crate::service::media::metadata_postprocess;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::mime_types::{is_heif_image_path, is_possibly_animated_image_path};
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::get_merged;
 
 const JOBS_BATCH_SIZE: usize = 1000;
 const EXIF_DATE_TAGS: &[&str] = &[
@@ -336,12 +336,11 @@ impl MetadataExtractService {
             return Ok((None, None, None));
         };
 
-        let config = get_json(&self.pool, "system-config")
+        let config = get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         let enabled = config
-            .as_ref()
-            .and_then(|value| value.get("reverseGeocoding"))
+            .get("reverseGeocoding")
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
@@ -360,12 +359,11 @@ impl MetadataExtractService {
     }
 
     async fn queue_follow_up_jobs(&self, job: &EntityJob) -> Result<(), String> {
-        let config = get_json(&self.pool, "system-config")
+        let config = get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         let template_enabled = config
-            .as_ref()
-            .and_then(|value| value.get("storageTemplate"))
+            .get("storageTemplate")
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
             .unwrap_or(false);

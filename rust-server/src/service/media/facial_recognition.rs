@@ -49,9 +49,6 @@ impl FacialRecognitionService {
         if !is_facial_recognition_enabled(&config) {
             return Ok(FacialRecognitionQueueAllOutcome::Skipped);
         }
-        if !crate::utils::vector::face_search_available(&self.pool).await {
-            return Ok(FacialRecognitionQueueAllOutcome::Skipped);
-        }
 
         self.jobs
             .wait_for_queue_completion(&[QUEUE_THUMBNAIL, QUEUE_FACE])
@@ -93,10 +90,7 @@ impl FacialRecognitionService {
                     .await
                     .map_err(|err| err.to_string())?;
             }
-            self.jobs
-                .queue_person_cleanup()
-                .await
-                .map_err(|err| err.to_string())?;
+            crate::service::person::cleanup_people(&self.pool).await?;
             person::vacuum_faces(&self.pool, false)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -140,9 +134,6 @@ impl FacialRecognitionService {
             .await
             .map_err(|err| err.to_string())?;
         if !is_facial_recognition_enabled(&config) {
-            return Ok(FacialRecognitionOutcome::Skipped);
-        }
-        if !crate::utils::vector::face_search_available(&self.pool).await {
             return Ok(FacialRecognitionOutcome::Skipped);
         }
 

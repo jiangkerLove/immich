@@ -197,11 +197,52 @@ async fn remove_empty_dirs_inner(directory: &Path, remove_self: bool) -> Result<
         {
             if let Err(err) = tokio::fs::remove_dir(directory).await {
                 if !matches!(err.raw_os_error(), Some(39) | Some(66)) {
-                    tracing::error!("attempted to remove directory {directory:?}, but failed: {err}");
+                    tracing::error!(
+                        "attempted to remove directory {directory:?}, but failed: {err}"
+                    );
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// `sanitize-filename` after stripping `.`, matching `sanitizeFilename` in `server/src/validation.ts`.
+pub fn sanitize_storage_label(value: &str) -> String {
+    let stripped: String = value.chars().filter(|ch| *ch != '.').collect();
+    let mut sanitized = String::with_capacity(stripped.len());
+    for ch in stripped.chars() {
+        let illegal = matches!(ch, '/' | '\\' | '?' | '<' | '>' | ':' | '*' | '|' | '"');
+        let control = ('\0'..='\u{1f}').contains(&ch) || ('\u{80}'..='\u{9f}').contains(&ch);
+        if illegal || control {
+            continue;
+        }
+        sanitized.push(ch);
+    }
+    let trimmed = sanitized.trim_end_matches(' ');
+    let lower = trimmed.to_ascii_lowercase();
+    let reserved = matches!(lower.as_str(), "con" | "prn" | "aux" | "nul")
+        || (lower.len() == 4
+            && (lower.starts_with("com") || lower.starts_with("lpt"))
+            && lower.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_storage_label;
+
+    #[test]
+    fn storage_label_strips_dots_and_illegal_characters() {
+        assert_eq!(sanitize_storage_label("my.label"), "mylabel");
+        assert_eq!(sanitize_storage_label("a/b:c"), "abc");
+        assert_eq!(sanitize_storage_label("..."), "");
+        assert_eq!(sanitize_storage_label("con"), "");
+        assert_eq!(sanitize_storage_label("photos "), "photos");
+    }
 }

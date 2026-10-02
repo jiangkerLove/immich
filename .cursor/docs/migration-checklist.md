@@ -18,7 +18,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | **代码面** | HTTP 全领域、66 JobName、19 队列、媒体/库/同步/搜索 API、WS、HLS、sqlx baseline、CLI — **已到位** |
 | **切流路径** | **服务器**：空目录里放 `docker-compose.yml` + `.env`，`docker compose up -d`（不克隆仓库）。**本机 Docker**：`cd rust-server && docker compose up -d --build`。**不用 Docker**：`cargo run` + Vite。说明只维护在 `rust-server/README.md` |
 | **真正阻塞** | 不是缺 API，而是：**真实 compose 冒烟未跑通**、**现有库 baseline 未验证锁定**、**维护模式 AppRestart 重启链路未在你的部署上确认** |
-| **下一步** | **仅剩 Cutover（需本机 compose/DB）**：C2 → C1 → C3；可选 P4。代码侧可迁移项已清空。 |
+| **下一步** | §11 行为差异已按表对齐。切流验证仍是 C2 → C1 → C3。 |
 
 ---
 
@@ -175,6 +175,8 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | PersonRecognized / AssetPersonV1 | 上游关闭 |
 | Nest `EventRepository` 全量复刻 | 直调 + Redis 少量频道已够 |
 
+上表与当前上游 `server/` 的实现范围一致：算法在 ML 服务里，Search / Sync 的现有 SQL 已对照，`allowedHosts` 没有公开管理端点，`PersonRecognized` 在上游被注释，事件副作用是直接调用。
+
 ---
 
 ## 5. WebSocket / 跨进程事件对照
@@ -295,7 +297,38 @@ cd rust-server && cargo +stable test --offline --lib
 
 ## 10. 一句话总结
 
-**现在：** API / 66 Job / 迁移 / HLS / CLI / 日志指标 / plugin 边界测试均在 Rust；服务热路径已用 tracing。  
-**还差（切流，需本机 compose/DB）：** C2 `migration-status` → C1 `smoke.ps1` → C3 维护重启 →（可选）P4。  
-**本环境限制：** 无 Docker / 无 Immich 凭据时无法代跑 Cutover；代码侧可迁移项已清空。  
-**策略：** 单进程 + ML sidecar 先切；合上游后开 `2+`；大块算法/协议重写继续暂缓。
+**现在：** API / 66 Job / 迁移 / HLS / CLI 均在 Rust。§11 服务对照项已对齐。  
+**还差：** 切流仍要 C2 → C1 → C3。  
+**本环境限制：** 无 Docker / 无 Immich 凭据时无法代跑 Cutover。  
+**策略：** 之后按 git 增量跟上游 `server/`。
+
+---
+
+## 11. 2026-10-02 服务对照（未对齐则继续改）
+
+对照范围：官方 `server/src/services/` 与当前工作区 `rust-server/src/service/` 的业务分支。不是每个 SQL 字面逐行证明。同步、外部库、人脸任务、元数据/实况、智能搜索、OCR 任务状态、HLS 播放列表、CLI 子命令已对齐，不重复列入。
+
+遥测里任务和队列仍用 `immich.jobs` / `immich.queues`。HTTP、数据库、Redis、主机指标用 OpenTelemetry 语义名（`http.server.request.duration`、`db.client.operation.duration`、`db.client.connection.count`、`system.cpu.utilization`、`system.memory.usage`、`system.filesystem.usage`）。配置校验失败带 Zod 的 `code`、`expected`、`input`、`values`、范围字段；cron 失败说明与 `cron` 4.4 相同。`schema-check` 的漂移行用 sql-tools `asHuman` 句式，向量列对比维度，CHECK 对比表达式。期望结构仍是 `1_baseline.sql`。
+
+| 状态 | 项 | 官方 | Rust |
+|------|----|------|------|
+| 已改 | OCR 文字框 | 按编辑和方向变换 | 已按编辑变换 |
+| 已改 | 旧版元数据搜索 | 相册权限；共享链接必须带相册 | 已补上 |
+| 已改 | 改密码 | 总会踢掉其他会话 | 已总是踢掉其他会话 |
+| 已改 | 手机 OAuth | 用配置里的回调地址换 token | 已替换 `app.immich:/oauth-callback` |
+| 已改 | 共享链接列表 | 带回全部资源 | 已带回全部 |
+| 已改 | 合并重复项 | 检查相册写入和分享权限，失败带 `errorMessage` | 已过滤相册和可分享资源，并带上说明 |
+| 已改 | 删除校验和不匹配报告 | 类型 `checksum_mismatch` | 已改为该类型 |
+| 已改 | 缩略图、通知、转码、备份、元数据、头像 | 合并后的配置 | 这些路径已读合并配置 |
+| 已改 | 关闭的工作流 | 资源触发时仍会跑 | 已不再按 `enabled` 过滤 |
+| 已改 | 提升权限 | 401 `Elevated permission is required` | 时间线、搜索、资产统计已改为 401 |
+| 已改 | 找不到 | 404 | 许可证、头像、原图、播放、磁盘上缺失的文件已改为 404 |
+| 已改 | 维护状态 | API 进程固定未维护 | API 固定未维护；维护进程才返回进行中 |
+| 已改 | 检测旧安装 | API 要管理员；维护进程不要求登录 | 与官方相同 |
+| 已改 | 新手引导权限 | `UserOnboardingRead` / `Update` | 已改用这两项 |
+| 已改 | 管理员锁定统计 | 不要求 PIN 解锁 | 已不再检查提升权限 |
+| 已改 | 管理员日历热力图 | `AdminUserRead` | 已改用该项 |
+| 已改 | 相册改成员 | 成员角色为 owner 时拒绝 | 已按相册成员角色判断 |
+| 已改 | 记忆空更新、标签重名预检、邮件模板预览回退、API Key 默认名、登录邮箱 | 空更新成功；重命名交给数据库；相册更新预览回退邀请模板；空名称用 `API Key`；登录按原样邮箱 | 已按官方对齐 |
+| 已改 | 重复项解决、人物批量更新、工作流搜索、工作流缺失、通知删除 | 解决前校验重复组归属；批量更新失败原因一律 `unknown`；搜索不按 `logging` 过滤；工作流不存在时任务成功；删除通知不因已删再报错 | 已按官方对齐 |
+| 已改 | 资产统计、边车、回收站原图、搜索范围、改密码、堆栈/标签权限、批量打标签、存储标签、OAuth 资料、API Key、反向地理编码、相册分享、认证状态 | 统计权限是 `asset.statistics`；边车任务只带资源 id；回收站仍可取原图/缩略图/视频；旧版统计按可见性收用户；智能搜索保留空白查询；改密码只更新密码；堆栈和标签错误带权限名；批量打标签只处理有权限的子集；创建用户时清洗存储标签；ID Token 无邮箱时用 userinfo；创建/轮换 API Key 带嵌套 `apiKey`；国家名用英文官方名；相册分享可带 assetIds；PIN 用户缺失时 401 文案为 `Unauthorized` | 已按官方对齐 |

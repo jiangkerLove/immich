@@ -37,7 +37,11 @@ pub struct AppRestartMessage {
     pub is_maintenance_mode: bool,
 }
 
-pub fn spawn_listener(pool: PgPool, redis_url: String) {
+pub fn spawn_listener(
+    pool: PgPool,
+    redis_url: String,
+    websocket: crate::service::websocket::WebSocketHub,
+) {
     let self_id = instance_id().to_string();
     tokio::spawn(async move {
         let client = match redis::Client::open(redis_url.as_str()) {
@@ -86,7 +90,7 @@ pub fn spawn_listener(pool: PgPool, redis_url: String) {
 
             match channel.as_str() {
                 CONFIG_UPDATE_CHANNEL => {
-                    handle_config_update(&pool, &self_id, &payload).await;
+                    handle_config_update(&pool, &self_id, &payload, &websocket).await;
                 }
                 APP_RESTART_CHANNEL => {
                     handle_app_restart(&self_id, &payload);
@@ -101,7 +105,12 @@ pub fn spawn_listener(pool: PgPool, redis_url: String) {
     });
 }
 
-async fn handle_config_update(pool: &PgPool, self_id: &str, payload: &str) {
+async fn handle_config_update(
+    pool: &PgPool,
+    self_id: &str,
+    payload: &str,
+    websocket: &crate::service::websocket::WebSocketHub,
+) {
     let message: ConfigUpdateMessage = match serde_json::from_str(payload) {
         Ok(value) => value,
         Err(err) => {
@@ -116,6 +125,7 @@ async fn handle_config_update(pool: &PgPool, self_id: &str, payload: &str) {
 
     tracing::info!("server events: received ConfigUpdate from peer");
     crate::service::config_bootstrap::on_config_update(pool, message.old_config.as_ref()).await;
+    websocket.emit_config_update();
 }
 
 fn handle_app_restart(self_id: &str, payload: &str) {

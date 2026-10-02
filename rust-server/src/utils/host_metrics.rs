@@ -25,15 +25,18 @@ pub fn spawn_collector(media_path: PathBuf) {
             system.refresh_cpu_usage();
             system.refresh_memory();
 
-            metrics::gauge!("immich.host.cpu.usage_percent")
-                .set(f64::from(system.global_cpu_usage()));
-            metrics::gauge!("immich.host.memory.used_bytes").set(system.used_memory() as f64);
-            metrics::gauge!("immich.host.memory.total_bytes").set(system.total_memory() as f64);
+            metrics::gauge!("system.cpu.utilization")
+                .set(f64::from(system.global_cpu_usage()) / 100.0);
+            metrics::gauge!("system.memory.usage", "state" => "used")
+                .set(system.used_memory() as f64);
+            let free = system.total_memory().saturating_sub(system.used_memory());
+            metrics::gauge!("system.memory.usage", "state" => "free").set(free as f64);
 
             if let Some(usage) = disk::check_disk_usage(&media_path) {
-                metrics::gauge!("immich.host.disk.used_bytes").set(usage.used as f64);
-                metrics::gauge!("immich.host.disk.available_bytes").set(usage.available as f64);
-                metrics::gauge!("immich.host.disk.total_bytes").set(usage.total as f64);
+                metrics::gauge!("system.filesystem.usage", "state" => "used")
+                    .set(usage.used as f64);
+                metrics::gauge!("system.filesystem.usage", "state" => "free")
+                    .set(usage.available as f64);
             }
         }
     });

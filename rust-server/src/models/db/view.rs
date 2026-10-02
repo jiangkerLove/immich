@@ -83,19 +83,7 @@ pub async fn get_assets_by_original_path(
                     FROM asset_exif e
                     WHERE e."assetId" = a.id
                 ) as exif_json,
-                (
-                    SELECT COALESCE(json_agg(json_build_object(
-                        'id', t.id,
-                        'value', t.value,
-                        'color', t.color,
-                        'createdAt', t."createdAt",
-                        'updatedAt', t."updatedAt",
-                        'parentId', t."parentId"
-                    )), '[]'::json)
-                    FROM tag t
-                    INNER JOIN tag_asset ta ON ta."tagId" = t.id
-                    WHERE ta."assetId" = a.id
-                ) as tags_json
+                NULL::json as tags_json
             FROM asset a
             INNER JOIN "user" u ON u.id = a."ownerId"
             WHERE a."ownerId" = $1

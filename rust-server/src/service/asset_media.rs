@@ -13,6 +13,7 @@ use crate::models::response::response::ErrorResp;
 use crate::service::access::{require_asset_access, require_upload_access};
 use crate::service::album::AlbumService;
 use crate::service::job::JobService;
+use crate::service::websocket::WebSocketHub;
 use crate::utils::checksum::{decode_checksum, sha1_bytes};
 use crate::utils::file_response::{
     FileResponse, file_extension, file_response, file_stem, guess_mime,
@@ -25,6 +26,7 @@ pub struct AssetMediaService {
     storage: StoragePaths,
     jobs: JobService,
     albums: AlbumService,
+    websocket: WebSocketHub,
 }
 
 #[derive(Serialize)]
@@ -44,6 +46,15 @@ pub struct AssetMediaCreateReq {
     pub duration: Option<i32>,
     pub live_photo_video_id: Option<Uuid>,
     pub visibility: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<Vec<AssetMetadataItem>>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadataItem {
+    pub key: String,
+    pub value: serde_json::Value,
 }
 
 #[derive(serde::Deserialize)]
@@ -88,12 +99,14 @@ impl AssetMediaService {
         storage: StoragePaths,
         jobs: JobService,
         albums: AlbumService,
+        websocket: WebSocketHub,
     ) -> Self {
         Self {
             pool,
             storage,
             jobs,
             albums,
+            websocket,
         }
     }
 
@@ -103,6 +116,7 @@ impl AssetMediaService {
         dto: &AssetMediaCreateReq,
         file_bytes: &[u8],
         original_name: &str,
+        sidecar: Option<(&[u8], &str)>,
     ) -> Result<AssetMediaResponse, ErrorResp> {
         require_upload_access(auth)?;
         require_permission(auth, Permission::AssetUpload)?;
@@ -126,6 +140,14 @@ impl AssetMediaService {
             });
         }
 
+        if let Some(video_id) = dto.live_photo_video_id {
+            if let Some(hidden_id) =
+                crate::service::asset::on_before_link(&self.pool, &auth.user.id, &video_id).await?
+            {
+                self.websocket.emit_asset_hidden(auth.user.id, hidden_id);
+            }
+        }
+
         let file_uuid = Uuid::new_v4().to_string().replace('-', "");
         let ext = file_extension(original_name);
         let stored_name = format!("{file_uuid}{ext}");
@@ -139,6 +161,7 @@ impl AssetMediaService {
         tokio::fs::write(&upload_path, file_bytes)
             .await
             .map_err(|e| ErrorResp::ServerError(e.to_string()))?;
+        set_mtime(&upload_path, dto.file_modified_at);
 
         let asset_type = guess_asset_type(&stored_name);
         let visibility = dto.visibility.as_deref().unwrap_or("timeline");
@@ -185,6 +208,36 @@ impl AssetMediaService {
             }
         };
 
+        if let Some(items) = dto.metadata.as_ref().filter(|items| !items.is_empty()) {
+            let pairs: Vec<(String, serde_json::Value)> = items
+                .iter()
+                .map(|item| (item.key.clone(), item.value.clone()))
+                .collect();
+            crate::models::db::asset_metadata::upsert_items(&self.pool, &asset_id, &pairs).await?;
+        }
+
+        if let Some((bytes, name)) = sidecar {
+            let sidecar_name = if name.is_empty() { "sidecar.xmp" } else { name };
+            let sidecar_path = upload_dir.join(sidecar_name);
+            if let Err(err) = tokio::fs::write(&sidecar_path, bytes).await {
+                let _ = self
+                    .jobs
+                    .queue_file_delete(&[
+                        upload_path.to_string_lossy().to_string(),
+                        sidecar_path.to_string_lossy().to_string(),
+                    ])
+                    .await;
+                return Err(ErrorResp::ServerError(err.to_string()));
+            }
+            set_mtime(&sidecar_path, dto.file_modified_at);
+            assets::upsert_sidecar_file(
+                &self.pool,
+                &asset_id,
+                sidecar_path.to_string_lossy().as_ref(),
+            )
+            .await?;
+        }
+
         assets::upsert_exif_size(&self.pool, &asset_id, file_bytes.len() as i64).await?;
         assets::update_quota_usage(&self.pool, &auth.user.id, file_bytes.len() as i64).await?;
         self.attach_to_shared_link(auth, asset_id).await?;
@@ -218,7 +271,7 @@ impl AssetMediaService {
         let use_edited = edited || auth.shared_link.is_some();
         let row = assets::get_for_original(&self.pool, asset_id, use_edited)
             .await?
-            .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Asset not found".to_string()))?;
 
         let path = row.edited_path.unwrap_or(row.original_path);
         let file_name = format!(
@@ -244,10 +297,9 @@ impl AssetMediaService {
     ) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
         require_asset_access(&self.pool, auth, asset_id, Permission::AssetView).await?;
 
+        let edited = query.edited.unwrap_or(false) || auth.shared_link.is_some();
         if query.size.as_deref() == Some("original") {
-            return Err(ErrorResp::BadRequest(
-                "May not request original file".to_string(),
-            ));
+            return Ok(thumbnail_redirect(asset_id, "original", edited));
         }
 
         let file_type = match query.size.as_deref() {
@@ -256,13 +308,21 @@ impl AssetMediaService {
             _ => "thumbnail",
         };
 
-        let row = assets::get_for_thumbnail(&self.pool, asset_id, file_type)
+        let row = assets::get_for_thumbnail(&self.pool, asset_id, file_type, edited)
             .await?
             .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))?;
 
+        if file_type == "fullsize" && is_web_supported_image(&row.original_path) && !edited {
+            return Ok(thumbnail_redirect(asset_id, "original", false));
+        }
+
+        if file_type == "fullsize" && row.path.is_none() {
+            return Ok(thumbnail_redirect(asset_id, "preview", edited));
+        }
+
         let path = row
             .path
-            .ok_or_else(|| ErrorResp::BadRequest("Asset media not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Asset media not found".to_string()))?;
 
         let suffix = if auth.shared_link.is_some() && !auth.shared_link.as_ref().unwrap().show_exif
         {
@@ -290,7 +350,7 @@ impl AssetMediaService {
         let row = assets::get_for_video(&self.pool, asset_id)
             .await?
             .ok_or_else(|| {
-                ErrorResp::BadRequest("Asset not found or asset is not a video".to_string())
+                ErrorResp::NotFound("Asset not found or asset is not a video".to_string())
             })?;
 
         let path = row.encoded_video_path.unwrap_or(row.original_path);
@@ -375,6 +435,31 @@ impl AssetMediaService {
 
 use crate::utils::permission::require_permission;
 
+fn thumbnail_redirect(
+    asset_id: &Uuid,
+    target: &str,
+    edited: bool,
+) -> axum::response::Response<axum::body::Body> {
+    let location = match (target, edited) {
+        ("original", true) => format!("/api/assets/{asset_id}/original?edited=true"),
+        ("original", false) => format!("/api/assets/{asset_id}/original"),
+        (size, true) => format!("/api/assets/{asset_id}/thumbnail?size={size}&edited=true"),
+        (size, false) => format!("/api/assets/{asset_id}/thumbnail?size={size}"),
+    };
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::FOUND)
+        .header(axum::http::header::LOCATION, location)
+        .body(axum::body::Body::empty())
+        .expect("thumbnail redirect")
+}
+
+fn is_web_supported_image(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
 fn guess_asset_type(filename: &str) -> &'static str {
     let lower = filename.to_lowercase();
     if lower.ends_with(".mp4")
@@ -396,6 +481,15 @@ fn guess_asset_type(filename: &str) -> &'static str {
     } else {
         "OTHER"
     }
+}
+
+fn set_mtime(path: &std::path::Path, modified: DateTime<Utc>) {
+    let Ok(file) = std::fs::File::options().write(true).open(path) else {
+        return;
+    };
+    let mtime =
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified.timestamp().max(0) as u64);
+    let _ = file.set_modified(mtime);
 }
 
 fn is_duplicate_error(err: &sqlx::Error) -> bool {

@@ -13,7 +13,6 @@ use crate::models::db::asset_edit::AssetEditRow;
 use crate::models::db::asset_job::{self, AssetFileJobRow, ThumbnailAssetJob, UpsertAssetFile};
 use crate::models::db::asset_ocr;
 use crate::models::db::face;
-use crate::models::db::system_metadata::get_json;
 use crate::service::job::{EntityJob, JobService, PersonJob};
 use crate::service::media::edits::{
     apply_edits, apply_exif_orientation, face_crop_from_bbox, output_dimensions, parse_crop,
@@ -28,6 +27,7 @@ use crate::service::media::visibility::{
 };
 use crate::utils::profile_image::cover_resize_dimensions;
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::get_merged;
 use crate::utils::system_config::json_str;
 
 const FACE_THUMBNAIL_SIZE: u32 = 250;
@@ -127,6 +127,11 @@ impl ThumbnailService {
         };
 
         if asset.visibility == "hidden" {
+            // Upstream `onDone` still queues follow-ups when the thumbnail job is Skipped.
+            if job.notify.unwrap_or(false) || job.source.as_deref() == Some("upload") {
+                self.queue_follow_up_jobs(job, asset.asset_type == "VIDEO")
+                    .await?;
+            }
             return Ok(ThumbnailJobOutcome::Skipped);
         }
 
@@ -562,10 +567,10 @@ impl ThumbnailService {
 
     async fn load_image_config(&self) -> Result<ImageFormatConfig, String> {
         let mut config = ImageFormatConfig::default();
-        let stored = get_json(&self.pool, "system-config")
+        let stored = get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        if let Some(image) = stored.and_then(|value| value.get("image").cloned()) {
+        if let Some(image) = stored.get("image").cloned() {
             if let Some(preview) = image.get("preview") {
                 config.preview_format = read_string(preview, "format", &config.preview_format);
                 config.preview_size = read_u32(preview, "size", config.preview_size);
@@ -604,12 +609,10 @@ impl ThumbnailService {
     }
 
     async fn load_ffmpeg_tonemap(&self) -> Result<String, String> {
-        let stored = get_json(&self.pool, "system-config")
+        let stored = get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        let ffmpeg = stored
-            .and_then(|value| value.get("ffmpeg").cloned())
-            .unwrap_or_default();
+        let ffmpeg = stored.get("ffmpeg").cloned().unwrap_or_default();
         Ok(json_str(&ffmpeg, &["tonemap"], "hable"))
     }
 

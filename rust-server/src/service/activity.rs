@@ -121,7 +121,8 @@ impl ActivityService {
         require_permission(auth, Permission::ActivityStatistics)?;
         require_album_access(&self.pool, auth, &dto.album_id, Permission::AlbumRead).await?;
 
-        let stats = activity::get_statistics(&self.pool, &dto.album_id, dto.asset_id.as_ref()).await?;
+        let stats =
+            activity::get_statistics(&self.pool, &dto.album_id, dto.asset_id.as_ref()).await?;
         Ok(ActivityStatisticsResponse {
             comments: stats.comments,
             likes: stats.likes,
@@ -141,50 +142,37 @@ impl ActivityService {
             ));
         }
 
-        if let Some(asset_id) = dto.asset_id {
-            if !activity::asset_in_album(&self.pool, &dto.album_id, &asset_id).await? {
-                return Err(ErrorResp::BadRequest("Asset not in album".to_string()));
-            }
-        }
-
         let is_like = dto.activity_type == "like";
         if is_like {
-            if dto.comment.is_some() {
-                return Err(ErrorResp::BadRequest(
-                    "Comment must not be provided for likes".to_string(),
-                ));
-            }
-            if let Some(existing) =
-                activity::find_like(&self.pool, &dto.album_id, &auth.user.id, dto.asset_id.as_ref())
-                    .await?
+            if let Some(existing) = activity::find_like(
+                &self.pool,
+                &dto.album_id,
+                &auth.user.id,
+                dto.asset_id.as_ref(),
+            )
+            .await?
             {
                 return Ok(ActivityCreateResult {
                     duplicate: true,
                     value: map_activity(existing),
                 });
             }
-        } else if dto.activity_type == "comment" {
-            let comment = dto
-                .comment
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| ErrorResp::BadRequest("Comment is required".to_string()))?;
+        } else if dto.activity_type != "comment" {
+            return Err(ErrorResp::BadRequest("Invalid activity type".to_string()));
+        } else {
             let row = activity::create(
                 &self.pool,
                 &dto.album_id,
                 &auth.user.id,
                 dto.asset_id.as_ref(),
                 false,
-                Some(comment),
+                dto.comment.as_deref(),
             )
             .await?;
             return Ok(ActivityCreateResult {
                 duplicate: false,
                 value: map_activity(row),
             });
-        } else {
-            return Err(ErrorResp::BadRequest("Invalid activity type".to_string()));
         }
 
         let row = activity::create(

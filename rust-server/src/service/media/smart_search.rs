@@ -43,9 +43,6 @@ impl SmartSearchService {
         if !is_smart_search_enabled(&config) {
             return Ok(SmartSearchQueueAllOutcome::Skipped);
         }
-        if !crate::utils::vector::smart_search_available(&self.pool).await {
-            return Ok(SmartSearchQueueAllOutcome::Skipped);
-        }
 
         if force {
             let dim_size = get_clip_dim_size(&config.clip.model_name)?;
@@ -77,10 +74,12 @@ impl SmartSearchService {
             .await
             .map_err(|err| err.to_string())?;
         if !is_smart_search_enabled(&config) {
+            self.queue_upload_duplicates(asset_id, job).await?;
             return Ok(SmartSearchOutcome::Skipped);
         }
 
         if !crate::utils::vector::smart_search_available(&self.pool).await {
+            self.queue_upload_duplicates(asset_id, job).await?;
             return Ok(SmartSearchOutcome::Skipped);
         }
 
@@ -102,6 +101,7 @@ impl SmartSearchService {
         };
 
         if asset.visibility == "hidden" {
+            self.queue_upload_duplicates(asset_id, job).await?;
             return Ok(SmartSearchOutcome::Skipped);
         }
 
@@ -113,10 +113,26 @@ impl SmartSearchService {
             .await
             .map_err(|err| err.to_string())?;
 
+        if crate::models::db::advisory_lock::is_busy(
+            &self.pool,
+            crate::models::db::advisory_lock::LOCK_CLIP_DIM_SIZE,
+        )
+        .await
+        {
+            tracing::debug!("waiting for CLIP dimension size to be updated");
+            crate::models::db::advisory_lock::wait_until_free(
+                &self.pool,
+                crate::models::db::advisory_lock::LOCK_CLIP_DIM_SIZE,
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        }
+
         let new_config = get_machine_learning_config(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
         if new_config.clip.model_name != model_name {
+            self.queue_upload_duplicates(asset_id, job).await?;
             return Ok(SmartSearchOutcome::Skipped);
         }
 
@@ -124,13 +140,22 @@ impl SmartSearchService {
             .await
             .map_err(|err| err.to_string())?;
 
+        self.queue_upload_duplicates(asset_id, job).await?;
+
+        Ok(SmartSearchOutcome::Success)
+    }
+
+    async fn queue_upload_duplicates(
+        &self,
+        asset_id: &Uuid,
+        job: &EntityJob,
+    ) -> Result<(), String> {
         if job.source.as_deref() == Some("upload") {
             self.jobs
                 .queue_asset_detect_duplicates(asset_id, job.source.as_deref())
                 .await
                 .map_err(|err| err.to_string())?;
         }
-
-        Ok(SmartSearchOutcome::Success)
+        Ok(())
     }
 }

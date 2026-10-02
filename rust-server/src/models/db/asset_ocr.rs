@@ -1,7 +1,7 @@
 use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
-#[derive(Debug, FromRow, serde::Serialize)]
+#[derive(Debug, Clone, FromRow, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetOcrRow {
     pub id: Uuid,

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{Duration, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -9,27 +9,28 @@ use crate::models::db::auth_permission::Permission;
 use crate::models::db::sessions::{is_pending_sync_reset, reset_sync_progress};
 use crate::models::db::sync_checkpoint::{self, SyncCheckpointRow};
 use crate::models::db::sync_repository::{
+    AlbumUserRow, SyncBackfillOptions, SyncCreatedAfterOptions, SyncQueryOptions,
     album_asset_exif_get_backfill, album_asset_exif_get_creates, album_asset_exif_get_updates,
-    album_asset_get_backfill, album_asset_get_creates, album_asset_get_updates, album_get_album_users,
-    album_get_created_after, album_get_deletes, album_get_upserts, album_to_asset_get_backfill,
-    album_to_asset_get_deletes, album_to_asset_get_upserts, album_user_get_backfill,
-    album_user_get_deletes, album_user_get_upserts, asset_edit_get_deletes, asset_edit_get_upserts,
-    asset_exif_get_upserts, asset_face_get_deletes, asset_face_get_upserts, asset_get_deletes,
-    asset_get_upserts, asset_metadata_get_deletes, asset_metadata_get_upserts, asset_ocr_get_deletes,
-    asset_ocr_get_upserts, auth_user_get_upserts, memory_get_deletes, memory_get_upserts,
-    memory_to_asset_get_deletes, memory_to_asset_get_upserts, partner_asset_exif_get_backfill,
-    partner_asset_exif_get_upserts, partner_asset_get_backfill, partner_asset_get_deletes,
-    partner_asset_get_upserts, partner_get_created_after, partner_get_deletes, partner_get_upserts,
+    album_asset_get_backfill, album_asset_get_creates, album_asset_get_updates,
+    album_get_album_users, album_get_created_after, album_get_deletes, album_get_upserts,
+    album_to_asset_get_backfill, album_to_asset_get_deletes, album_to_asset_get_upserts,
+    album_user_get_backfill, album_user_get_deletes, album_user_get_upserts,
+    asset_edit_get_deletes, asset_edit_get_upserts, asset_exif_get_upserts, asset_face_get_deletes,
+    asset_face_get_upserts, asset_get_deletes, asset_get_upserts, asset_metadata_get_deletes,
+    asset_metadata_get_upserts, asset_ocr_get_deletes, asset_ocr_get_upserts,
+    auth_user_get_upserts, memory_get_deletes, memory_get_upserts, memory_to_asset_get_deletes,
+    memory_to_asset_get_upserts, partner_asset_exif_get_backfill, partner_asset_exif_get_upserts,
+    partner_asset_get_backfill, partner_asset_get_deletes, partner_asset_get_upserts,
+    partner_get_created_after, partner_get_deletes, partner_get_upserts,
     partner_stack_get_backfill, partner_stack_get_deletes, partner_stack_get_upserts,
     person_get_deletes, person_get_upserts, stack_get_deletes, stack_get_upserts, user_get_deletes,
-    user_get_upserts, user_metadata_get_deletes, user_metadata_get_upserts, AlbumUserRow,
-    SyncBackfillOptions, SyncCreatedAfterOptions, SyncQueryOptions,
+    user_get_upserts, user_metadata_get_deletes, user_metadata_get_upserts,
 };
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::sync::{SyncAckDeleteReq, SyncAckSetReq, SyncStreamReq};
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::require_permission;
-use crate::utils::sync::{from_ack, serialize, to_ack, SyncAck};
+use crate::utils::sync::{SyncAck, from_ack, serialize, to_ack};
 
 pub const COMPLETE_ID: &str = "complete";
 pub const MAX_DAYS: i64 = 30;
@@ -212,10 +213,9 @@ impl SyncService {
         auth: &AuthDto,
         dto: &SyncStreamReq,
     ) -> Result<Vec<String>, ErrorResp> {
-        let session = auth
-            .session
-            .as_ref()
-            .ok_or_else(|| ErrorResp::Forbidden("Sync endpoints cannot be used with API keys".to_string()))?;
+        let session = auth.session.as_ref().ok_or_else(|| {
+            ErrorResp::Forbidden("Sync endpoints cannot be used with API keys".to_string())
+        })?;
         require_permission(auth, Permission::SyncStream)?;
 
         let session_id = Uuid::parse_str(&session.id)
@@ -303,13 +303,8 @@ impl SyncService {
                         .await?
                 }
                 SYNC_REQUEST_PARTNER_ASSETS_V2 => {
-                    self.sync_partner_assets_v2(
-                        &options,
-                        &mut lines,
-                        &checkpoint_map,
-                        &session_id,
-                    )
-                    .await?
+                    self.sync_partner_assets_v2(&options, &mut lines, &checkpoint_map, &session_id)
+                        .await?
                 }
                 SYNC_REQUEST_ASSET_METADATA_V1 => {
                     self.sync_asset_metadata_v1(&options, &mut lines, &checkpoint_map)
@@ -333,31 +328,16 @@ impl SyncService {
                         .await?
                 }
                 SYNC_REQUEST_ALBUM_USERS_V1 => {
-                    self.sync_album_users_v1(
-                        &options,
-                        &mut lines,
-                        &checkpoint_map,
-                        &session_id,
-                    )
-                    .await?
+                    self.sync_album_users_v1(&options, &mut lines, &checkpoint_map, &session_id)
+                        .await?
                 }
                 SYNC_REQUEST_ALBUM_ASSETS_V2 => {
-                    self.sync_album_assets_v2(
-                        &options,
-                        &mut lines,
-                        &checkpoint_map,
-                        &session_id,
-                    )
-                    .await?
+                    self.sync_album_assets_v2(&options, &mut lines, &checkpoint_map, &session_id)
+                        .await?
                 }
                 SYNC_REQUEST_ALBUM_TO_ASSETS_V1 => {
-                    self.sync_album_to_assets_v1(
-                        &options,
-                        &mut lines,
-                        &checkpoint_map,
-                        &session_id,
-                    )
-                    .await?
+                    self.sync_album_to_assets_v1(&options, &mut lines, &checkpoint_map, &session_id)
+                        .await?
                 }
                 SYNC_REQUEST_ALBUM_ASSET_EXIFS_V1 => {
                     self.sync_album_asset_exifs_v1(
@@ -381,13 +361,8 @@ impl SyncService {
                         .await?
                 }
                 SYNC_REQUEST_PARTNER_STACKS_V1 => {
-                    self.sync_partner_stack_v1(
-                        &options,
-                        &mut lines,
-                        &checkpoint_map,
-                        &session_id,
-                    )
-                    .await?
+                    self.sync_partner_stack_v1(&options, &mut lines, &checkpoint_map, &session_id)
+                        .await?
                 }
                 SYNC_REQUEST_PEOPLE_V1 => {
                     self.sync_people_v1(&options, &mut lines, &checkpoint_map)
@@ -509,13 +484,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_USER_V1;
@@ -549,13 +518,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_PARTNER_V1;
@@ -565,13 +528,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -589,13 +546,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_ASSET_V2;
@@ -605,13 +556,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -630,13 +575,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let backfill_type = SYNC_ENTITY_PARTNER_ASSET_BACKFILL_V2;
@@ -690,13 +629,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -714,13 +647,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -738,13 +665,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_ASSET_EDIT_V1;
@@ -754,13 +675,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -823,13 +738,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -847,13 +756,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_ALBUM_V1;
@@ -870,10 +773,11 @@ impl SyncService {
                 .and_then(|s| Uuid::parse_str(s).ok())
                 .ok_or_else(|| ErrorResp::ServerError("Invalid album id".to_string()))?;
             let album_users = album_get_album_users(&self.pool, &album_id).await?;
+            let album = album_sync_payload(&upsert.data);
             push_line(
                 lines,
                 upsert_type,
-                &sync_album_v2_to_v1(&upsert.data, &album_users),
+                &sync_album_v2_to_v1(&album, &album_users),
                 &[&upsert.update_id],
                 None,
             );
@@ -894,13 +798,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_ALBUM_V2;
@@ -913,7 +811,7 @@ impl SyncService {
             push_line(
                 lines,
                 upsert_type,
-                &upsert.data,
+                &album_sync_payload(&upsert.data),
                 &[&upsert.update_id],
                 None,
             );
@@ -935,13 +833,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let backfill_type = SYNC_ENTITY_ALBUM_USER_BACKFILL_V1;
@@ -991,13 +883,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1070,21 +956,12 @@ impl SyncService {
             )
             .await?;
             for upsert in updates {
-                push_line(
-                    lines,
-                    update_type,
-                    &upsert.data,
-                    &[&upsert.update_id],
-                    None,
-                );
+                push_line(lines, update_type, &upsert.data, &[&upsert.update_id], None);
             }
         }
 
-        let creates = album_asset_get_creates(
-            &self.pool,
-            &with_ack(options, create_checkpoint),
-        )
-        .await?;
+        let creates =
+            album_asset_get_creates(&self.pool, &with_ack(options, create_checkpoint)).await?;
         let mut first = true;
         for upsert in creates {
             if first {
@@ -1097,13 +974,7 @@ impl SyncService {
                 );
                 first = false;
             }
-            push_line(
-                lines,
-                create_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, create_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1171,21 +1042,12 @@ impl SyncService {
             )
             .await?;
             for upsert in updates {
-                push_line(
-                    lines,
-                    update_type,
-                    &upsert.data,
-                    &[&upsert.update_id],
-                    None,
-                );
+                push_line(lines, update_type, &upsert.data, &[&upsert.update_id], None);
             }
         }
 
-        let creates = album_asset_exif_get_creates(
-            &self.pool,
-            &with_ack(options, create_checkpoint),
-        )
-        .await?;
+        let creates =
+            album_asset_exif_get_creates(&self.pool, &with_ack(options, create_checkpoint)).await?;
         let mut first = true;
         for upsert in creates {
             if first {
@@ -1198,13 +1060,7 @@ impl SyncService {
                 );
                 first = false;
             }
-            push_line(
-                lines,
-                create_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, create_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1223,13 +1079,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let backfill_type = SYNC_ENTITY_ALBUM_TO_ASSET_BACKFILL_V1;
@@ -1279,13 +1129,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1303,13 +1147,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_MEMORY_V1;
@@ -1319,13 +1157,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1343,13 +1175,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_MEMORY_TO_ASSET_V1;
@@ -1359,13 +1185,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1383,13 +1203,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_STACK_V1;
@@ -1399,13 +1213,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1424,13 +1232,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let backfill_type = SYNC_ENTITY_PARTNER_STACK_BACKFILL_V1;
@@ -1484,13 +1286,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1508,13 +1304,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_PERSON_V1;
@@ -1524,13 +1314,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1548,13 +1332,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_ASSET_FACE_V2;
@@ -1564,13 +1342,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1588,13 +1360,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_USER_METADATA_V1;
@@ -1604,13 +1370,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1628,13 +1388,7 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            push_line(
-                lines,
-                delete_type,
-                &delete.data,
-                &[&delete.audit_id],
-                None,
-            );
+            push_line(lines, delete_type, &delete.data, &[&delete.audit_id], None);
         }
 
         let upsert_type = SYNC_ENTITY_ASSET_METADATA_V1;
@@ -1644,13 +1398,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1682,13 +1430,7 @@ impl SyncService {
         )
         .await?;
         for upsert in upserts {
-            push_line(
-                lines,
-                upsert_type,
-                &upsert.data,
-                &[&upsert.update_id],
-                None,
-            );
+            push_line(lines, upsert_type, &upsert.data, &[&upsert.update_id], None);
         }
         Ok(())
     }
@@ -1769,6 +1511,21 @@ fn user_data_with_profile_flag(mut data: Value) -> Value {
         obj.insert("hasProfileImage".to_string(), json!(has_profile));
     }
     data
+}
+
+/// Official sync still sends `''` for a missing album description. v4 will switch to null.
+fn album_sync_payload(album: &Value) -> Value {
+    let mut album = album.clone();
+    if let Some(obj) = album.as_object_mut() {
+        let missing = match obj.get("description") {
+            None | Some(Value::Null) => true,
+            Some(_) => false,
+        };
+        if missing {
+            obj.insert("description".to_string(), json!(""));
+        }
+    }
+    album
 }
 
 pub fn sync_album_v2_to_v1(album: &Value, album_users: &[AlbumUserRow]) -> Value {

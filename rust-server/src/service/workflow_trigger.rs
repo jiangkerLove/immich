@@ -12,7 +12,7 @@ pub async fn on_asset_trigger(
     asset_id: &Uuid,
     trigger: &str,
 ) -> Result<(), ErrorResp> {
-    let workflows = workflow::search(pool, user_id, None, Some(trigger), Some(true), None)
+    let workflows = workflow::search(pool, user_id, None, Some(trigger), None, None)
         .await
         .map_err(|err| ErrorResp::ServerError(err.to_string()))?;
 

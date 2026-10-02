@@ -10,7 +10,6 @@ use crate::models::db::notification::{
     filter_owned_ids, get_notification, search_notifications, update_notification,
     update_notifications,
 };
-use crate::models::db::system_metadata::get_json;
 use crate::models::db::user_metadata::UserMetadataPO;
 use crate::models::db::users::UserDb;
 use crate::models::dto::auth::AuthDto;
@@ -27,6 +26,7 @@ use crate::service::websocket::WebSocketHub;
 use crate::utils::file_response::file_extension;
 use crate::utils::permission::{require_admin, require_permission};
 use crate::utils::preferences::resolve_preferences;
+use crate::utils::system_config::get_merged;
 
 #[derive(Clone)]
 pub struct NotificationService {
@@ -146,9 +146,7 @@ impl NotificationService {
         require_permission(auth, Permission::NotificationDelete)?;
         self.ensure_owned(auth, &[*id], Permission::NotificationDelete)
             .await?;
-        if !delete_notification(&self.pool, &auth.user.id, id).await? {
-            return Err(ErrorResp::BadRequest("Notification not found".to_string()));
-        }
+        let _ = delete_notification(&self.pool, &auth.user.id, id).await?;
         Ok(())
     }
 
@@ -185,10 +183,7 @@ impl NotificationService {
         .await
         .map_err(|_| ErrorResp::BadRequest("Failed to create notification".to_string()))?;
 
-        let response = map_row(row);
-        self.websocket
-            .emit_notification(dto.user_id, response.clone());
-        Ok(response)
+        Ok(map_row(row))
     }
 
     pub async fn admin_send_test_email(
@@ -297,7 +292,7 @@ impl NotificationService {
             }
             EmailTemplate::AlbumUpdate => {
                 let custom = if dto.template.is_empty() {
-                    defaults.album_update_template
+                    defaults.album_invite_template.clone()
                 } else {
                     dto.template.clone()
                 };
@@ -383,29 +378,19 @@ struct EmailTemplateDefaults {
 }
 
 async fn get_external_domain(pool: &PgPool) -> Result<String, ErrorResp> {
-    let config = get_json(pool, "system-config").await?;
+    let config = get_merged(pool).await?;
     Ok(config
-        .and_then(|value| {
-            value
-                .get("server")
-                .and_then(|server| server.get("externalDomain"))
-                .and_then(|domain| domain.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_default())
+        .get("server")
+        .and_then(|server| server.get("externalDomain"))
+        .and_then(|domain| domain.as_str())
+        .unwrap_or_default()
+        .to_string())
 }
 
 async fn get_email_templates(pool: &PgPool) -> Result<EmailTemplateDefaults, ErrorResp> {
-    let defaults_json = include_str!("../../config/system_config_defaults.json");
-    let defaults: serde_json::Value = serde_json::from_str(defaults_json).unwrap_or_default();
-    let stored = get_json(pool, "system-config").await?;
+    let stored = get_merged(pool).await?;
 
-    let templates = stored
-        .as_ref()
-        .and_then(|value| value.get("templates"))
-        .or_else(|| defaults.get("templates"))
-        .cloned()
-        .unwrap_or_default();
+    let templates = stored.get("templates").cloned().unwrap_or_default();
 
     let email = templates.get("email").cloned().unwrap_or_default();
 
@@ -725,7 +710,7 @@ impl NotificationJobProcessor {
             return Ok(None);
         };
 
-        let thumb = assets::get_for_thumbnail(&self.pool, &thumbnail_id, "thumbnail")
+        let thumb = assets::get_for_thumbnail(&self.pool, &thumbnail_id, "thumbnail", true)
             .await?
             .and_then(|row| row.path);
 
@@ -742,16 +727,9 @@ impl NotificationJobProcessor {
 }
 
 async fn get_smtp_config(pool: &PgPool) -> Result<SmtpConfig, ErrorResp> {
-    let defaults_json = include_str!("../../config/system_config_defaults.json");
-    let defaults: serde_json::Value = serde_json::from_str(defaults_json).unwrap_or_default();
-    let stored = get_json(pool, "system-config").await?;
+    let stored = get_merged(pool).await?;
 
-    let notifications = stored
-        .as_ref()
-        .and_then(|value| value.get("notifications"))
-        .or_else(|| defaults.get("notifications"))
-        .cloned()
-        .unwrap_or_default();
+    let notifications = stored.get("notifications").cloned().unwrap_or_default();
 
     serde_json::from_value(notifications.get("smtp").cloned().unwrap_or_default())
         .map_err(|err| ErrorResp::ServerError(err.to_string()))

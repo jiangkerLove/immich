@@ -803,7 +803,7 @@ impl JobService {
                 self.queue_json_job(
                     QUEUE_INTEGRITY,
                     "IntegrityDeleteReportType",
-                    serde_json::json!({ "type": "checksum-fail" }),
+                    serde_json::json!({ "type": "checksum_mismatch" }),
                 )
                 .await
             }
@@ -891,6 +891,8 @@ impl JobService {
         if queue.get_active_count().await.unwrap_or(0) > 0 {
             return Err(ErrorResp::BadRequest("Job is already running".to_string()));
         }
+
+        crate::utils::telemetry::record_queue_started(queue_name);
 
         let force_value = serde_json::json!({ "force": force });
 

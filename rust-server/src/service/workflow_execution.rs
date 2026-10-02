@@ -25,7 +25,6 @@ const WORKFLOW_TYPE_ASSET_V1: &str = TYPE_ASSET_V1;
 pub enum WorkflowExecutionOutcome {
     Success,
     Failed,
-    Skipped,
 }
 
 pub struct WorkflowExecutionService {
@@ -65,7 +64,7 @@ impl WorkflowExecutionService {
             .await
             .map_err(|err| err.to_string())?
         else {
-            return Ok(WorkflowExecutionOutcome::Skipped);
+            return Ok(WorkflowExecutionOutcome::Success);
         };
 
         let steps: Vec<WorkflowRunStep> =
@@ -76,7 +75,7 @@ impl WorkflowExecutionService {
 
         match workflow_type {
             WORKFLOW_TYPE_ASSET_V1 => self.execute_asset_v1(&workflow, &steps, asset_id).await,
-            _ => Ok(WorkflowExecutionOutcome::Skipped),
+            _ => Ok(WorkflowExecutionOutcome::Success),
         }
     }
 
@@ -114,7 +113,8 @@ impl WorkflowExecutionService {
                 Err(err) => {
                     tracing::error!(
                         "Error executing workflow {} run {}: {err}",
-                        workflow.id, run_id
+                        workflow.id,
+                        run_id
                     );
                     self.log_run(
                         workflow,

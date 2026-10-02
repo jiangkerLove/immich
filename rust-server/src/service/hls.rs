@@ -154,15 +154,12 @@ impl HlsService {
 }
 
 pub async fn is_realtime_transcoding_enabled(pool: &PgPool) -> Result<bool, ErrorResp> {
-    let config = crate::models::db::system_metadata::get_json(pool, "system-config").await?;
+    let config = crate::utils::system_config::get_merged(pool).await?;
     Ok(config
-        .and_then(|value| {
-            value
-                .get("ffmpeg")
-                .and_then(|ffmpeg| ffmpeg.get("realtime"))
-                .and_then(|realtime| realtime.get("enabled"))
-                .and_then(|enabled| enabled.as_bool())
-        })
+        .get("ffmpeg")
+        .and_then(|ffmpeg| ffmpeg.get("realtime"))
+        .and_then(|realtime| realtime.get("enabled"))
+        .and_then(|enabled| enabled.as_bool())
         .unwrap_or(false))
 }
 

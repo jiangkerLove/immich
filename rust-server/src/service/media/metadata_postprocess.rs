@@ -9,12 +9,12 @@ use crate::models::db::assets::{self, AssetUpdateFields, NewAsset};
 use crate::models::db::face::{self, NewExifFace};
 use crate::models::db::metadata_job::{self, MetadataExtractionAsset, UpsertAssetExif};
 use crate::models::db::person;
-use crate::models::db::system_metadata::get_json;
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{self, tag_f64, tag_string, tag_validated_i32, tag_value};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::checksum::sha1_bytes;
 use crate::utils::storage::StoragePaths;
+use crate::utils::system_config::get_merged;
 
 const QUEUE_BACKGROUND: &str = "backgroundTask";
 
@@ -75,12 +75,9 @@ pub async fn run_post_processing(
 }
 
 async fn is_face_import_enabled(pool: &PgPool) -> Result<bool, String> {
-    let config = get_json(pool, "system-config")
-        .await
-        .map_err(|err| err.to_string())?;
+    let config = get_merged(pool).await.map_err(|err| err.to_string())?;
     Ok(config
-        .as_ref()
-        .and_then(|value| value.get("metadata"))
+        .get("metadata")
         .and_then(|value| value.get("faces"))
         .and_then(|value| value.get("import"))
         .and_then(|value| value.as_bool())

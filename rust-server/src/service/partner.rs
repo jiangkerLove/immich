@@ -77,12 +77,6 @@ impl PartnerService {
     ) -> Result<PartnerResponse, ErrorResp> {
         require_permission(auth, Permission::PartnerCreate)?;
 
-        if dto.shared_with_id == auth.user.id {
-            return Err(ErrorResp::BadRequest(
-                "Cannot share with yourself".to_string(),
-            ));
-        }
-
         if !album::user_exists(&self.pool, &dto.shared_with_id).await? {
             return Err(ErrorResp::BadRequest("Invalid user".to_string()));
         }

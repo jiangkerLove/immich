@@ -54,12 +54,13 @@ impl WorkflowProcessor {
                     .await?
                 {
                     WorkflowExecutionOutcome::Success => Ok(JobWorkerStatus::Success),
-                    WorkflowExecutionOutcome::Skipped => Ok(JobWorkerStatus::Skipped),
                     WorkflowExecutionOutcome::Failed => Ok(JobWorkerStatus::Failed),
                 }
             }
             other => {
-                tracing::warn!("workflow job {other} is not implemented in rust-server yet; skipping");
+                tracing::warn!(
+                    "workflow job {other} is not implemented in rust-server yet; skipping"
+                );
                 Ok(JobWorkerStatus::Skipped)
             }
         }

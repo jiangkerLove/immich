@@ -43,7 +43,10 @@ const PARTNER_USER_SELECT: &str = r#"
     u."profileChangedAt" as profile_changed_at
 "#;
 
-pub async fn get_all(pool: &Pool<Postgres>, user_id: &Uuid) -> Result<Vec<PartnerRow>, sqlx::Error> {
+pub async fn get_all(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+) -> Result<Vec<PartnerRow>, sqlx::Error> {
     sqlx::query_as::<_, PartnerRow>(&format!(
         r#"
             SELECT {PARTNER_USER_SELECT}
@@ -182,6 +185,24 @@ pub async fn partner_exists_for_update(
     .fetch_optional(pool)
     .await?;
     Ok(exists.is_some())
+}
+
+pub async fn get_partner_ids(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+            SELECT partner."sharedById"
+            FROM partner
+            INNER JOIN "user" AS shared_by ON shared_by.id = partner."sharedById" AND shared_by."deletedAt" IS NULL
+            INNER JOIN "user" AS shared_with ON shared_with.id = partner."sharedWithId" AND shared_with."deletedAt" IS NULL
+            WHERE partner."sharedWithId" = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn get_timeline_partner_ids(

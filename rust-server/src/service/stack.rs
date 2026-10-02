@@ -3,14 +3,14 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::assets;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::stack;
 use crate::models::dto::auth::AuthDto;
-use crate::models::response::asset::{map_assets, AssetResponse};
+use crate::models::response::asset::{AssetResponse, map_assets};
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct StackService {
@@ -61,12 +61,8 @@ impl StackService {
         query: &StackSearchQuery,
     ) -> Result<Vec<StackResponse>, ErrorResp> {
         require_permission(auth, Permission::StackRead)?;
-        let rows = stack::search(
-            &self.pool,
-            &auth.user.id,
-            query.primary_asset_id.as_ref(),
-        )
-        .await?;
+        let rows =
+            stack::search(&self.pool, &auth.user.id, query.primary_asset_id.as_ref()).await?;
 
         let mut responses = Vec::with_capacity(rows.len());
         for row in rows {
@@ -81,13 +77,6 @@ impl StackService {
         dto: &StackCreateReq,
     ) -> Result<StackResponse, ErrorResp> {
         require_permission(auth, Permission::StackCreate)?;
-
-        if dto.asset_ids.len() < 2 {
-            return Err(ErrorResp::BadRequest(
-                "At least 2 assets are required".to_string(),
-            ));
-        }
-
         require_assets_access(&self.pool, auth, &dto.asset_ids, Permission::AssetUpdate).await?;
 
         let row = stack::create(&self.pool, &auth.user.id, &dto.asset_ids).await?;
@@ -97,7 +86,8 @@ impl StackService {
 
     pub async fn get(&self, auth: &AuthDto, id: &Uuid) -> Result<StackResponse, ErrorResp> {
         require_permission(auth, Permission::StackRead)?;
-        self.require_stack_owner(auth, &[*id]).await?;
+        self.require_stack_owner(auth, &[*id], Permission::StackRead)
+            .await?;
         let row = stack::get_by_id(&self.pool, id)
             .await?
             .ok_or_else(|| ErrorResp::BadRequest("Asset stack not found".to_string()))?;
@@ -111,10 +101,12 @@ impl StackService {
         dto: &StackUpdateReq,
     ) -> Result<StackResponse, ErrorResp> {
         require_permission(auth, Permission::StackUpdate)?;
-        self.require_stack_owner(auth, &[*id]).await?;
+        self.require_stack_owner(auth, &[*id], Permission::StackUpdate)
+            .await?;
 
         let Some(primary_asset_id) = dto.primary_asset_id else {
-            return Err(ErrorResp::BadRequest("No fields to update".to_string()));
+            self.websocket.emit_stack_update(auth.user.id);
+            return self.get(auth, id).await;
         };
 
         let asset_ids = stack::list_asset_ids(&self.pool, id).await?;
@@ -131,7 +123,8 @@ impl StackService {
 
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::StackDelete)?;
-        self.require_stack_owner(auth, &[*id]).await?;
+        self.require_stack_owner(auth, &[*id], Permission::StackDelete)
+            .await?;
         stack::delete(&self.pool, id).await?;
         self.websocket.emit_stack_update(auth.user.id);
         Ok(())
@@ -139,7 +132,8 @@ impl StackService {
 
     pub async fn delete_all(&self, auth: &AuthDto, dto: &BulkIdsReq) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::StackDelete)?;
-        self.require_stack_owner(auth, &dto.ids).await?;
+        self.require_stack_owner(auth, &dto.ids, Permission::StackDelete)
+            .await?;
         stack::delete_all(&self.pool, &dto.ids).await?;
         self.websocket.emit_stack_update(auth.user.id);
         Ok(())
@@ -152,7 +146,8 @@ impl StackService {
         asset_id: &Uuid,
     ) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::StackUpdate)?;
-        self.require_stack_owner(auth, &[*stack_id]).await?;
+        self.require_stack_owner(auth, &[*stack_id], Permission::StackUpdate)
+            .await?;
 
         let row = stack::get_for_asset_removal(&self.pool, asset_id)
             .await?
@@ -173,10 +168,16 @@ impl StackService {
         Ok(())
     }
 
-    async fn require_stack_owner(&self, auth: &AuthDto, ids: &[Uuid]) -> Result<(), ErrorResp> {
+    async fn require_stack_owner(
+        &self,
+        auth: &AuthDto,
+        ids: &[Uuid],
+        permission: Permission,
+    ) -> Result<(), ErrorResp> {
         if !stack::owner_owns_stacks(&self.pool, &auth.user.id, ids).await? {
             return Err(ErrorResp::BadRequest(format!(
-                "Not found or no stack access"
+                "Not found or no {} access",
+                permission.as_str()
             )));
         }
         Ok(())
@@ -195,7 +196,8 @@ impl StackService {
         mapped.sort_by_key(|asset| asset.id != *primary_asset_id);
         if !mapped.iter().any(|asset| asset.id == *primary_asset_id) {
             if let Some(row) = assets::get_detail_by_id(&self.pool, primary_asset_id).await? {
-                let mut single = map_assets(&self.pool, std::slice::from_ref(&row), auth, false).await?;
+                let mut single =
+                    map_assets(&self.pool, std::slice::from_ref(&row), auth, false).await?;
                 mapped.splice(0..0, single.drain(..));
             }
         }

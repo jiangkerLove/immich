@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::database_backups::is_valid_database_backup_name;
-use crate::utils::file_response::{file_response, FileResponse};
+use crate::utils::file_response::{FileResponse, file_response};
 use crate::utils::permission::require_admin;
 use crate::utils::storage::StoragePaths;
 
@@ -46,10 +46,21 @@ impl DatabaseBackupService {
     }
 
     fn local_timezone_label() -> String {
-        chrono::Local::now().offset().to_string()
+        if let Ok(path) = std::fs::read_link("/etc/localtime") {
+            let text = path.to_string_lossy();
+            if let Some(name) = text.split("zoneinfo/").nth(1) {
+                if !name.is_empty() {
+                    return name.to_string();
+                }
+            }
+        }
+        std::env::var("TZ").unwrap_or_else(|_| "UTC".to_string())
     }
 
-    pub async fn list_backups(&self, auth: &AuthDto) -> Result<DatabaseBackupListResponse, ErrorResp> {
+    pub async fn list_backups(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<DatabaseBackupListResponse, ErrorResp> {
         require_admin(auth)?;
         self.list_backups_internal().await
     }

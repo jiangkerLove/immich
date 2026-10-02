@@ -111,7 +111,7 @@ pub async fn get_for_originals(
             LEFT JOIN asset_file af ON asset.id = af."assetId"
                 AND af."isEdited" = $1
                 AND af.type = 'fullsize'
-            WHERE asset.id = ANY($2) AND asset."deletedAt" IS NULL
+            WHERE asset.id = ANY($2)
         "#,
     )
     .bind(edited)
@@ -124,23 +124,26 @@ pub async fn get_for_thumbnail(
     pool: &Pool<Postgres>,
     asset_id: &Uuid,
     file_type: &str,
+    edited: bool,
 ) -> Result<Option<AssetThumbnailRow>, sqlx::Error> {
-    sqlx::query_as::<_, AssetThumbnailRow>(
+    let order = if edited { "DESC" } else { "ASC" };
+    let sql = format!(
         r#"
             SELECT asset."originalPath" as original_path,
                    asset."originalFileName" as original_file_name,
                    af.path
             FROM asset
             LEFT JOIN asset_file af ON asset.id = af."assetId" AND af.type = $1
-            WHERE asset.id = $2 AND asset."deletedAt" IS NULL
-            ORDER BY af."isEdited" DESC
+            WHERE asset.id = $2
+            ORDER BY af."isEdited" {order}
             LIMIT 1
-        "#,
-    )
-    .bind(file_type)
-    .bind(asset_id)
-    .fetch_optional(pool)
-    .await
+        "#
+    );
+    sqlx::query_as::<_, AssetThumbnailRow>(&sql)
+        .bind(file_type)
+        .bind(asset_id)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn get_for_video(
@@ -159,7 +162,7 @@ pub async fn get_for_video(
                     LIMIT 1
                 ) as encoded_video_path
             FROM asset
-            WHERE asset.id = $1 AND asset."deletedAt" IS NULL AND asset.type = 'VIDEO'
+            WHERE asset.id = $1 AND asset.type = 'VIDEO'
         "#,
     )
     .bind(asset_id)
@@ -696,6 +699,41 @@ pub async fn filter_accessible_ids(
     .bind(asset_ids)
     .bind(user_id)
     .bind(elevated)
+    .fetch_all(pool)
+    .await
+}
+
+/// Owner assets plus partner-shared assets. Matches `Permission.AssetShare`.
+pub async fn filter_shareable_ids(
+    pool: &Pool<Postgres>,
+    user_id: &Uuid,
+    asset_ids: &[Uuid],
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    if asset_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    sqlx::query_scalar(
+        r#"
+            SELECT DISTINCT id FROM (
+                SELECT asset.id
+                FROM asset
+                WHERE asset.id = ANY($1)
+                  AND asset."ownerId" = $2
+                  AND asset.visibility != 'locked'
+                UNION
+                SELECT asset.id
+                FROM partner
+                INNER JOIN "user" AS shared_by ON shared_by.id = partner."sharedById" AND shared_by."deletedAt" IS NULL
+                INNER JOIN asset ON asset."ownerId" = shared_by.id AND asset."deletedAt" IS NULL
+                WHERE partner."sharedWithId" = $2
+                  AND asset.id = ANY($1)
+                  AND asset.visibility IN ('timeline', 'hidden')
+            ) shareable
+        "#,
+    )
+    .bind(asset_ids)
+    .bind(user_id)
     .fetch_all(pool)
     .await
 }

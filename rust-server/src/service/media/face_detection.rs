@@ -48,24 +48,18 @@ impl FaceDetectionService {
         if !is_facial_recognition_enabled(&config) {
             return Ok(FaceDetectionQueueAllOutcome::Skipped);
         }
-        if !crate::utils::vector::face_search_available(&self.pool).await {
-            return Ok(FaceDetectionQueueAllOutcome::Skipped);
-        }
 
         if force.unwrap_or(false) {
             face::delete_ml_faces(&self.pool)
                 .await
                 .map_err(|err| err.to_string())?;
-            self.jobs
-                .queue_person_cleanup()
-                .await
-                .map_err(|err| err.to_string())?;
+            crate::service::person::cleanup_people(&self.pool).await?;
             crate::models::db::person::vacuum_faces(&self.pool, true)
                 .await
                 .map_err(|err| err.to_string())?;
         }
 
-        let asset_ids = ml_job::stream_for_detect_faces(&self.pool, force.unwrap_or(false))
+        let asset_ids = ml_job::stream_for_detect_faces(&self.pool, force)
             .await
             .map_err(|err| err.to_string())?;
 
@@ -93,9 +87,6 @@ impl FaceDetectionService {
             .await
             .map_err(|err| err.to_string())?;
         if !is_facial_recognition_enabled(&config) {
-            return Ok(FaceDetectionOutcome::Skipped);
-        }
-        if !crate::utils::vector::face_search_available(&self.pool).await {
             return Ok(FaceDetectionOutcome::Skipped);
         }
 

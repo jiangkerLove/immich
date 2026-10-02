@@ -1,9 +1,26 @@
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 
 /// Extract a fixed-offset timezone label from an ISO datetime string.
 ///
 /// Mirrors Node's `extractTimeZone`, which only returns fixed offsets such as
 /// `UTC-7` rather than IANA timezone names.
+/// Parse EXIF `dateTimeOriginal` the way the TypeScript server stores it.
+///
+/// Full timestamps stay timezone-aware. A date-only `YYYY-MM-DD` is UTC midnight,
+/// matching the memories lane parser.
+pub fn parse_exif_datetime(value: &str) -> Option<DateTime<Utc>> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(value) {
+        return Some(datetime.with_timezone(&Utc));
+    }
+    if let Ok(datetime) = value.parse::<DateTime<Utc>>() {
+        return Some(datetime);
+    }
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|naive| naive.and_utc())
+}
+
 pub fn extract_fixed_time_zone(date_time_original: &str) -> Option<String> {
     let datetime = DateTime::parse_from_rfc3339(date_time_original).ok()?;
     Some(fixed_offset_label(datetime.offset()))

@@ -7,6 +7,8 @@ pub struct LoginReq {
     pub client_ip: String,
     pub device_type: String,
     pub device_os: String,
+    #[serde(default)]
+    pub app_version: Option<String>,
 }
 
 #[derive(Deserialize)]

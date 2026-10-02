@@ -88,6 +88,8 @@ pub struct BulkIdResponse {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<BulkIdErrorReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, Copy)]
@@ -302,21 +304,10 @@ impl AlbumService {
             }
         }
 
-        let elevated = auth
-            .session
-            .as_ref()
-            .is_some_and(|session| session.has_elevated_permission);
         let allowed_assets: Vec<Uuid> = if dto.asset_ids.is_empty() {
             vec![]
         } else {
-            assets::filter_accessible_ids(
-                &self.db.pool,
-                &auth.user.id,
-                &dto.asset_ids,
-                elevated,
-                false,
-            )
-            .await?
+            assets::filter_shareable_ids(&self.db.pool, &auth.user.id, &dto.asset_ids).await?
         };
 
         let default_order = self.default_album_order(&auth.user.id).await?;
@@ -468,20 +459,10 @@ impl AlbumService {
         let allowed: HashSet<Uuid> = if not_present.is_empty() {
             HashSet::new()
         } else {
-            let elevated = auth
-                .session
-                .as_ref()
-                .is_some_and(|session| session.has_elevated_permission);
-            assets::filter_accessible_ids(
-                &self.db.pool,
-                &auth.user.id,
-                &not_present,
-                elevated,
-                false,
-            )
-            .await?
-            .into_iter()
-            .collect()
+            assets::filter_shareable_ids(&self.db.pool, &auth.user.id, &not_present)
+                .await?
+                .into_iter()
+                .collect()
         };
 
         let mut results = Vec::with_capacity(dto.ids.len());
@@ -493,6 +474,7 @@ impl AlbumService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::Duplicate),
+                    error_message: None,
                 });
                 continue;
             }
@@ -502,6 +484,7 @@ impl AlbumService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NoPermission),
+                    error_message: None,
                 });
                 continue;
             }
@@ -511,6 +494,7 @@ impl AlbumService {
                 id: *asset_id,
                 success: true,
                 error: None,
+                error_message: None,
             });
         }
 
@@ -555,20 +539,11 @@ impl AlbumService {
             });
         }
 
-        let elevated = auth
-            .session
-            .as_ref()
-            .is_some_and(|session| session.has_elevated_permission);
-        let allowed_assets: HashSet<Uuid> = assets::filter_accessible_ids(
-            &self.db.pool,
-            &auth.user.id,
-            &dto.asset_ids,
-            elevated,
-            false,
-        )
-        .await?
-        .into_iter()
-        .collect();
+        let allowed_assets: HashSet<Uuid> =
+            assets::filter_shareable_ids(&self.db.pool, &auth.user.id, &dto.asset_ids)
+                .await?
+                .into_iter()
+                .collect();
 
         if allowed_assets.is_empty() {
             return Ok(AlbumsAddAssetsResponse {
@@ -638,18 +613,10 @@ impl AlbumService {
             if asset_list.is_empty() {
                 HashSet::new()
             } else {
-                assets::filter_accessible_ids(
-                    &self.db.pool,
-                    &auth.user.id,
-                    &asset_list,
-                    auth.session
-                        .as_ref()
-                        .is_some_and(|session| session.has_elevated_permission),
-                    false,
-                )
-                .await?
-                .into_iter()
-                .collect()
+                assets::filter_shareable_ids(&self.db.pool, &auth.user.id, &asset_list)
+                    .await?
+                    .into_iter()
+                    .collect()
             }
         };
 
@@ -662,6 +629,7 @@ impl AlbumService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NotFound),
+                    error_message: None,
                 });
                 continue;
             }
@@ -671,6 +639,7 @@ impl AlbumService {
                     id: *asset_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NoPermission),
+                    error_message: None,
                 });
                 continue;
             }
@@ -680,6 +649,7 @@ impl AlbumService {
                 id: *asset_id,
                 success: true,
                 error: None,
+                error_message: None,
             });
         }
 
@@ -756,18 +726,16 @@ impl AlbumService {
     ) -> Result<(), ErrorResp> {
         require_album_access(&self.db.pool, auth, id, Permission::AlbumShare).await?;
 
+        let current = album::album_user_exists(&self.db.pool, id, user_id)
+            .await?
+            .ok_or_else(|| ErrorResp::BadRequest("Album not shared with user".to_string()))?;
+        if current == "owner" {
+            return Err(ErrorResp::BadRequest("User is owner".to_string()));
+        }
+
         let role = album::parse_album_user_role(&dto.role).ok_or_else(|| {
             ErrorResp::BadRequest(format!("Invalid album user role: {}", dto.role))
         })?;
-
-        if album::album_user_exists(&self.db.pool, id, user_id)
-            .await?
-            .is_none()
-        {
-            return Err(ErrorResp::BadRequest(
-                "Album not shared with user".to_string(),
-            ));
-        }
 
         album::update_album_user_role(&self.db.pool, id, user_id, role).await?;
         Ok(())

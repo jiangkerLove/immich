@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
-use crate::models::db::system_metadata::get_json;
 use crate::models::db::video_stream::{self, VideoStreamAssetRow};
 use crate::models::response::response::ErrorResp;
 use crate::service::hls_events::{
@@ -25,11 +24,11 @@ use crate::service::media::hls_encode::{HlsFfmpegSettings, build_hls_ffmpeg_args
 use crate::utils::hls::{
     HLS_BACKPRESSURE_PAUSE_SEGMENTS, HLS_BACKPRESSURE_RESUME_SEGMENTS, HLS_CLEANUP_INTERVAL_MS,
     HLS_INACTIVITY_TIMEOUT_MS, HLS_LEASE_DURATION_MS, HLS_SEGMENT_DURATION, HLS_VARIANTS,
-    HLS_VERSION, supported_codecs_for_accel,
+    HLS_VERSION, hls_codec_string,
 };
 use crate::utils::pending_events::PendingEvents;
 use crate::utils::storage::StoragePaths;
-use crate::utils::system_config::json_str;
+use crate::utils::system_config::get_merged;
 use crate::utils::video_interfaces::detect_video_interfaces;
 
 #[derive(Debug, Clone, Copy)]
@@ -385,11 +384,11 @@ impl HlsEngine {
         session_id: Uuid,
         asset: &VideoStreamAssetRow,
     ) -> Result<String, ErrorResp> {
-        let config = get_json(&self.pool, "system-config")
-            .await?
-            .unwrap_or_default();
-        let accel = json_str(&config, &["ffmpeg", "accel"], "disabled");
-        let supported = supported_codecs_for_accel(&accel);
+        let config = get_merged(&self.pool).await?;
+        let video_codecs = string_list(&config, &["ffmpeg", "realtime", "videoCodecs"])
+            .unwrap_or_else(|| vec!["h264".to_string(), "hevc".to_string()]);
+        let resolutions = i32_list(&config, &["ffmpeg", "realtime", "resolutions"])
+            .unwrap_or_else(|| vec![480, 720, 1080]);
 
         let (fps, _, _, _) = video_stream::segmentation(asset);
         let source_resolution = asset.width.min(asset.height).max(0) as u32;
@@ -403,7 +402,8 @@ impl HlsEngine {
 
         for (index, variant) in HLS_VARIANTS.iter().enumerate() {
             if variant.resolution > target_resolution
-                || !supported.iter().any(|codec| *codec == variant.codec)
+                || !video_codecs.iter().any(|codec| codec == variant.codec)
+                || !resolutions.contains(&(variant.resolution as i32))
             {
                 continue;
             }
@@ -413,9 +413,10 @@ impl HlsEngine {
                 asset.orientation,
                 variant.resolution,
             );
+            let codec_string = hls_codec_string(variant.codec, width, height, fps);
+            let bandwidth = (f64::from(variant.bitrate) * 1.35).round() as u64;
             lines.push(format!(
-                "#EXT-X-STREAM-INF:BANDWIDTH={},RESOLUTION={}x{},CODECS=\"{}\",mp4a.40.2\",VIDEO-RANGE=SDR,FRAME-RATE={fps:.3}",
-                variant.bitrate, width, height, variant.codec_string
+                "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},RESOLUTION={width}x{height},CODECS=\"{codec_string},mp4a.40.2\",VIDEO-RANGE=SDR,FRAME-RATE={fps:.3}"
             ));
             lines.push(format!("{session_id}/{index}/playlist.m3u8"));
         }
@@ -808,10 +809,9 @@ impl HlsEngine {
             0.0
         };
 
-        let config = get_json(&self.pool, "system-config")
+        let config = get_merged(&self.pool)
             .await
-            .map_err(|err| err.to_string())?
-            .unwrap_or_default();
+            .map_err(|err| err.to_string())?;
         let settings = HlsFfmpegSettings::from_config(&config);
         let interfaces = detect_video_interfaces();
 
@@ -1226,7 +1226,8 @@ fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
 
         tracing::info!(
             "hls events: listening (api={}, worker={})",
-            roles.api, roles.worker
+            roles.api,
+            roles.worker
         );
 
         let mut stream = pubsub.into_on_message();
@@ -1289,4 +1290,28 @@ fn spawn_hls_redis_listener(engine: Arc<HlsEngine>, redis_url: String) {
 
         tracing::error!("hls events: listener ended");
     });
+}
+
+fn string_list(value: &serde_json::Value, path: &[&str]) -> Option<Vec<String>> {
+    let node = path
+        .iter()
+        .try_fold(value, |current, key| current.get(*key))?;
+    node.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect()
+    })
+}
+
+fn i32_list(value: &serde_json::Value, path: &[&str]) -> Option<Vec<i32>> {
+    let node = path
+        .iter()
+        .try_fold(value, |current, key| current.get(*key))?;
+    node.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(|item| item.as_i64().and_then(|n| i32::try_from(n).ok()))
+            .collect()
+    })
 }

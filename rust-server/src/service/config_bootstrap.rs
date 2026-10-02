@@ -15,6 +15,13 @@ pub fn set_runtime_env(env: EnvDto) {
     let _ = RUNTIME_ENV.set(env);
 }
 
+pub fn setup_allowed() -> bool {
+    RUNTIME_ENV
+        .get()
+        .and_then(|env| env.immich_allow_setup)
+        .unwrap_or(true)
+}
+
 fn set_runtime_jobs(jobs: &JobService) {
     let _ = RUNTIME_JOBS.set(jobs.clone());
 }
@@ -22,8 +29,28 @@ fn set_runtime_jobs(jobs: &JobService) {
 pub async fn run(pool: &PgPool, env: &EnvDto, jobs: &JobService) {
     set_runtime_env(env.clone());
     set_runtime_jobs(jobs);
+    if env
+        .immich_config_file
+        .as_ref()
+        .is_some_and(|path| !path.is_empty())
+    {
+        let onboarding = crate::models::db::system_metadata::AdminOnboarding { is_onboarded: true };
+        if let Err(err) =
+            crate::models::db::system_metadata::set_admin_onboarding(pool, &onboarding).await
+        {
+            tracing::error!("config bootstrap: failed to mark admin onboarding complete: {err}");
+        }
+    }
     let config = match get_merged(pool).await {
         Ok(value) => value,
+        Err(err)
+            if env
+                .immich_config_file
+                .as_ref()
+                .is_some_and(|path| !path.is_empty()) =>
+        {
+            panic!("Unable to load configuration file: {err}");
+        }
         Err(err) => {
             tracing::error!("config bootstrap: failed to load config: {err}");
             return;
@@ -81,6 +108,14 @@ pub async fn on_config_update(pool: &PgPool, old_config: Option<&serde_json::Val
     {
         tracing::error!("config bootstrap: smart search config sync failed: {err}");
     }
+
+    let env_level = RUNTIME_ENV.get().and_then(|env| {
+        env.immich_log_level
+            .as_ref()
+            .map(|level| format!("{level:?}").to_lowercase())
+    });
+    let level = ml_health::log_level_from_config(env_level.as_deref(), &config);
+    crate::utils::logging::apply_level(&level);
 
     ml_health::setup(pool).await;
     if RUNTIME_ENV

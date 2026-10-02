@@ -150,7 +150,7 @@ impl WorkflowService {
             query.id,
             query.trigger.as_deref(),
             query.enabled,
-            query.logging,
+            None,
         )
         .await
         .map_err(ErrorResp::from)?;
@@ -196,7 +196,9 @@ impl WorkflowService {
         )
         .await
         .map_err(ErrorResp::from)?;
-        Ok(map_workflow(row))
+        let mut response = map_workflow(row);
+        response.steps.clear();
+        Ok(response)
     }
 
     pub async fn update(

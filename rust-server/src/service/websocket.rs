@@ -220,9 +220,10 @@ async fn auth_middleware<A: Adapter>(
     let tokens = extract_auth_tokens(&headers, &Default::default());
     let shared_link_tokens = get_shared_link_tokens(&headers);
 
+    let client = crate::middleware::user_agent::login_details_from_headers(&headers);
     match app_state
         .auth
-        .authenticate(&tokens, WS_PATH, &shared_link_tokens)
+        .authenticate(&tokens, WS_PATH, &shared_link_tokens, &client)
         .await
     {
         Ok(auth_dto) => {

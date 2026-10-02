@@ -60,7 +60,7 @@ impl AuthService {
             ));
         }
 
-        let email = normalize_email(&login_credential.email);
+        let email = login_credential.email.clone();
         let user_option = UserDb::select_full_by_email(&self.db_pool, &email)
             .await
             .map_err(ErrorResp::from)?;
@@ -92,6 +92,11 @@ impl AuthService {
     }
 
     pub async fn admin_sign_up(&self, dto: &SignUpReq) -> Result<UserAdminResponse, ErrorResp> {
+        if !crate::service::config_bootstrap::setup_allowed() {
+            return Err(ErrorResp::BadRequest(
+                "Admin setup is not available".to_string(),
+            ));
+        }
         if UserDb::get_admin(&self.db_pool).await?.is_some() {
             return Err(ErrorResp::BadRequest(
                 "The server already has an admin".to_string(),
@@ -104,7 +109,7 @@ impl AuthService {
         let user = UserDb::insert(
             &self.db_pool,
             &NewUserDb {
-                email: normalize_email(&dto.email),
+                email: dto.email.clone(),
                 password: hashed_password,
                 name: dto.name.clone(),
                 is_admin: true,
@@ -125,9 +130,17 @@ impl AuthService {
         Ok(map_user_admin_with_license(&self.db_pool, user).await?)
     }
 
-    pub async fn logout(&self, auth: &AuthDto) -> Result<LogoutResp, ErrorResp> {
+    pub async fn logout(
+        &self,
+        auth: &AuthDto,
+        auth_type: Option<&str>,
+    ) -> Result<LogoutResp, ErrorResp> {
+        let mut oauth_bearer = None;
         if let Some(session) = &auth.session {
             if let Ok(session_id) = uuid::Uuid::parse_str(&session.id) {
+                if let Some(row) = SessionPO::get_by_id(&self.db_pool, &session_id).await? {
+                    oauth_bearer = row.oauth_bearer_token;
+                }
                 SessionPO::delete(&self.db_pool, &session_id).await?;
                 if let Some(ws) = &self.websocket {
                     ws.emit_session_delete(session_id);
@@ -135,9 +148,15 @@ impl AuthService {
             }
         }
 
+        let redirect_uri = if auth_type == Some("oauth") {
+            oauth_logout_url(&self.db_pool, oauth_bearer.as_deref()).await
+        } else {
+            LOGIN_URL.to_string()
+        };
+
         Ok(LogoutResp {
             successful: true,
-            redirect_uri: LOGIN_URL.to_string(),
+            redirect_uri,
         })
     }
 
@@ -148,7 +167,7 @@ impl AuthService {
     pub async fn get_auth_status(&self, auth: &AuthDto) -> Result<AuthStatusResp, ErrorResp> {
         let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
             .await?
-            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+            .ok_or_else(|| ErrorResp::Unauthorized("Unauthorized".to_string()))?;
 
         let session_po = if let Some(session) = &auth.session {
             if let Ok(session_id) = uuid::Uuid::parse_str(&session.id) {
@@ -204,6 +223,8 @@ impl AuthService {
         let updated =
             UserDb::update_password(&self.db_pool, &auth.user.id, &hashed_password).await?;
 
+        // Official `onAuthChangePassword` always drops other sessions.
+        let _ = dto.invalidate_sessions;
         let current_session_id = auth
             .session
             .as_ref()
@@ -227,7 +248,7 @@ impl AuthService {
 
         let user = UserDb::get_for_pin_code(&self.db_pool, &auth.user.id)
             .await?
-            .ok_or_else(|| ErrorResp::Unauthorized("Authentication required".to_string()))?;
+            .ok_or_else(|| ErrorResp::Unauthorized("Unauthorized".to_string()))?;
 
         if user.pin_code.is_some() {
             return Err(ErrorResp::BadRequest(
@@ -339,6 +360,7 @@ impl AuthService {
         tokens: &AuthTokens,
         path: &str,
         shared_link_tokens: &[String],
+        client: &crate::models::request::auth::LoginReq,
     ) -> Result<AuthDto, ErrorResp> {
         if let Some(key) = &tokens.share_key {
             return self
@@ -353,7 +375,7 @@ impl AuthService {
         }
 
         if let Some(session) = &tokens.session {
-            return self.validate_session(session).await;
+            return self.validate_session(session, client).await;
         }
 
         if let Some(api_key) = &tokens.api_key {
@@ -383,8 +405,8 @@ impl AuthService {
     pub async fn validate_shared_link_key(
         &self,
         key: &str,
-        path: &str,
-        shared_link_tokens: &[String],
+        _path: &str,
+        _shared_link_tokens: &[String],
     ) -> Result<AuthDto, ErrorResp> {
         let bytes = decode_share_key(key)
             .map_err(|_| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
@@ -392,7 +414,6 @@ impl AuthService {
             .await?
             .ok_or_else(|| ErrorResp::Unauthorized("Invalid share key".to_string()))?;
         let (user, shared_link) = result;
-        self.require_shared_link_password(&shared_link, path, shared_link_tokens)?;
         Ok(AuthDto {
             user,
             api_key: None,
@@ -404,14 +425,13 @@ impl AuthService {
     pub async fn validate_shared_link_slug(
         &self,
         slug: &str,
-        path: &str,
-        shared_link_tokens: &[String],
+        _path: &str,
+        _shared_link_tokens: &[String],
     ) -> Result<AuthDto, ErrorResp> {
         let result = shared_links::get_by_slug(&self.db_pool, slug)
             .await?
             .ok_or_else(|| ErrorResp::Unauthorized("Invalid share slug".to_string()))?;
         let (user, shared_link) = result;
-        self.require_shared_link_password(&shared_link, path, shared_link_tokens)?;
         Ok(AuthDto {
             user,
             api_key: None,
@@ -420,29 +440,11 @@ impl AuthService {
         })
     }
 
-    fn require_shared_link_password(
+    async fn validate_session(
         &self,
-        shared_link: &crate::models::db::shared_links::AuthSharedLinkDb,
-        path: &str,
-        shared_link_tokens: &[String],
-    ) -> Result<(), ErrorResp> {
-        if path == "/api/shared-links/login" {
-            return Ok(());
-        }
-
-        if let Some(password) = &shared_link.password {
-            let link_id = uuid::Uuid::parse_str(&shared_link.id)
-                .map_err(|_| ErrorResp::ServerError("Invalid shared link".to_string()))?;
-            let token = crate::utils::crypto::shared_link_login_token(&link_id, password);
-            if !shared_link_tokens.contains(&token) {
-                return Err(ErrorResp::Unauthorized("Password required".to_string()));
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn validate_session(&self, token_value: &str) -> Result<AuthDto, ErrorResp> {
+        token_value: &str,
+        client: &crate::models::request::auth::LoginReq,
+    ) -> Result<AuthDto, ErrorResp> {
         let token = hash_sha256(token_value);
         let session = SessionPO::query_by_token(&self.db_pool, &token)
             .await?
@@ -453,9 +455,31 @@ impl AuthService {
             .ok_or_else(|| ErrorResp::Unauthorized("Invalid user token".to_string()))?;
 
         let now = Utc::now();
-        let has_elevated_permission = session
-            .pin_expires_at
-            .is_some_and(|expires_at| expires_at > now);
+        let stale = now.signed_duration_since(session.updated_at).num_hours() > 1
+            || client.app_version.as_deref() != session.app_version.as_deref();
+        if stale {
+            SessionPO::update_device(
+                &self.db_pool,
+                &session.id,
+                &client.device_os,
+                &client.device_type,
+                client.app_version.as_deref(),
+            )
+            .await?;
+        }
+
+        let mut has_elevated_permission = false;
+        if let Some(pin_expires_at) = session.pin_expires_at {
+            has_elevated_permission = pin_expires_at > now;
+            if has_elevated_permission && now + chrono::Duration::minutes(5) > pin_expires_at {
+                SessionPO::update_pin_expires_at(
+                    &self.db_pool,
+                    &session.id,
+                    Some(now + chrono::Duration::minutes(5)),
+                )
+                .await?;
+            }
+        }
 
         Ok(AuthDto {
             user,
@@ -481,8 +505,10 @@ impl AuthService {
             token: hash_token,
             device_os: _login_details.device_os.clone(),
             device_type: _login_details.device_type.clone(),
+            app_version: _login_details.app_version.clone(),
             user_id: user_po.id,
             oauth_sid: None,
+            oauth_bearer_token: None,
         };
 
         session.insert(&self.db_pool).await?;
@@ -501,6 +527,33 @@ impl AuthService {
 }
 
 use crate::models::db::users::AuthUserDb;
+
+async fn oauth_logout_url(pool: &PgPool, id_token: Option<&str>) -> String {
+    let Ok(config) = crate::utils::system_config::get_merged(pool).await else {
+        return LOGIN_URL.to_string();
+    };
+    let enabled = crate::utils::system_config::json_bool(&config, &["oauth", "enabled"], false);
+    let mut endpoint =
+        crate::utils::system_config::json_str(&config, &["oauth", "endSessionEndpoint"], "");
+    if endpoint.is_empty() {
+        let issuer = crate::utils::system_config::json_str(&config, &["oauth", "issuerUrl"], "");
+        if let Some(discovered) =
+            crate::service::oauth::discover_end_session_endpoint(&issuer).await
+        {
+            endpoint = discovered;
+        }
+    }
+    if !enabled || endpoint.is_empty() {
+        return LOGIN_URL.to_string();
+    }
+    let Ok(mut url) = url::Url::parse(&endpoint) else {
+        return LOGIN_URL.to_string();
+    };
+    if let Some(token) = id_token.filter(|value| !value.is_empty()) {
+        url.query_pairs_mut().append_pair("id_token_hint", token);
+    }
+    url.to_string()
+}
 
 pub(crate) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()

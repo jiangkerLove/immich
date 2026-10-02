@@ -5,10 +5,10 @@ use crate::models::db::asset_job::{self, UpsertAssetFile};
 use crate::models::db::migration_job::{
     self, MigrationAssetRow, find_asset_file, parse_asset_files,
 };
-use crate::models::db::system_metadata::get_json;
 use crate::service::job::JobService;
 use crate::utils::storage::StoragePaths;
 use crate::utils::storage_move::{MoveFileOptions, MoveFileOutcome, move_file};
+use crate::utils::system_config::get_merged;
 
 const JOBS_BATCH_SIZE: usize = 1000;
 const QUEUE_MIGRATION: &str = "migration";
@@ -237,10 +237,10 @@ impl FileMigrationService {
 
     async fn load_image_config(&self) -> Result<ImageFormatConfig, String> {
         let mut config = ImageFormatConfig::default();
-        let stored = get_json(&self.pool, "system-config")
+        let stored = get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        if let Some(image) = stored.and_then(|value| value.get("image").cloned()) {
+        if let Some(image) = stored.get("image").cloned() {
             if let Some(preview) = image.get("preview") {
                 config.preview_format = read_string(preview, "format", &config.preview_format);
             }

@@ -225,7 +225,14 @@ impl UserDb {
         id: &Uuid,
         password: &str,
     ) -> Result<UserDb, sqlx::Error> {
-        Self::update_me(pool, id, None, None, None, Some(password)).await
+        sqlx::query(r#"UPDATE "user" SET password = $1 WHERE id = $2 AND "deletedAt" IS NULL"#)
+            .bind(password)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Self::select_full_by_id(pool, id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
     }
 
     pub async fn update_pin_code(

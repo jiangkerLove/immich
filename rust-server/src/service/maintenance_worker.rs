@@ -239,6 +239,12 @@ impl MaintenanceWorkerRuntime {
         .await;
 
         self.websocket.emit_maintenance_end();
+        let redis_url = crate::service::server_events::redis_url_from_env(&self.env);
+        if let Err(err) =
+            crate::service::server_events::publish_app_restart(&redis_url, false).await
+        {
+            tracing::error!("maintenance: AppRestart publish failed: {err}");
+        }
         tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             std::process::exit(0);

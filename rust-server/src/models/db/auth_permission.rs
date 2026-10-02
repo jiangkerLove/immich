@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use serde::de::Error;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Permission {
@@ -15,6 +15,7 @@ pub enum Permission {
     ApiKeyRead,
     ApiKeyUpdate,
     ApiKeyDelete,
+    ApiKeyRotate,
 
     DuplicateRead,
     DuplicateDelete,
@@ -34,6 +35,7 @@ pub enum Permission {
     AssetDownload,
     AssetUpload,
     AssetCopy,
+    AssetDerive,
     AssetStatistics,
 
     AlbumCreate,
@@ -45,6 +47,9 @@ pub enum Permission {
     AlbumRemoveAsset,
     AlbumShare,
     AlbumDownload,
+    AlbumUserCreate,
+    AlbumUserUpdate,
+    AlbumUserDelete,
 
     AuthChangePassword,
 
@@ -55,6 +60,16 @@ pub enum Permission {
     ClusterGroupRequestDelete,
 
     AuthDeviceDelete,
+
+    BackupList,
+    BackupDownload,
+    BackupUpload,
+    BackupDelete,
+
+    JobCreate,
+    JobRead,
+
+    Maintenance,
 
     PinCodeCreate,
     PinCodeUpdate,
@@ -138,7 +153,10 @@ pub enum Permission {
     SystemMetadataRead,
     SystemMetadataUpdate,
 
+    PluginCreate,
     PluginRead,
+    PluginUpdate,
+    PluginDelete,
 
     WorkflowCreate,
     WorkflowRead,
@@ -150,6 +168,10 @@ pub enum Permission {
     ServerLicenseUpdate,
     ServerLicenseDelete,
     ServerVersionCheck,
+    ServerAbout,
+    ServerApkLinks,
+    ServerStorage,
+    ServerStatistics,
 
     AdminAuthUnlinkAll,
 
@@ -169,15 +191,24 @@ pub enum Permission {
     UserUpdate,
     UserPreferenceRead,
     UserPreferenceUpdate,
+    UserLicenseCreate,
     UserLicenseRead,
     UserLicenseUpdate,
     UserLicenseDelete,
     UserOnboardingRead,
     UserOnboardingUpdate,
     UserOnboardingDelete,
+    UserProfileImageCreate,
     UserProfileImageRead,
     UserProfileImageUpdate,
     UserProfileImageDelete,
+
+    QueueRead,
+    QueueUpdate,
+    QueueJobCreate,
+    QueueJobRead,
+    QueueJobUpdate,
+    QueueJobDelete,
 }
 
 impl Permission {
@@ -195,6 +226,7 @@ impl Permission {
             Permission::ApiKeyRead => "apiKey.read",
             Permission::ApiKeyUpdate => "apiKey.update",
             Permission::ApiKeyDelete => "apiKey.delete",
+            Permission::ApiKeyRotate => "apiKey.rotate",
 
             Permission::DuplicateRead => "duplicate.read",
             Permission::DuplicateDelete => "duplicate.delete",
@@ -214,6 +246,7 @@ impl Permission {
             Permission::AssetDownload => "asset.download",
             Permission::AssetUpload => "asset.upload",
             Permission::AssetCopy => "asset.copy",
+            Permission::AssetDerive => "asset.derive",
             Permission::AssetStatistics => "asset.statistics",
 
             Permission::AlbumCreate => "album.create",
@@ -221,10 +254,13 @@ impl Permission {
             Permission::AlbumUpdate => "album.update",
             Permission::AlbumDelete => "album.delete",
             Permission::AlbumStatistics => "album.statistics",
-            Permission::AlbumAddAsset => "album.addAsset",
-            Permission::AlbumRemoveAsset => "album.removeAsset",
+            Permission::AlbumAddAsset => "albumAsset.create",
+            Permission::AlbumRemoveAsset => "albumAsset.delete",
             Permission::AlbumShare => "album.share",
             Permission::AlbumDownload => "album.download",
+            Permission::AlbumUserCreate => "albumUser.create",
+            Permission::AlbumUserUpdate => "albumUser.update",
+            Permission::AlbumUserDelete => "albumUser.delete",
 
             Permission::AuthChangePassword => "auth.changePassword",
 
@@ -235,6 +271,13 @@ impl Permission {
             Permission::ClusterGroupRequestDelete => "clusterGroupRequest.delete",
 
             Permission::AuthDeviceDelete => "authDevice.delete",
+            Permission::BackupList => "backup.list",
+            Permission::BackupDownload => "backup.download",
+            Permission::BackupUpload => "backup.upload",
+            Permission::BackupDelete => "backup.delete",
+            Permission::JobCreate => "job.create",
+            Permission::JobRead => "job.read",
+            Permission::Maintenance => "maintenance",
 
             Permission::PinCodeCreate => "pinCode.create",
             Permission::PinCodeUpdate => "pinCode.update",
@@ -316,7 +359,10 @@ impl Permission {
             Permission::SystemMetadataRead => "systemMetadata.read",
             Permission::SystemMetadataUpdate => "systemMetadata.update",
 
+            Permission::PluginCreate => "plugin.create",
             Permission::PluginRead => "plugin.read",
+            Permission::PluginUpdate => "plugin.update",
+            Permission::PluginDelete => "plugin.delete",
 
             Permission::WorkflowCreate => "workflow.create",
             Permission::WorkflowRead => "workflow.read",
@@ -328,6 +374,10 @@ impl Permission {
             Permission::ServerLicenseUpdate => "serverLicense.update",
             Permission::ServerLicenseDelete => "serverLicense.delete",
             Permission::ServerVersionCheck => "server.versionCheck",
+            Permission::ServerAbout => "server.about",
+            Permission::ServerApkLinks => "server.apkLinks",
+            Permission::ServerStorage => "server.storage",
+            Permission::ServerStatistics => "server.statistics",
 
             Permission::AdminAuthUnlinkAll => "adminAuth.unlinkAll",
 
@@ -337,25 +387,33 @@ impl Permission {
             Permission::TagDelete => "tag.delete",
             Permission::TagAsset => "tag.asset",
 
-            Permission::AdminUserCreate => "admin.user.create",
-            Permission::AdminUserRead => "admin.user.read",
-            Permission::AdminUserUpdate => "admin.user.update",
-            Permission::AdminUserDelete => "admin.user.delete",
+            Permission::AdminUserCreate => "adminUser.create",
+            Permission::AdminUserRead => "adminUser.read",
+            Permission::AdminUserUpdate => "adminUser.update",
+            Permission::AdminUserDelete => "adminUser.delete",
             Permission::AdminSessionRead => "adminSession.read",
 
             Permission::UserRead => "user.read",
             Permission::UserUpdate => "user.update",
             Permission::UserPreferenceRead => "userPreference.read",
             Permission::UserPreferenceUpdate => "userPreference.update",
+            Permission::UserLicenseCreate => "userLicense.create",
             Permission::UserLicenseRead => "userLicense.read",
             Permission::UserLicenseUpdate => "userLicense.update",
             Permission::UserLicenseDelete => "userLicense.delete",
             Permission::UserOnboardingRead => "userOnboarding.read",
             Permission::UserOnboardingUpdate => "userOnboarding.update",
             Permission::UserOnboardingDelete => "userOnboarding.delete",
+            Permission::UserProfileImageCreate => "userProfileImage.create",
             Permission::UserProfileImageRead => "userProfileImage.read",
             Permission::UserProfileImageUpdate => "userProfileImage.update",
             Permission::UserProfileImageDelete => "userProfileImage.delete",
+            Permission::QueueRead => "queue.read",
+            Permission::QueueUpdate => "queue.update",
+            Permission::QueueJobCreate => "queueJob.create",
+            Permission::QueueJobRead => "queueJob.read",
+            Permission::QueueJobUpdate => "queueJob.update",
+            Permission::QueueJobDelete => "queueJob.delete",
         }
     }
 
@@ -373,6 +431,7 @@ impl Permission {
             "apiKey.read" => Some(Permission::ApiKeyRead),
             "apiKey.update" => Some(Permission::ApiKeyUpdate),
             "apiKey.delete" => Some(Permission::ApiKeyDelete),
+            "apiKey.rotate" => Some(Permission::ApiKeyRotate),
 
             "duplicate.read" => Some(Permission::DuplicateRead),
             "duplicate.delete" => Some(Permission::DuplicateDelete),
@@ -392,6 +451,7 @@ impl Permission {
             "asset.download" => Some(Permission::AssetDownload),
             "asset.upload" => Some(Permission::AssetUpload),
             "asset.copy" => Some(Permission::AssetCopy),
+            "asset.derive" => Some(Permission::AssetDerive),
             "asset.statistics" => Some(Permission::AssetStatistics),
 
             "album.create" => Some(Permission::AlbumCreate),
@@ -399,8 +459,11 @@ impl Permission {
             "album.update" => Some(Permission::AlbumUpdate),
             "album.delete" => Some(Permission::AlbumDelete),
             "album.statistics" => Some(Permission::AlbumStatistics),
-            "album.addAsset" => Some(Permission::AlbumAddAsset),
-            "album.removeAsset" => Some(Permission::AlbumRemoveAsset),
+            "albumAsset.create" | "album.addAsset" => Some(Permission::AlbumAddAsset),
+            "albumAsset.delete" | "album.removeAsset" => Some(Permission::AlbumRemoveAsset),
+            "albumUser.create" => Some(Permission::AlbumUserCreate),
+            "albumUser.update" => Some(Permission::AlbumUserUpdate),
+            "albumUser.delete" => Some(Permission::AlbumUserDelete),
             "album.share" => Some(Permission::AlbumShare),
             "album.download" => Some(Permission::AlbumDownload),
 
@@ -413,6 +476,13 @@ impl Permission {
             "clusterGroupRequest.delete" => Some(Permission::ClusterGroupRequestDelete),
 
             "authDevice.delete" => Some(Permission::AuthDeviceDelete),
+            "backup.list" => Some(Permission::BackupList),
+            "backup.download" => Some(Permission::BackupDownload),
+            "backup.upload" => Some(Permission::BackupUpload),
+            "backup.delete" => Some(Permission::BackupDelete),
+            "job.create" => Some(Permission::JobCreate),
+            "job.read" => Some(Permission::JobRead),
+            "maintenance" => Some(Permission::Maintenance),
 
             "pinCode.create" => Some(Permission::PinCodeCreate),
             "pinCode.update" => Some(Permission::PinCodeUpdate),
@@ -494,7 +564,10 @@ impl Permission {
             "systemMetadata.read" => Some(Permission::SystemMetadataRead),
             "systemMetadata.update" => Some(Permission::SystemMetadataUpdate),
 
+            "plugin.create" => Some(Permission::PluginCreate),
             "plugin.read" => Some(Permission::PluginRead),
+            "plugin.update" => Some(Permission::PluginUpdate),
+            "plugin.delete" => Some(Permission::PluginDelete),
 
             "workflow.create" => Some(Permission::WorkflowCreate),
             "workflow.read" => Some(Permission::WorkflowRead),
@@ -506,6 +579,10 @@ impl Permission {
             "serverLicense.update" => Some(Permission::ServerLicenseUpdate),
             "serverLicense.delete" => Some(Permission::ServerLicenseDelete),
             "server.versionCheck" => Some(Permission::ServerVersionCheck),
+            "server.about" => Some(Permission::ServerAbout),
+            "server.apkLinks" => Some(Permission::ServerApkLinks),
+            "server.storage" => Some(Permission::ServerStorage),
+            "server.statistics" => Some(Permission::ServerStatistics),
 
             "adminAuth.unlinkAll" => Some(Permission::AdminAuthUnlinkAll),
 
@@ -515,25 +592,33 @@ impl Permission {
             "tag.delete" => Some(Permission::TagDelete),
             "tag.asset" => Some(Permission::TagAsset),
 
-            "admin.user.create" => Some(Permission::AdminUserCreate),
-            "admin.user.read" => Some(Permission::AdminUserRead),
-            "admin.user.update" => Some(Permission::AdminUserUpdate),
-            "admin.user.delete" => Some(Permission::AdminUserDelete),
+            "adminUser.create" | "admin.user.create" => Some(Permission::AdminUserCreate),
+            "adminUser.read" | "admin.user.read" => Some(Permission::AdminUserRead),
+            "adminUser.update" | "admin.user.update" => Some(Permission::AdminUserUpdate),
+            "adminUser.delete" | "admin.user.delete" => Some(Permission::AdminUserDelete),
             "adminSession.read" => Some(Permission::AdminSessionRead),
 
             "user.read" => Some(Permission::UserRead),
             "user.update" => Some(Permission::UserUpdate),
             "userPreference.read" => Some(Permission::UserPreferenceRead),
             "userPreference.update" => Some(Permission::UserPreferenceUpdate),
+            "userLicense.create" => Some(Permission::UserLicenseCreate),
             "userLicense.read" => Some(Permission::UserLicenseRead),
             "userLicense.update" => Some(Permission::UserLicenseUpdate),
             "userLicense.delete" => Some(Permission::UserLicenseDelete),
             "userOnboarding.read" => Some(Permission::UserOnboardingRead),
             "userOnboarding.update" => Some(Permission::UserOnboardingUpdate),
             "userOnboarding.delete" => Some(Permission::UserOnboardingDelete),
+            "userProfileImage.create" => Some(Permission::UserProfileImageCreate),
             "userProfileImage.read" => Some(Permission::UserProfileImageRead),
             "userProfileImage.update" => Some(Permission::UserProfileImageUpdate),
             "userProfileImage.delete" => Some(Permission::UserProfileImageDelete),
+            "queue.read" => Some(Permission::QueueRead),
+            "queue.update" => Some(Permission::QueueUpdate),
+            "queueJob.create" => Some(Permission::QueueJobCreate),
+            "queueJob.read" => Some(Permission::QueueJobRead),
+            "queueJob.update" => Some(Permission::QueueJobUpdate),
+            "queueJob.delete" => Some(Permission::QueueJobDelete),
 
             _ => None,
         }

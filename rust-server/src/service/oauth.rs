@@ -19,13 +19,17 @@ use crate::models::request::auth::LoginReq;
 use crate::models::response::auth::LoginResp;
 use crate::models::response::response::ErrorResp;
 use crate::models::response::user::UserAdminResponse;
+use crate::service::job::JobService;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
+use crate::utils::storage::StoragePaths;
 
 #[derive(Clone)]
 pub struct OAuthService {
     pool: PgPool,
     websocket: WebSocketHub,
+    storage: StoragePaths,
+    jobs: JobService,
 }
 
 #[derive(serde::Deserialize)]
@@ -54,24 +58,55 @@ pub struct OAuthCallbackReq {
 }
 
 impl OAuthService {
-    pub fn new(pool: PgPool, websocket: WebSocketHub) -> Self {
-        Self { pool, websocket }
+    pub fn new(
+        pool: PgPool,
+        websocket: WebSocketHub,
+        storage: StoragePaths,
+        jobs: JobService,
+    ) -> Self {
+        Self {
+            pool,
+            websocket,
+            storage,
+            jobs,
+        }
     }
 
     pub async fn authorize(&self, dto: &OAuthConfigReq) -> Result<OAuthAuthorizeResp, ErrorResp> {
         let oauth = self.load_oauth().await?;
-        let client = self.build_client(&oauth, &dto.redirect_uri).await?;
+        let redirect_uri = resolve_oauth_redirect(&oauth, &dto.redirect_uri);
+        let client = self.build_client(&oauth, &redirect_uri).await?;
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-        let (auth_url, csrf_state, _nonce) = client
+        let mut request = client
             .authorize_url(
                 AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
                 CsrfToken::new_random,
                 Nonce::new_random,
             )
             .add_scope(Scope::new(oauth.scope.clone()))
-            .set_pkce_challenge(pkce_challenge)
-            .url();
+            .set_pkce_challenge(pkce_challenge);
+        if !oauth.prompt.is_empty() {
+            request = request.add_extra_param("prompt", oauth.prompt.clone());
+        }
+        let (mut auth_url, csrf_state, _nonce) = request.url();
+        let client_challenge = dto
+            .code_challenge
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        if let Some(challenge) = client_challenge {
+            let pairs: Vec<(String, String)> = auth_url
+                .query_pairs()
+                .map(|(key, value)| {
+                    if key == "code_challenge" {
+                        (key.to_string(), challenge.to_string())
+                    } else {
+                        (key.to_string(), value.to_string())
+                    }
+                })
+                .collect();
+            auth_url.query_pairs_mut().clear().extend_pairs(pairs);
+        }
 
         Ok(OAuthAuthorizeResp {
             url: auth_url.to_string(),
@@ -79,7 +114,11 @@ impl OAuthService {
                 .state
                 .clone()
                 .unwrap_or_else(|| csrf_state.secret().clone()),
-            code_verifier: Some(pkce_verifier.secret().clone()),
+            code_verifier: if client_challenge.is_some() {
+                None
+            } else {
+                Some(pkce_verifier.secret().clone())
+            },
         })
     }
 
@@ -89,7 +128,8 @@ impl OAuthService {
         login_details: &LoginReq,
     ) -> Result<LoginResp, ErrorResp> {
         let oauth = self.load_oauth().await?;
-        let callback_url = url::Url::parse(&dto.url)
+        let resolved_url = resolve_oauth_redirect(&oauth, &dto.url);
+        let callback_url = url::Url::parse(&resolved_url)
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
         let redirect_uri = format!(
             "{}://{}{}",
@@ -107,16 +147,11 @@ impl OAuthService {
                 .ok_or_else(|| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?,
         );
 
-        let pkce_verifier = dto
-            .code_verifier
-            .as_ref()
-            .map(|v| PkceCodeVerifier::new(v.clone()));
+        let pkce_verifier = require_oauth_pkce(dto, &callback_url)?;
 
         let token_response = client
             .exchange_code(code)
-            .set_pkce_verifier(
-                pkce_verifier.unwrap_or_else(|| PkceCodeVerifier::new(String::new())),
-            )
+            .set_pkce_verifier(pkce_verifier)
             .request_async(async_http_client)
             .await
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
@@ -128,19 +163,31 @@ impl OAuthService {
             .await
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
 
-        let sub = userinfo.subject().as_str().to_string();
-        let email = userinfo
-            .email()
-            .map(|m| m.as_str().trim().to_lowercase())
-            .filter(|e| !e.is_empty());
-
-        let user = self
-            .find_or_register_user(&oauth, &sub, email.as_deref())
+        let id_token = token_response.id_token().map(|token| token.to_string());
+        let claims = id_token
+            .as_deref()
+            .and_then(decode_jwt_payload)
+            .unwrap_or_default();
+        let profile = oauth_profile(&claims, &userinfo);
+        let sub = claim_string(&profile, "sub")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
+        let email = claim_string(&profile, "email")
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
+        let mut user = self
+            .find_or_register_user(&oauth, &sub, email.as_deref(), &profile)
             .await?;
-        let oauth_sid = token_response
-            .id_token()
-            .and_then(|token| extract_sid_from_jwt(token.to_string().as_str()));
-        self.create_login_response(user, login_details, oauth_sid)
+        let picture = claim_string(&profile, "picture").filter(|url| !url.is_empty());
+        if user.profile_image_path.is_empty() {
+            if let Some(url) = picture {
+                if let Some(updated) = self.sync_profile_picture(&user, &url).await {
+                    user = updated;
+                }
+            }
+        }
+        let oauth_sid = id_token.as_deref().and_then(extract_sid_from_jwt);
+        self.create_login_response(user, login_details, oauth_sid, id_token)
             .await
     }
 
@@ -150,7 +197,8 @@ impl OAuthService {
         dto: &OAuthCallbackReq,
     ) -> Result<UserAdminResponse, ErrorResp> {
         let oauth = self.load_oauth().await?;
-        let callback_url = url::Url::parse(&dto.url)
+        let resolved_url = resolve_oauth_redirect(&oauth, &dto.url);
+        let callback_url = url::Url::parse(&resolved_url)
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
         let redirect_uri = format!(
             "{}://{}{}",
@@ -168,16 +216,11 @@ impl OAuthService {
                 .ok_or_else(|| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?,
         );
 
-        let pkce_verifier = dto
-            .code_verifier
-            .as_ref()
-            .map(|v| PkceCodeVerifier::new(v.clone()));
+        let pkce_verifier = require_oauth_pkce(dto, &callback_url)?;
 
         let token_response = client
             .exchange_code(code)
-            .set_pkce_verifier(
-                pkce_verifier.unwrap_or_else(|| PkceCodeVerifier::new(String::new())),
-            )
+            .set_pkce_verifier(pkce_verifier)
             .request_async(async_http_client)
             .await
             .map_err(|_| ErrorResp::BadRequest("OAuth authentication failed".to_string()))?;
@@ -209,11 +252,15 @@ impl OAuthService {
 
         if let Some(session) = &auth.session {
             if let Ok(session_id) = uuid::Uuid::parse_str(&session.id) {
-                sqlx::query(r#"UPDATE session SET "oauthSid" = $1 WHERE id = $2"#)
-                    .bind(oauth_sid.as_deref())
-                    .bind(session_id)
-                    .execute(&self.pool)
-                    .await?;
+                let id_token = token_response.id_token().map(|token| token.to_string());
+                sqlx::query(
+                    r#"UPDATE session SET "oauthSid" = $1, "oauthBearerToken" = $2 WHERE id = $3"#,
+                )
+                .bind(oauth_sid.as_deref())
+                .bind(id_token.as_deref())
+                .bind(session_id)
+                .execute(&self.pool)
+                .await?;
             }
         }
 
@@ -226,7 +273,9 @@ impl OAuthService {
     pub async fn unlink(&self, auth: &AuthDto) -> Result<UserAdminResponse, ErrorResp> {
         if let Some(session) = &auth.session {
             if let Ok(session_id) = uuid::Uuid::parse_str(&session.id) {
-                sqlx::query(r#"UPDATE session SET "oauthSid" = NULL WHERE id = $1"#)
+                sqlx::query(
+                    r#"UPDATE session SET "oauthSid" = NULL, "oauthBearerToken" = NULL WHERE id = $1"#,
+                )
                     .bind(session_id)
                     .execute(&self.pool)
                     .await?;
@@ -363,6 +412,60 @@ impl OAuthService {
             .map_err(|err| err.to_string())
     }
 
+    async fn sync_profile_picture(&self, user: &UserDb, url: &str) -> Option<UserDb> {
+        let bytes = match reqwest::get(url).await {
+            Ok(response) if response.status().is_success() => match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    tracing::warn!("Unable to sync oauth profile picture: {err}");
+                    return None;
+                }
+            },
+            Ok(response) => {
+                tracing::warn!(
+                    "Unable to sync oauth profile picture: {}",
+                    response.status()
+                );
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!("Unable to sync oauth profile picture: {err}");
+                return None;
+            }
+        };
+
+        let path = match crate::utils::profile_image::generate_profile_image(
+            &self.pool,
+            &self.storage,
+            &user.id,
+            &bytes,
+        )
+        .await
+        {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!("Unable to sync oauth profile picture: {err}");
+                return None;
+            }
+        };
+
+        match UserDb::update_profile_image(&self.pool, &user.id, &path.to_string_lossy()).await {
+            Ok(updated) => {
+                if !user.profile_image_path.is_empty() {
+                    let _ = self
+                        .jobs
+                        .queue_file_delete(&[user.profile_image_path.as_str()])
+                        .await;
+                }
+                Some(updated)
+            }
+            Err(err) => {
+                tracing::warn!("Unable to sync oauth profile picture: {err}");
+                None
+            }
+        }
+    }
+
     async fn load_oauth(&self) -> Result<OAuthConfig, ErrorResp> {
         let oauth = get_oauth_config(&self.pool)
             .await?
@@ -405,8 +508,19 @@ impl OAuthService {
         oauth: &OAuthConfig,
         oauth_id: &str,
         email: Option<&str>,
+        claims: &serde_json::Value,
     ) -> Result<UserDb, ErrorResp> {
-        if let Some(user) = UserDb::select_by_oauth_id(&self.pool, oauth_id).await? {
+        if let Some(mut user) = UserDb::select_by_oauth_id(&self.pool, oauth_id).await? {
+            if let Some(is_admin) = role_is_admin(claims, &oauth.role_claim) {
+                if is_admin != user.is_admin {
+                    sqlx::query(r#"UPDATE "user" SET "isAdmin" = $1 WHERE id = $2"#)
+                        .bind(is_admin)
+                        .bind(user.id)
+                        .execute(&self.pool)
+                        .await?;
+                    user.is_admin = is_admin;
+                }
+            }
             return Ok(user);
         }
 
@@ -419,9 +533,20 @@ impl OAuthService {
                         .bind(user.id)
                         .execute(&self.pool)
                         .await?;
-                    return UserDb::select_full_by_id(&self.pool, &user.id)
+                    let mut linked = UserDb::select_full_by_id(&self.pool, &user.id)
                         .await?
-                        .ok_or_else(|| ErrorResp::ServerError("User not found".to_string()));
+                        .ok_or_else(|| ErrorResp::ServerError("User not found".to_string()))?;
+                    if let Some(is_admin) = role_is_admin(claims, &oauth.role_claim) {
+                        if is_admin != linked.is_admin {
+                            sqlx::query(r#"UPDATE "user" SET "isAdmin" = $1 WHERE id = $2"#)
+                                .bind(is_admin)
+                                .bind(linked.id)
+                                .execute(&self.pool)
+                                .await?;
+                            linked.is_admin = is_admin;
+                        }
+                    }
+                    return Ok(linked);
                 }
                 return Err(ErrorResp::BadRequest(
                     "OAuth authentication failed".to_string(),
@@ -442,18 +567,36 @@ impl OAuthService {
         let password = hash_bcrypt(&random_bytes_as_text(32))
             .map_err(|e| ErrorResp::ServerError(e.to_string()))?;
 
+        let storage_label = claim_string(claims, &oauth.storage_label_claim)
+            .filter(|value| !value.is_empty())
+            .map(|value| crate::utils::storage::sanitize_storage_label(&value))
+            .filter(|value| !value.is_empty());
+        let quota = claim_quota_bytes(
+            claims,
+            &oauth.storage_quota_claim,
+            oauth.default_storage_quota,
+        );
         let user = UserDb::insert(
             &self.pool,
             &NewUserDb {
                 email: email.to_string(),
                 password,
-                name: email.to_string(),
-                is_admin: false,
-                storage_label: None,
+                name: claim_name(claims, &email),
+                is_admin: role_is_admin(claims, &oauth.role_claim).unwrap_or(false),
+                storage_label,
             },
         )
         .await
         .map_err(ErrorResp::from)?;
+        if let Some(quota) = quota {
+            sqlx::query(r#"UPDATE "user" SET "quotaSizeInBytes" = $1 WHERE id = $2"#)
+                .bind(quota)
+                .bind(user.id)
+                .execute(&self.pool)
+                .await?;
+        }
+
+        crate::utils::telemetry::add_users_total(1);
 
         sqlx::query(r#"UPDATE "user" SET "oauthId" = $1 WHERE id = $2"#)
             .bind(oauth_id)
@@ -471,6 +614,7 @@ impl OAuthService {
         user_po: UserDb,
         login_details: &LoginReq,
         oauth_sid: Option<String>,
+        oauth_bearer_token: Option<String>,
     ) -> Result<LoginResp, ErrorResp> {
         let token = random_bytes_as_text(32);
         let hash_token = hash_sha256(&token);
@@ -480,8 +624,10 @@ impl OAuthService {
             token: hash_token,
             device_os: login_details.device_os.clone(),
             device_type: login_details.device_type.clone(),
+            app_version: login_details.app_version.clone(),
             user_id: user_po.id,
             oauth_sid,
+            oauth_bearer_token,
         };
         session.insert(&self.pool).await?;
 
@@ -512,14 +658,126 @@ struct JwksResponse {
     keys: Vec<serde_json::Value>,
 }
 
-fn extract_sid_from_jwt(id_token: &str) -> Option<String> {
+pub(crate) async fn discover_end_session_endpoint(issuer_url: &str) -> Option<String> {
+    if issuer_url.is_empty() {
+        return None;
+    }
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer_url.trim_end_matches('/')
+    );
+    let discovery: serde_json::Value =
+        reqwest::get(&discovery_url).await.ok()?.json().await.ok()?;
+    discovery
+        .get("end_session_endpoint")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resolve_oauth_redirect(oauth: &OAuthConfig, url: &str) -> String {
+    if !oauth.mobile_override_enabled || oauth.mobile_redirect_uri.is_empty() {
+        return url.to_string();
+    }
+    let Some(start) = url.find("app.immich:") else {
+        return url.to_string();
+    };
+    let after = &url[start + "app.immich:".len()..];
+    let after = after.trim_start_matches('/');
+    let Some(rest) = after.strip_prefix("oauth-callback") else {
+        return url.to_string();
+    };
+    format!("{}{rest}", oauth.mobile_redirect_uri)
+}
+
+fn oauth_profile(claims: &serde_json::Value, userinfo: &CoreUserInfoClaims) -> serde_json::Value {
+    if claims.get("email").is_some() {
+        return claims.clone();
+    }
+    serde_json::to_value(userinfo).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn decode_jwt_payload(id_token: &str) -> Option<serde_json::Value> {
     let payload = id_token.split('.').nth(1)?;
     use base64::Engine;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
         .ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    value
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn claim_string(claims: &serde_json::Value, key: &str) -> Option<String> {
+    if key.is_empty() {
+        return None;
+    }
+    claims.get(key).and_then(|value| match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    })
+}
+
+fn claim_name(claims: &serde_json::Value, email: &str) -> String {
+    claim_string(claims, "name")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let given = claim_string(claims, "given_name").unwrap_or_default();
+            let family = claim_string(claims, "family_name").unwrap_or_default();
+            let combined = format!("{given} {family}").trim().to_string();
+            if combined.is_empty() {
+                None
+            } else {
+                Some(combined)
+            }
+        })
+        .or_else(|| claim_string(claims, "preferred_username"))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| email.to_string())
+}
+
+fn role_is_admin(claims: &serde_json::Value, role_claim: &str) -> Option<bool> {
+    if role_claim.is_empty() {
+        return None;
+    }
+    let value = claims.get(role_claim)?;
+    let roles: Vec<String> = match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect(),
+        serde_json::Value::String(role) => vec![role.clone()],
+        _ => return None,
+    };
+    if roles.iter().any(|role| role == "admin") {
+        Some(true)
+    } else if roles.iter().any(|role| role == "user") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn claim_quota_bytes(
+    claims: &serde_json::Value,
+    quota_claim: &str,
+    default_gib: Option<i64>,
+) -> Option<i64> {
+    const GIB: i64 = 1024 * 1024 * 1024;
+    let claimed = if quota_claim.is_empty() {
+        None
+    } else {
+        claims.get(quota_claim).and_then(|value| match value {
+            serde_json::Value::Number(number) => number.as_i64().filter(|n| *n >= 0),
+            serde_json::Value::String(text) => text.parse::<i64>().ok().filter(|n| *n >= 0),
+            _ => None,
+        })
+    };
+    claimed.or(default_gib).map(|gib| gib.saturating_mul(GIB))
+}
+
+fn extract_sid_from_jwt(id_token: &str) -> Option<String> {
+    decode_jwt_payload(id_token)?
         .get("sid")
         .and_then(|sid| sid.as_str())
         .map(str::to_string)
@@ -549,4 +807,32 @@ fn decoding_key_from_jwk(jwk: &serde_json::Value) -> Result<DecodingKey, String>
         .and_then(|value| value.as_str())
         .ok_or_else(|| "Missing RSA exponent".to_string())?;
     DecodingKey::from_rsa_components(n, e).map_err(|err| err.to_string())
+}
+
+fn require_oauth_pkce(
+    dto: &OAuthCallbackReq,
+    callback_url: &url::Url,
+) -> Result<PkceCodeVerifier, ErrorResp> {
+    let expected = dto.state.as_deref().filter(|state| !state.is_empty());
+    let Some(expected) = expected else {
+        return Err(ErrorResp::BadRequest("OAuth state is missing".to_string()));
+    };
+    if let Some(url_state) = callback_url
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.to_string())
+    {
+        if url_state != expected {
+            return Err(ErrorResp::BadRequest(
+                "OAuth authentication failed".to_string(),
+            ));
+        }
+    }
+
+    let verifier = dto
+        .code_verifier
+        .as_deref()
+        .filter(|verifier| !verifier.is_empty())
+        .ok_or_else(|| ErrorResp::BadRequest("OAuth code verifier is missing".to_string()))?;
+    Ok(PkceCodeVerifier::new(verifier.to_string()))
 }

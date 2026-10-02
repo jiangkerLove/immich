@@ -1,14 +1,14 @@
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::models::db::system_metadata::set_json;
 use crate::models::db::auth_permission::Permission;
+use crate::models::db::system_metadata::set_json;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
-use crate::utils::permission::{require_admin, require_permission};
-use crate::utils::config_visibility::{filter_config, ConfigVisibility};
-use crate::utils::system_config::{defaults, get_merged};
 use crate::service::websocket::WebSocketHub;
+use crate::utils::config_visibility::{ConfigVisibility, filter_config};
+use crate::utils::permission::{require_admin, require_permission};
+use crate::utils::system_config::{defaults, get_merged};
 
 const CONFIG_KEY: &str = "system-config";
 
@@ -50,7 +50,11 @@ impl SystemConfigService {
         Ok(defaults())
     }
 
-    pub async fn update_admin_config(&self, auth: &AuthDto, dto: &Value) -> Result<Value, ErrorResp> {
+    pub async fn update_admin_config(
+        &self,
+        auth: &AuthDto,
+        dto: &Value,
+    ) -> Result<Value, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::AdminConfigUpdate)?;
         self.apply_config_update(dto).await
@@ -90,17 +94,16 @@ impl SystemConfigService {
 
     async fn apply_config_update(&self, dto: &Value) -> Result<Value, ErrorResp> {
         let old_config = get_merged(&self.pool).await.map_err(ErrorResp::from)?;
-        crate::service::config_validate::validate_system_config(&old_config, dto).await?;
+        let normalized =
+            crate::service::config_validate::validate_system_config(&old_config, dto).await?;
 
-        set_json(&self.pool, CONFIG_KEY, dto).await?;
+        let partial = crate::utils::system_config::diff_from_defaults(&defaults(), &normalized);
+        set_json(&self.pool, CONFIG_KEY, &partial).await?;
         crate::service::config_bootstrap::on_config_update(&self.pool, Some(&old_config)).await;
         self.websocket.emit_config_update();
-        crate::service::server_events::publish_config_update(
-            &self.redis_url,
-            Some(old_config),
-        )
-        .await;
-        Ok(dto.clone())
+        crate::service::server_events::publish_config_update(&self.redis_url, Some(old_config))
+            .await;
+        get_merged(&self.pool).await.map_err(ErrorResp::from)
     }
 
     pub fn storage_template_options(&self, auth: &AuthDto) -> Result<Value, ErrorResp> {

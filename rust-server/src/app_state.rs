@@ -112,7 +112,7 @@ impl Services {
                 env.immich_config_file.is_some(),
                 env.immich_allow_setup.unwrap_or(true),
             ),
-            session: SessionService::new(pool.clone(), websocket.clone()),
+            session: SessionService::new(pool.clone()),
             api_key: ApiKeyService::new(pool.clone()),
             album: albums.clone(),
             tag: TagService::new(pool.clone(), jobs.clone()),
@@ -124,8 +124,14 @@ impl Services {
                 storage.clone(),
                 jobs.clone(),
                 albums,
+                websocket.clone(),
             ),
-            oauth: OAuthService::new(pool.clone(), websocket.clone()),
+            oauth: OAuthService::new(
+                pool.clone(),
+                websocket.clone(),
+                storage.clone(),
+                jobs.clone(),
+            ),
             timeline: TimelineService::new(pool.clone()),
             trash: TrashService::new(pool.clone(), jobs.clone(), websocket.clone()),
             search: SearchService::new(pool.clone()),
@@ -249,7 +255,11 @@ impl AppState {
             .expect("failed to initialize websocket redis adapter");
 
         WebSocketJobListener::spawn(sql_pool.clone(), redis_url.clone(), websocket.clone());
-        crate::service::server_events::spawn_listener(sql_pool.clone(), redis_url.clone());
+        crate::service::server_events::spawn_listener(
+            sql_pool.clone(),
+            redis_url.clone(),
+            websocket.clone(),
+        );
 
         let jobs = JobService::new(redis_url.clone());
         workers::spawn_all(WorkerContext {
@@ -362,7 +372,11 @@ impl AppState {
             .expect("failed to initialize websocket redis adapter");
 
         // Maintenance worker must hear CLI disable → AppRestart.
-        crate::service::server_events::spawn_listener(sql_pool.clone(), redis_url.clone());
+        crate::service::server_events::spawn_listener(
+            sql_pool.clone(),
+            redis_url.clone(),
+            websocket.clone(),
+        );
 
         let hls_engine = crate::service::transcoding::HlsEngine::spawn(
             sql_pool.clone(),

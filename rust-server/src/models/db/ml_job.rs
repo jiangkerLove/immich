@@ -307,7 +307,6 @@ pub async fn get_for_detect_faces(
                     FROM asset_file
                     WHERE asset_file."assetId" = asset.id
                       AND asset_file.type = 'preview'
-                      AND asset_file."isEdited" = false
                     LIMIT 1
                 ) AS preview_path,
                 (
@@ -315,7 +314,6 @@ pub async fn get_for_detect_faces(
                     FROM asset_file
                     WHERE asset_file."assetId" = asset.id
                       AND asset_file.type = 'preview'
-                      AND asset_file."isEdited" = false
                 ) AS preview_file_count,
                 (
                     SELECT COALESCE(json_agg(af), '[]'::json)
@@ -346,9 +344,9 @@ pub async fn get_for_detect_faces(
 
 pub async fn stream_for_detect_faces(
     pool: &Pool<Postgres>,
-    force: bool,
+    force: Option<bool>,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
-    if force {
+    if force != Some(false) {
         return sqlx::query_scalar(
             r#"
                 SELECT asset.id
@@ -486,6 +484,7 @@ pub async fn stream_unassigned_ml_faces(
                 INNER JOIN asset ON asset.id = asset_face."assetId"
                 INNER JOIN "user" ON "user".id = asset."ownerId"
                 WHERE asset_face."sourceType" = 'machine-learning'
+                  AND asset_face."isVisible" = true
                   AND asset_face."deletedAt" IS NULL
                   AND "user"."clusterGroupId" = $1
                 "#,
@@ -499,7 +498,7 @@ pub async fn stream_unassigned_ml_faces(
             r#"
                 SELECT asset_face.id
                 FROM asset_face
-                WHERE asset_face."sourceType" = 'machine-learning'
+                WHERE asset_face."isVisible" = true
                   AND asset_face."deletedAt" IS NULL
             "#,
         )
@@ -515,6 +514,7 @@ pub async fn stream_unassigned_ml_faces(
             INNER JOIN asset ON asset.id = asset_face."assetId"
             INNER JOIN "user" ON "user".id = asset."ownerId"
             WHERE asset_face."sourceType" = 'machine-learning'
+              AND asset_face."isVisible" = true
               AND asset_face.{face_col} IS NULL
               AND asset_face."deletedAt" IS NULL
               AND "user"."clusterGroupId" = $1
@@ -530,6 +530,7 @@ pub async fn stream_unassigned_ml_faces(
             SELECT asset_face.id
             FROM asset_face
             WHERE asset_face."sourceType" = 'machine-learning'
+              AND asset_face."isVisible" = true
               AND asset_face.{face_col} IS NULL
               AND asset_face."deletedAt" IS NULL
         "#

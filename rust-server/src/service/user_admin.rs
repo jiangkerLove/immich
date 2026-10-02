@@ -106,18 +106,26 @@ impl UserAdminService {
         require_admin(auth)?;
         require_permission(auth, Permission::AdminUserCreate)?;
 
-        if dto.password.is_empty() {
+        let config = crate::utils::system_config::get_merged(&self.pool).await?;
+        let oauth_enabled =
+            crate::utils::system_config::json_bool(&config, &["oauth", "enabled"], false);
+        if !oauth_enabled && dto.password.is_empty() {
             return Err(ErrorResp::BadRequest("password is required".to_string()));
         }
 
-        let email = crate::service::auth::normalize_email(&dto.email);
+        let email = dto.email.clone();
         if let Some(existing) = UserDb::get_by_email(&self.pool, &email).await? {
             if existing.deleted_at.is_none() {
                 return Err(ErrorResp::BadRequest("Email is not available".to_string()));
             }
         }
 
-        if let Some(Some(label)) = &dto.storage_label {
+        let storage_label = dto
+            .storage_label
+            .as_ref()
+            .and_then(|value| value.as_deref())
+            .map(crate::utils::storage::sanitize_storage_label);
+        if let Some(label) = storage_label.as_deref().filter(|label| !label.is_empty()) {
             if UserDb::get_by_storage_label(&self.pool, label)
                 .await?
                 .is_some()
@@ -134,8 +142,11 @@ impl UserAdminService {
             }
         }
 
-        let password_hash =
-            hash_bcrypt(&dto.password).map_err(|err| ErrorResp::ServerError(err.to_string()))?;
+        let password_hash = if dto.password.is_empty() {
+            String::new()
+        } else {
+            hash_bcrypt(&dto.password).map_err(|err| ErrorResp::ServerError(err.to_string()))?
+        };
 
         let pin_hash = match &dto.pin_code {
             Some(Some(pin)) => {
@@ -151,7 +162,7 @@ impl UserAdminService {
             &password_hash,
             &dto.name,
             dto.is_admin.unwrap_or(false),
-            dto.storage_label.as_ref().and_then(|v| v.as_deref()),
+            storage_label.as_deref().filter(|label| !label.is_empty()),
             dto.avatar_color.as_ref().and_then(|v| v.as_deref()),
             pin_hash.as_deref(),
             dto.quota_size_in_bytes.as_ref().and_then(|v| *v),
@@ -203,10 +214,7 @@ impl UserAdminService {
             }
         }
 
-        let email = dto
-            .email
-            .as_ref()
-            .map(|value| crate::service::auth::normalize_email(value));
+        let email = dto.email.as_ref().cloned();
         if let Some(email) = &email {
             if let Some(existing) = UserDb::get_by_email(&self.pool, email).await? {
                 if existing.id != *id {
@@ -215,7 +223,13 @@ impl UserAdminService {
             }
         }
 
-        if let Some(Some(label)) = &dto.storage_label {
+        let storage_label = dto.storage_label.as_ref().map(|value| {
+            value
+                .as_deref()
+                .map(crate::utils::storage::sanitize_storage_label)
+                .filter(|label| !label.is_empty())
+        });
+        if let Some(Some(label)) = &storage_label {
             if let Some(existing) = UserDb::get_by_storage_label(&self.pool, label).await? {
                 if existing.id != *id {
                     return Err(ErrorResp::BadRequest(
@@ -244,11 +258,6 @@ impl UserAdminService {
             None => None,
         };
 
-        let storage_label = dto
-            .storage_label
-            .as_ref()
-            .map(|value| value.as_ref().map(|s| s.as_str()).filter(|s| !s.is_empty()));
-
         let user = UserDb::admin_update(
             &self.pool,
             id,
@@ -259,7 +268,7 @@ impl UserAdminService {
                 .as_ref()
                 .map(|value| value.as_ref().map(|s| s.as_str())),
             pin_code.as_ref().map(|value| value.as_deref()),
-            storage_label,
+            storage_label.as_ref().map(|value| value.as_deref()),
             dto.quota_size_in_bytes,
             dto.should_change_password,
             dto.is_admin,
@@ -312,7 +321,8 @@ impl UserAdminService {
         id: &Uuid,
         query: &crate::utils::calendar_heatmap::CalendarHeatmapQuery,
     ) -> Result<crate::utils::calendar_heatmap::CalendarHeatmapResponse, ErrorResp> {
-        require_permission(auth, Permission::UserRead)?;
+        require_admin(auth)?;
+        require_permission(auth, Permission::AdminUserRead)?;
         self.find_or_fail(id, false).await?;
         crate::utils::calendar_heatmap::build_calendar_heatmap(&self.pool, id, query).await
     }
@@ -337,17 +347,6 @@ impl UserAdminService {
     ) -> Result<AssetStatsResponse, ErrorResp> {
         require_admin(auth)?;
         require_permission(auth, Permission::AdminUserRead)?;
-
-        if query.visibility.as_deref() == Some("locked") {
-            let elevated = auth
-                .session
-                .as_ref()
-                .is_some_and(|s| s.has_elevated_permission);
-            if !elevated {
-                return Err(ErrorResp::Forbidden("Forbidden".to_string()));
-            }
-        }
-
         self.find_or_fail(id, false).await?;
 
         let stats = assets::get_statistics(

@@ -15,7 +15,7 @@ pub struct ApiKeyService {
     db: DbService,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyResponse {
     pub id: Uuid,
@@ -45,6 +45,8 @@ pub struct ApiKeyCreateResp {
     #[serde(flatten)]
     pub api_key: ApiKeyResponse,
     pub secret: String,
+    #[serde(rename = "apiKey")]
+    pub nested_api_key: ApiKeyResponse,
 }
 
 impl ApiKeyService {
@@ -79,7 +81,9 @@ impl ApiKeyService {
         if let Some(api_key) = &auth.api_key {
             self.get(auth, &Uuid::parse_str(&api_key.id).unwrap()).await
         } else {
-            Err(ErrorResp::BadRequest("Not an API key session".to_string()))
+            Err(ErrorResp::Forbidden(
+                "Not authenticated with an API Key".to_string(),
+            ))
         }
     }
 
@@ -89,9 +93,15 @@ impl ApiKeyService {
         dto: &ApiKeyCreateReq,
     ) -> Result<ApiKeyCreateResp, ErrorResp> {
         require_permission(auth, Permission::ApiKeyCreate)?;
+        reject_ungranted_permissions(auth, &dto.permissions)?;
 
         let secret = random_bytes_as_text(32);
         let hashed = hash_sha256(&secret);
+        let name = if dto.name.is_empty() {
+            "API Key".to_string()
+        } else {
+            dto.name.clone()
+        };
 
         let api_key = sqlx::query_as::<_, ApiKeyResponse>(
             r#"
@@ -100,14 +110,18 @@ impl ApiKeyService {
                 RETURNING id, name, "createdAt" as created_at, "updatedAt" as updated_at, permissions
             "#,
         )
-        .bind(&dto.name)
+        .bind(&name)
         .bind(&hashed)
         .bind(auth.user.id)
         .bind(&dto.permissions)
         .fetch_one(&self.db.pool)
         .await?;
 
-        Ok(ApiKeyCreateResp { api_key, secret })
+        Ok(ApiKeyCreateResp {
+            nested_api_key: api_key.clone(),
+            api_key,
+            secret,
+        })
     }
 
     pub async fn update(
@@ -118,6 +132,9 @@ impl ApiKeyService {
     ) -> Result<ApiKeyResponse, ErrorResp> {
         require_permission(auth, Permission::ApiKeyUpdate)?;
         self.get_owned(auth, id).await?;
+        if let Some(permissions) = &dto.permissions {
+            reject_ungranted_permissions(auth, permissions)?;
+        }
 
         sqlx::query_as::<_, ApiKeyResponse>(
             r#"
@@ -147,7 +164,7 @@ impl ApiKeyService {
     }
 
     pub async fn rotate(&self, auth: &AuthDto, id: &Uuid) -> Result<ApiKeyCreateResp, ErrorResp> {
-        require_permission(auth, Permission::ApiKeyUpdate)?;
+        require_permission(auth, Permission::ApiKeyRotate)?;
         let existing = self.get_owned(auth, id).await?;
 
         if let Some(api_key) = &auth.api_key {
@@ -174,7 +191,11 @@ impl ApiKeyService {
         .fetch_one(&self.db.pool)
         .await?;
 
-        Ok(ApiKeyCreateResp { api_key, secret })
+        Ok(ApiKeyCreateResp {
+            nested_api_key: api_key.clone(),
+            api_key,
+            secret,
+        })
     }
 
     async fn get_owned(&self, auth: &AuthDto, id: &Uuid) -> Result<ApiKeyResponse, ErrorResp> {
@@ -191,4 +212,15 @@ impl ApiKeyService {
         .await?
         .ok_or_else(|| ErrorResp::BadRequest("API Key not found".to_string()))
     }
+}
+
+fn reject_ungranted_permissions(auth: &AuthDto, permissions: &[String]) -> Result<(), ErrorResp> {
+    if let Some(api_key) = &auth.api_key {
+        if !are_permissions_granted(permissions, &api_key.permissions) {
+            return Err(ErrorResp::BadRequest(
+                "Cannot grant permissions you do not have".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }

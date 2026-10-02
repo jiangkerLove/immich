@@ -172,37 +172,7 @@ impl BackgroundTaskProcessor {
     }
 
     async fn handle_person_cleanup(&self) -> Result<(), String> {
-        let people = crate::models::db::person::list_without_faces(&self.pool)
-            .await
-            .map_err(|err| err.to_string())?;
-
-        for (_, thumbnail_path) in &people {
-            if !thumbnail_path.is_empty() {
-                let _ = tokio::fs::remove_file(thumbnail_path).await;
-            }
-        }
-
-        if !people.is_empty() {
-            let ids: Vec<Uuid> = people.into_iter().map(|(id, _)| id).collect();
-            let deleted = ids.len();
-            crate::models::db::person::delete_by_ids(&self.pool, &ids)
-                .await
-                .map_err(|err| err.to_string())?;
-            tracing::info!("deleted {deleted} people without faces");
-        }
-
-        let person_groups = crate::models::db::person::delete_empty_groups(&self.pool)
-            .await
-            .map_err(|err| err.to_string())?;
-        let cluster_groups = crate::models::db::person::delete_orphaned_cluster_groups(&self.pool)
-            .await
-            .map_err(|err| err.to_string())?;
-        if person_groups > 0 || cluster_groups > 0 {
-            tracing::info!(
-                "Deleted {person_groups} empty person groups and {cluster_groups} orphaned cluster groups"
-            );
-        }
-        Ok(())
+        crate::service::person::cleanup_people(&self.pool).await
     }
 
     async fn handle_tag_cleanup(&self) -> Result<(), String> {
@@ -277,7 +247,10 @@ impl BackgroundTaskProcessor {
                     .hls_session_folder(&session.owner_id, &session.id);
                 if let Err(err) = tokio::fs::remove_dir_all(&dir).await {
                     if err.kind() != std::io::ErrorKind::NotFound {
-                        tracing::error!("failed to remove HLS session dir {}: {err}", dir.display());
+                        tracing::error!(
+                            "failed to remove HLS session dir {}: {err}",
+                            dir.display()
+                        );
                     }
                 }
                 maintenance::delete_hls_session(&self.pool, &session.id)

@@ -11,7 +11,6 @@ use crate::models::db::album;
 use crate::models::db::assets;
 use crate::models::db::move_history;
 use crate::models::db::storage_template_job::{self, StorageTemplateAsset};
-use crate::models::db::system_metadata::get_json;
 use crate::models::db::users::UserDb;
 use crate::service::job::{EntityJob, JobService};
 use crate::utils::storage::StoragePaths;
@@ -50,12 +49,10 @@ impl StorageTemplateService {
         asset_id: &Uuid,
         job: &EntityJob,
     ) -> Result<StorageTemplateOutcome, String> {
-        let config = get_json(&self.pool, "system-config")
+        let config = crate::utils::system_config::get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        let template_cfg = config
-            .as_ref()
-            .and_then(|value| value.get("storageTemplate"));
+        let template_cfg = config.get("storageTemplate");
         let enabled = template_cfg
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
@@ -134,12 +131,10 @@ impl StorageTemplateService {
     }
 
     pub async fn migrate_all(&self) -> Result<StorageTemplateOutcome, String> {
-        let config = get_json(&self.pool, "system-config")
+        let config = crate::utils::system_config::get_merged(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
-        let template_cfg = config
-            .as_ref()
-            .and_then(|value| value.get("storageTemplate"));
+        let template_cfg = config.get("storageTemplate");
         let enabled = template_cfg
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())

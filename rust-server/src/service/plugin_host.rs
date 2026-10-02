@@ -340,7 +340,7 @@ fn host_success(response: Value) -> Value {
 
 fn map_error(err: ErrorResp) -> Value {
     let status = match &err {
-        ErrorResp::BadRequest(_) | ErrorResp::ReqParamError(_) => 400,
+        ErrorResp::BadRequest(_) | ErrorResp::ReqParamError(_) | ErrorResp::Validation(_) => 400,
         ErrorResp::Unauthorized(_) => 401,
         ErrorResp::Forbidden(_) => 403,
         ErrorResp::NotFound(_) => 404,

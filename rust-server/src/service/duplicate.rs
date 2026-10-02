@@ -85,9 +85,9 @@ impl DuplicateService {
 
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::DuplicateDelete)?;
-        if !duplicate::duplicate_group_exists(&self.pool, id).await? {
+        if !duplicate::user_owns_duplicate_group(&self.pool, &auth.user.id, id).await? {
             return Err(ErrorResp::BadRequest(
-                "Duplicate group not found".to_string(),
+                "Not found or no duplicate.delete access".to_string(),
             ));
         }
         duplicate::clear_duplicate_group(&self.pool, &auth.user.id, id).await?;
@@ -96,6 +96,13 @@ impl DuplicateService {
 
     pub async fn delete_all(&self, auth: &AuthDto, dto: &BulkIdsReq) -> Result<(), ErrorResp> {
         require_permission(auth, Permission::DuplicateDelete)?;
+        for id in &dto.ids {
+            if !duplicate::user_owns_duplicate_group(&self.pool, &auth.user.id, id).await? {
+                return Err(ErrorResp::BadRequest(
+                    "Not found or no duplicate.delete access".to_string(),
+                ));
+            }
+        }
         duplicate::clear_duplicate_groups(&self.pool, &auth.user.id, &dto.ids).await?;
         Ok(())
     }
@@ -106,6 +113,15 @@ impl DuplicateService {
         dto: &DuplicateResolveReq,
     ) -> Result<Vec<BulkIdResponse>, ErrorResp> {
         require_permission(auth, Permission::DuplicateDelete)?;
+        for group in &dto.groups {
+            if !duplicate::user_owns_duplicate_group(&self.pool, &auth.user.id, &group.duplicate_id)
+                .await?
+            {
+                return Err(ErrorResp::BadRequest(
+                    "Not found or no duplicate.delete access".to_string(),
+                ));
+            }
+        }
 
         let mut results = Vec::with_capacity(dto.groups.len());
         for group in &dto.groups {
@@ -129,6 +145,7 @@ impl DuplicateService {
                         id: duplicate_id,
                         success: false,
                         error: Some(BulkIdErrorReason::NotFound),
+                        error_message: None,
                     };
                 }
             };
@@ -153,6 +170,9 @@ impl DuplicateService {
                     id: duplicate_id,
                     success: false,
                     error: Some(BulkIdErrorReason::Validation),
+                    error_message: Some(
+                        "An asset cannot be in both keepAssetIds and trashAssetIds".to_string(),
+                    ),
                 };
             }
             if !ids_to_keep.contains(asset_id) && !ids_to_trash.contains(asset_id) {
@@ -160,6 +180,9 @@ impl DuplicateService {
                     id: duplicate_id,
                     success: false,
                     error: Some(BulkIdErrorReason::Validation),
+                    error_message: Some(
+                        "Every asset must be in either keepAssetIds or trashAssetIds".to_string(),
+                    ),
                 };
             }
         }
@@ -173,6 +196,7 @@ impl DuplicateService {
                     id: duplicate_id,
                     success: false,
                     error: Some(BulkIdErrorReason::NoPermission),
+                    error_message: Some("No permission to delete assets".to_string()),
                 };
             }
         }
@@ -185,6 +209,7 @@ impl DuplicateService {
                         id: duplicate_id,
                         success: false,
                         error: Some(BulkIdErrorReason::Unknown),
+                        error_message: None,
                     };
                 }
             };
@@ -195,21 +220,45 @@ impl DuplicateService {
                         id: duplicate_id,
                         success: false,
                         error: Some(BulkIdErrorReason::Unknown),
+                        error_message: None,
                     };
                 }
             };
 
             let merge = compute_merge(&mapped, &self.pool, auth, &group_asset_ids).await;
             if let Ok(merge) = merge {
-                for album_id in &merge.album_ids {
-                    let _ = album::add_asset_ids(&self.pool, album_id, &ids_to_keep).await;
+                let shareable =
+                    assets::filter_shareable_ids(&self.pool, &auth.user.id, &ids_to_keep)
+                        .await
+                        .unwrap_or_default();
+                let allowed_albums = crate::service::access::check_album_ids_access(
+                    &self.pool,
+                    auth,
+                    &merge.album_ids,
+                    Permission::AlbumAddAsset,
+                )
+                .await
+                .unwrap_or_default();
+                let keepers: Vec<Uuid> = ids_to_keep
+                    .iter()
+                    .copied()
+                    .filter(|id| shareable.contains(id))
+                    .collect();
+                if !allowed_albums.is_empty() && !keepers.is_empty() {
+                    for album_id in &allowed_albums {
+                        let _ = album::add_asset_ids(&self.pool, album_id, &keepers).await;
+                    }
                 }
 
                 if !merge.tag_ids.is_empty() {
-                    for asset_id in &ids_to_keep {
-                        replace_asset_tags(asset_id, &merge.tag_ids, &self.pool).await;
+                    let allowed_tags =
+                        allowed_owned_tag_ids(&self.pool, auth, &merge.tag_ids).await;
+                    if !allowed_tags.is_empty() {
+                        for asset_id in &ids_to_keep {
+                            replace_asset_tags(asset_id, &allowed_tags, &self.pool).await;
+                        }
+                        update_exif_tags(&self.pool, &ids_to_keep, &merge.tag_values).await;
                     }
-                    update_exif_tags(&self.pool, &ids_to_keep, &merge.tag_values).await;
                 }
 
                 let has_exif = merge.exif.description.is_some()
@@ -270,6 +319,7 @@ impl DuplicateService {
             id: duplicate_id,
             success: true,
             error: None,
+            error_message: None,
         }
     }
 }
@@ -391,6 +441,18 @@ fn unique_coordinate(assets_list: &[AssetResponse], key: &str) -> Option<f64> {
     } else {
         None
     }
+}
+
+async fn allowed_owned_tag_ids(pool: &PgPool, auth: &AuthDto, tag_ids: &[Uuid]) -> Vec<Uuid> {
+    if require_permission(auth, Permission::TagAsset).is_err() || tag_ids.is_empty() {
+        return Vec::new();
+    }
+    sqlx::query_scalar(r#"SELECT id FROM tag WHERE "userId" = $1 AND id = ANY($2)"#)
+        .bind(auth.user.id)
+        .bind(tag_ids)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
 }
 
 async fn replace_asset_tags(asset_id: &Uuid, tag_ids: &[Uuid], pool: &PgPool) {

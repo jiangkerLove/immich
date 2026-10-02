@@ -1,6 +1,6 @@
-use axum::extract::{Multipart, Path, Query, State};
 use axum::Extension;
 use axum::Json;
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use uuid::Uuid;
 
@@ -20,6 +20,8 @@ pub async fn upload_asset_handler(
     let mut dto: Option<AssetMediaCreateReq> = None;
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut original_name = String::from("upload.bin");
+    let mut sidecar_bytes: Option<Vec<u8>> = None;
+    let mut sidecar_name = String::from("sidecar.xmp");
 
     while let Some(field) = multipart
         .next_field()
@@ -36,9 +38,25 @@ pub async fn upload_asset_handler(
                     .map_err(|e| ErrorResp::BadRequest(e.to_string()))?
                     .to_vec(),
             );
+        } else if name == "sidecarData" {
+            sidecar_name = field.file_name().unwrap_or("sidecar.xmp").to_string();
+            sidecar_bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| ErrorResp::BadRequest(e.to_string()))?
+                    .to_vec(),
+            );
         } else if matches!(
             name.as_str(),
-            "fileCreatedAt" | "fileModifiedAt" | "filename" | "isFavorite" | "duration" | "visibility" | "livePhotoVideoId"
+            "fileCreatedAt"
+                | "fileModifiedAt"
+                | "filename"
+                | "isFavorite"
+                | "duration"
+                | "visibility"
+                | "livePhotoVideoId"
+                | "metadata"
         ) {
             let text = field
                 .text()
@@ -52,6 +70,7 @@ pub async fn upload_asset_handler(
                 duration: None,
                 live_photo_video_id: None,
                 visibility: None,
+                metadata: None,
             });
             match name.as_str() {
                 "fileCreatedAt" => {
@@ -67,13 +86,17 @@ pub async fn upload_asset_handler(
                 "livePhotoVideoId" => {
                     partial.live_photo_video_id = Uuid::parse_str(&text).ok();
                 }
+                "metadata" => {
+                    partial.metadata = serde_json::from_str(&text).ok();
+                }
                 _ => {}
             }
             dto = Some(partial);
         }
     }
 
-    let file_bytes = file_bytes.ok_or_else(|| ErrorResp::BadRequest("assetData is required".to_string()))?;
+    let file_bytes =
+        file_bytes.ok_or_else(|| ErrorResp::BadRequest("assetData is required".to_string()))?;
     let dto = dto.unwrap_or(AssetMediaCreateReq {
         file_created_at: chrono::Utc::now(),
         file_modified_at: chrono::Utc::now(),
@@ -82,12 +105,16 @@ pub async fn upload_asset_handler(
         duration: None,
         live_photo_video_id: None,
         visibility: None,
+        metadata: None,
     });
 
+    let sidecar = sidecar_bytes
+        .as_ref()
+        .map(|bytes| (bytes.as_slice(), sidecar_name.as_str()));
     let response = state
         .services
         .asset_media
-        .upload_asset(&auth, &dto, &file_bytes, &original_name)
+        .upload_asset(&auth, &dto, &file_bytes, &original_name, sidecar)
         .await?;
 
     let status = if response.status == "duplicate" {
@@ -139,6 +166,10 @@ pub async fn bulk_upload_check_handler(
     Json(dto): Json<BulkUploadCheckReq>,
 ) -> Result<Json<BulkUploadCheckResponse>, ErrorResp> {
     Ok(Json(
-        state.services.asset_media.bulk_upload_check(&auth, &dto).await?,
+        state
+            .services
+            .asset_media
+            .bulk_upload_check(&auth, &dto)
+            .await?,
     ))
 }

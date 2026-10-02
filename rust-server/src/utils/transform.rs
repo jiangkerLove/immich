@@ -120,6 +120,75 @@ pub fn transform_points(
     (transformed, current_width, current_height)
 }
 
+pub fn transform_ocr_bounding_box(
+    mut row: crate::models::db::asset_ocr::AssetOcrRow,
+    edits: &[AssetEditRow],
+    image_dimensions: ImageDimensions,
+) -> crate::models::db::asset_ocr::AssetOcrRow {
+    if edits.is_empty() || image_dimensions.width <= 0 || image_dimensions.height <= 0 {
+        return row;
+    }
+
+    let width = image_dimensions.width as f64;
+    let height = image_dimensions.height as f64;
+    let points = [
+        Point {
+            x: row.x1 as f64 * width,
+            y: row.y1 as f64 * height,
+        },
+        Point {
+            x: row.x2 as f64 * width,
+            y: row.y2 as f64 * height,
+        },
+        Point {
+            x: row.x3 as f64 * width,
+            y: row.y3 as f64 * height,
+        },
+        Point {
+            x: row.x4 as f64 * width,
+            y: row.y4 as f64 * height,
+        },
+    ];
+    let (transformed, current_width, current_height) =
+        transform_points(&points, edits, image_dimensions, false);
+    if current_width <= 0 || current_height <= 0 || transformed.len() < 4 {
+        return row;
+    }
+
+    let angle = edits
+        .iter()
+        .find(|edit| edit.action == "rotate")
+        .and_then(|edit| edit.parameters.get("angle"))
+        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
+        .unwrap_or(0.0);
+    let reordered = reorder_quad_points(&transformed, angle as i32);
+    let scale_x = current_width as f64;
+    let scale_y = current_height as f64;
+    row.x1 = (reordered[0].x / scale_x) as f32;
+    row.y1 = (reordered[0].y / scale_y) as f32;
+    row.x2 = (reordered[1].x / scale_x) as f32;
+    row.y2 = (reordered[1].y / scale_y) as f32;
+    row.x3 = (reordered[2].x / scale_x) as f32;
+    row.y3 = (reordered[2].y / scale_y) as f32;
+    row.x4 = (reordered[3].x / scale_x) as f32;
+    row.y4 = (reordered[3].y / scale_y) as f32;
+    row
+}
+
+fn reorder_quad_points(points: &[Point], rotation_degrees: i32) -> Vec<Point> {
+    let points = if points.len() >= 4 {
+        points
+    } else {
+        return points.to_vec();
+    };
+    match rotation_degrees {
+        90 => vec![points[3], points[0], points[1], points[2]],
+        180 => vec![points[2], points[3], points[0], points[1]],
+        270 => vec![points[1], points[2], points[3], points[0]],
+        _ => points[..4].to_vec(),
+    }
+}
+
 pub fn transform_face_bounding_box(
     bbox: FaceBoundingBox,
     edits: &[AssetEditRow],

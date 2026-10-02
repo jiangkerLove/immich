@@ -63,53 +63,21 @@ impl MaintenanceService {
     }
 
     pub async fn get_maintenance_status(&self) -> Result<MaintenanceStatusResp, ErrorResp> {
-        let state = self.get_maintenance_mode().await?;
-        if state.is_maintenance_mode {
-            let action = state
-                .action
-                .as_ref()
-                .map(|a| a.action)
-                .unwrap_or(MaintenanceAction::Start);
-            Ok(MaintenanceStatusResp {
-                active: true,
-                action,
-                progress: None,
-                task: None,
-                error: None,
-            })
-        } else {
-            Ok(MaintenanceStatusResp {
-                active: false,
-                action: MaintenanceAction::End,
-                progress: None,
-                task: None,
-                error: None,
-            })
-        }
+        // The API process always reports idle. The maintenance worker serves the live status.
+        Ok(MaintenanceStatusResp {
+            active: false,
+            action: MaintenanceAction::End,
+            progress: None,
+            task: None,
+            error: None,
+        })
     }
 
     pub async fn maintenance_login(
         &self,
-        dto: &MaintenanceLoginReq,
+        _dto: &MaintenanceLoginReq,
     ) -> Result<MaintenanceAuthResp, ErrorResp> {
-        let state = self.get_maintenance_mode().await?;
-        if !state.is_maintenance_mode {
-            return Err(ErrorResp::BadRequest("Not in maintenance mode".to_string()));
-        }
-
-        let secret = state
-            .secret
-            .ok_or_else(|| ErrorResp::ServerError("Maintenance secret missing".to_string()))?;
-
-        let token = dto
-            .token
-            .as_deref()
-            .ok_or_else(|| ErrorResp::Unauthorized("Missing JWT Token".to_string()))?;
-
-        let claims = decode_maintenance_jwt(token, &secret)?;
-        Ok(MaintenanceAuthResp {
-            username: claims.username,
-        })
+        Err(ErrorResp::BadRequest("Not in maintenance mode".to_string()))
     }
 
     pub async fn detect_prior_install(

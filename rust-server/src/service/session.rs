@@ -3,18 +3,16 @@ use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::db::DbService;
-use crate::service::websocket::WebSocketHub;
 use crate::utils::crypto::{hash_sha256, random_bytes_as_text};
 use crate::utils::permission::require_permission;
-use crate::models::db::auth_permission::Permission;
 
 #[derive(Clone)]
 pub struct SessionService {
     db: DbService,
-    websocket: WebSocketHub,
 }
 
 #[derive(Debug, FromRow)]
@@ -99,10 +97,7 @@ pub async fn list_sessions_for_user(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| map_session(row, None))
-        .collect())
+    Ok(rows.into_iter().map(|row| map_session(row, None)).collect())
 }
 
 fn map_session(row: SessionRow, current_id: Option<&str>) -> SessionResponse {
@@ -120,10 +115,9 @@ fn map_session(row: SessionRow, current_id: Option<&str>) -> SessionResponse {
 }
 
 impl SessionService {
-    pub fn new(pool: sqlx::PgPool, websocket: WebSocketHub) -> Self {
+    pub fn new(pool: sqlx::PgPool) -> Self {
         Self {
             db: DbService::new(pool),
-            websocket,
         }
     }
 
@@ -136,7 +130,11 @@ impl SessionService {
         let session_id = auth
             .session
             .as_ref()
-            .ok_or_else(|| ErrorResp::BadRequest("This endpoint can only be used with a session token".to_string()))?
+            .ok_or_else(|| {
+                ErrorResp::BadRequest(
+                    "This endpoint can only be used with a session token".to_string(),
+                )
+            })?
             .id
             .parse::<Uuid>()
             .map_err(|_| ErrorResp::BadRequest("Invalid session".to_string()))?;
@@ -233,7 +231,6 @@ impl SessionService {
             .bind(id)
             .execute(&self.db.pool)
             .await?;
-        self.websocket.emit_session_delete(*id);
         Ok(())
     }
 
@@ -245,13 +242,11 @@ impl SessionService {
             .and_then(|s| Uuid::parse_str(&s.id).ok());
 
         if let Some(exclude_id) = exclude {
-            sqlx::query(
-                r#"DELETE FROM session WHERE "userId" = $1 AND id != $2"#,
-            )
-            .bind(auth.user.id)
-            .bind(exclude_id)
-            .execute(&self.db.pool)
-            .await?;
+            sqlx::query(r#"DELETE FROM session WHERE "userId" = $1 AND id != $2"#)
+                .bind(auth.user.id)
+                .bind(exclude_id)
+                .execute(&self.db.pool)
+                .await?;
         } else {
             sqlx::query(r#"DELETE FROM session WHERE "userId" = $1"#)
                 .bind(auth.user.id)
@@ -272,12 +267,11 @@ impl SessionService {
     }
 
     async fn ensure_session_owner(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
-        let owner: Option<Uuid> = sqlx::query_scalar(
-            r#"SELECT "userId" FROM session WHERE id = $1"#,
-        )
-        .bind(id)
-        .fetch_optional(&self.db.pool)
-        .await?;
+        let owner: Option<Uuid> =
+            sqlx::query_scalar(r#"SELECT "userId" FROM session WHERE id = $1"#)
+                .bind(id)
+                .fetch_optional(&self.db.pool)
+                .await?;
 
         match owner {
             Some(user_id) if user_id == auth.user.id => Ok(()),
