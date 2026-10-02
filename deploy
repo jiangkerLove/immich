@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# 在仓库根目录拉取已上传的镜像，并在这一台机器上启动整套服务。
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if [[ ! -f .env ]]; then
+  cp rust-server/example.env .env
+  echo "已写入 .env。请先修改 DB_PASSWORD，再执行 ./deploy"
+  exit 1
+fi
+
+docker compose pull
+docker compose up -d
+docker compose ps

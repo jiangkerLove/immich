@@ -16,7 +16,7 @@ Cursor 规则：根目录 `AGENTS.md`、`.cursor/rules/`（**进度与计划只�
 | 判断 | 说明 |
 |------|------|
 | **代码面** | HTTP 全领域、66 JobName、19 队列、媒体/库/同步/搜索 API、WS、HLS、sqlx baseline、CLI — **已到位** |
-| **切流路径** | **Docker 一键**：`cd rust-server && docker compose up -d --build`（`docker-compose.yml`：web+API+PG+Redis+ML）；overlay 用 `docker-compose.overlay.yml`。说明见 `rust-server/README.docker.md` |
+| **切流路径** | **服务器**：仓库根目录 `./deploy`。**本机 Docker**：`cd rust-server && docker compose up -d --build`。**不用 Docker**：`cargo run` + Vite。说明只维护在 `rust-server/README.md` |
 | **真正阻塞** | 不是缺 API，而是：**真实 compose 冒烟未跑通**、**现有库 baseline 未验证锁定**、**维护模式 AppRestart 重启链路未在你的部署上确认** |
 | **下一步** | **仅剩 Cutover（需本机 compose/DB）**：C2 → C1 → C3；可选 P4。代码侧可迁移项已清空。 |
 
@@ -229,9 +229,7 @@ git fetch origin main dev-rust
 # 单元测试
 cd rust-server && cargo +stable test --offline --lib
 
-# 切流前（按你的 compose）
-# cd rust-server && docker compose up -d --build
-# # or overlay: docker compose -f ../docker/docker-compose.yml -f docker-compose.overlay.yml up -d --build
+# 运行方式见 rust-server/README.md（./deploy、docker compose、cargo run）
 # rust-server immich-admin migration-status
 # rust-server immich-admin schema-check
 # $env:IMMICH_URL="http://127.0.0.1:2283"

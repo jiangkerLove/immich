@@ -11,6 +11,9 @@ docker/library
 docker/postgres
 rust-server/library
 rust-server/postgres
+/library
+/postgres
+/.env
 uploads
 coverage
 
