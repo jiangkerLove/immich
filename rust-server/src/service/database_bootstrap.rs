@@ -507,12 +507,21 @@ fn normalize_server_version(version: &str) -> String {
 }
 
 fn version_satisfies(version: &str, range: &str) -> bool {
-    let Ok(req) = semver::VersionReq::parse(range) else {
+    let Ok(req) = semver::VersionReq::parse(&normalize_version_req(range)) else {
         return false;
     };
     semver::Version::parse(version)
         .map(|parsed| req.matches(&parsed))
         .unwrap_or(false)
+}
+
+/// npm accepts `>=0.3 <2`. The Rust semver crate requires a comma between comparators.
+fn normalize_version_req(range: &str) -> String {
+    range
+        .split(',')
+        .flat_map(|chunk| chunk.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn is_nightly_version(version: &str) -> bool {
@@ -530,5 +539,21 @@ fn version_lt(left: &str, right: &str) -> bool {
     match (semver::Version::parse(left), semver::Version::parse(right)) {
         (Ok(left), Ok(right)) => left < right,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_satisfies;
+
+    #[test]
+    fn vectorchord_0_4_3_is_inside_immich_range() {
+        assert!(version_satisfies("0.4.3", ">=0.3 <2"));
+        assert!(version_satisfies("0.3.0", ">=0.3 <2"));
+        assert!(!version_satisfies("0.2.9", ">=0.3 <2"));
+        assert!(!version_satisfies("2.0.0", ">=0.3 <2"));
+        assert!(version_satisfies("0.5.0", ">=0.5 <1"));
+        assert!(!version_satisfies("1.0.0", ">=0.5 <1"));
+        assert!(version_satisfies("14.10.0", ">=14.0.0"));
     }
 }
