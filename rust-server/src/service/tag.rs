@@ -42,7 +42,8 @@ pub struct TagCreateReq {
 #[serde(rename_all = "camelCase")]
 pub struct TagUpdateReq {
     pub name: Option<String>,
-    pub color: Option<String>,
+    #[serde(default)]
+    pub color: Option<Option<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -149,19 +150,24 @@ impl TagService {
         require_permission(auth, Permission::TagUpdate)?;
         let existing = self.get_owned(auth, id, Permission::TagUpdate).await?;
         let value = renamed_tag_value(&existing.value, dto.name.as_deref());
+        let (set_color, color) = match &dto.color {
+            Some(value) => (true, value.clone()),
+            None => (false, None),
+        };
 
         sqlx::query_as::<_, TagResponse>(
             r#"
                 UPDATE tag
                 SET value = $1,
-                    color = COALESCE($2, color)
-                WHERE id = $3
+                    color = CASE WHEN $2 THEN $3 ELSE color END
+                WHERE id = $4
                 RETURNING id, value, "createdAt" as created_at, "updatedAt" as updated_at,
                           color, "parentId" as parent_id
             "#,
         )
         .bind(&value)
-        .bind(&dto.color)
+        .bind(set_color)
+        .bind(color)
         .bind(id)
         .fetch_one(&self.db.pool)
         .await

@@ -459,13 +459,6 @@ pub async fn album_has_shared_link(pool: &PgPool, album_id: &Uuid) -> Result<boo
         .await
 }
 
-pub async fn count_album_assets(pool: &PgPool, album_id: &Uuid) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar(r#"SELECT COUNT(*) FROM album_asset WHERE "albumId" = $1"#)
-        .bind(album_id)
-        .fetch_one(pool)
-        .await
-}
-
 pub async fn count_owned_albums(pool: &PgPool, user_id: &Uuid) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         r#"
@@ -629,8 +622,8 @@ pub async fn get_metadata_for_ids(
         r#"
             SELECT
                 aa."albumId" as album_id,
-                MIN(a."localDateTime") as start_date,
-                MAX(a."localDateTime") as end_date,
+                MIN(((a."localDateTime" AT TIME ZONE 'UTC')::date::timestamp) AT TIME ZONE 'UTC') as start_date,
+                MAX(((a."localDateTime" AT TIME ZONE 'UTC')::date::timestamp) AT TIME ZONE 'UTC') as end_date,
                 MAX(a."updatedAt") as last_modified_asset_timestamp,
                 COUNT(a.id)::bigint as asset_count
             FROM album_asset aa

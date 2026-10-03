@@ -45,6 +45,40 @@ pub fn merge_preferences(base: &mut Value, patch: Value) {
     }
 }
 
+/// Store only values that differ from the defaults, matching `getPreferencesPartial`.
+pub fn preferences_partial(resolved: &Value) -> Value {
+    diff_against_defaults(resolved, &default_preferences_json())
+}
+
+fn diff_against_defaults(resolved: &Value, defaults: &Value) -> Value {
+    let (Value::Object(resolved_map), Value::Object(default_map)) = (resolved, defaults) else {
+        return Value::Object(serde_json::Map::new());
+    };
+
+    let mut partial = serde_json::Map::new();
+    for (key, default_value) in default_map {
+        let Some(value) = resolved_map.get(key) else {
+            continue;
+        };
+        if is_empty_preference(value) || value == default_value {
+            continue;
+        }
+        if value.is_object() && default_value.is_object() {
+            let child = diff_against_defaults(value, default_value);
+            if child.as_object().is_some_and(|map| !map.is_empty()) {
+                partial.insert(key.clone(), child);
+            }
+        } else {
+            partial.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(partial)
+}
+
+fn is_empty_preference(value: &Value) -> bool {
+    value.is_null() || value.as_str().is_some_and(|text| text.is_empty())
+}
+
 pub fn resolve_preferences(stored: Value) -> Value {
     let defaults = default_preferences_json();
     let mut preferences = defaults.clone();
@@ -106,5 +140,15 @@ mod tests {
         assert_eq!(preferences["purchase"]["showSupportBadge"], true);
         assert!(preferences["purchase"]["hideBuyButtonUntil"].is_string());
         assert_eq!(preferences["albums"]["defaultAssetOrder"], "desc");
+    }
+
+    #[test]
+    fn partial_keeps_only_values_that_differ_from_defaults() {
+        let resolved = resolve_preferences(json!({
+            "memories": { "duration": 8 },
+            "people": { "enabled": true }
+        }));
+        let partial = super::preferences_partial(&resolved);
+        assert_eq!(partial, json!({ "memories": { "duration": 8 } }));
     }
 }

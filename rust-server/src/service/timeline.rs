@@ -185,6 +185,7 @@ impl TimelineService {
             visibility,
             use_default_visibility: query.visibility.is_none(),
             with_stacked: parse_bool(&query.with_stacked).unwrap_or(false),
+            viewer_id: auth.user.id,
             shared_link_id,
             order_by_taken_at: query.order_by.as_deref() != Some("createdAt"),
             order_desc: query.order.as_deref() != Some("asc"),

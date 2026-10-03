@@ -872,6 +872,14 @@ pub async fn update_asset_fields(
     asset_id: &Uuid,
     fields: &AssetUpdateFields,
 ) -> Result<(), sqlx::Error> {
+    if fields.is_favorite.is_none()
+        && fields.visibility.is_none()
+        && fields.live_photo_video_id.is_none()
+        && fields.duplicate_id.is_none()
+    {
+        return Ok(());
+    }
+
     let mut query = sqlx::QueryBuilder::new(r#"UPDATE asset SET "#);
     let mut separated = query.separated(", ");
 
@@ -906,7 +914,9 @@ pub async fn update_all_asset_fields(
     visibility: Option<&str>,
     duplicate_id: Option<Option<Uuid>>,
 ) -> Result<(), sqlx::Error> {
-    if asset_ids.is_empty() {
+    if asset_ids.is_empty()
+        || (is_favorite.is_none() && visibility.is_none() && duplicate_id.is_none())
+    {
         return Ok(());
     }
 
@@ -1113,6 +1123,10 @@ pub async fn update_exif_fields(
     asset_id: &Uuid,
     fields: &ExifUpdateFields,
 ) -> Result<(), sqlx::Error> {
+    if !fields.has_updates() {
+        return Ok(());
+    }
+
     let mut query = sqlx::QueryBuilder::new(r#"UPDATE asset_exif SET "#);
     let mut separated = query.separated(", ");
 
@@ -1157,7 +1171,7 @@ pub async fn update_all_exif_fields(
     asset_ids: &[Uuid],
     fields: &ExifUpdateFields,
 ) -> Result<(), sqlx::Error> {
-    if asset_ids.is_empty() {
+    if asset_ids.is_empty() || !fields.has_updates() {
         return Ok(());
     }
 

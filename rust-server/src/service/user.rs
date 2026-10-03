@@ -113,7 +113,8 @@ impl UserService {
         let mut preferences = resolve_preferences(stored);
         merge_preferences(&mut preferences, dto.clone());
 
-        UserMetadataPO::upsert_preferences_json(&self.db.pool, &auth.user.id, &preferences).await?;
+        let partial = crate::utils::preferences::preferences_partial(&preferences);
+        UserMetadataPO::upsert_preferences_json(&self.db.pool, &auth.user.id, &partial).await?;
         Ok(preferences)
     }
 
@@ -147,7 +148,7 @@ impl UserService {
                         email, password, "isAdmin" as is_admin
                     FROM "user"
                     WHERE "deletedAt" IS NULL
-                    ORDER BY name
+                    ORDER BY "createdAt" DESC
                 "#,
             )
             .fetch_all(&self.db.pool)

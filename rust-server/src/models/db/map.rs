@@ -63,14 +63,7 @@ pub async fn get_album_map_markers(
     .await
 }
 
-pub async fn get_map_markers(
-    pool: &Pool<Postgres>,
-    search: &MapMarkerSearch,
-) -> Result<Vec<MapMarkerRow>, sqlx::Error> {
-    if search.owner_ids.is_empty() && search.album_ids.is_empty() {
-        return Ok(vec![]);
-    }
-
+fn map_marker_sql(search: &MapMarkerSearch) -> (String, bool) {
     let mut sql = String::from(
         r#"
             SELECT
@@ -88,7 +81,8 @@ pub async fn get_map_markers(
         "#,
     );
 
-    if search.is_archived == Some(true) {
+    let include_viewer = search.is_archived == Some(true);
+    if include_viewer {
         sql.push_str(
             r#" AND (
                 asset.visibility = 'timeline'
@@ -99,7 +93,7 @@ pub async fn get_map_markers(
         sql.push_str(r#" AND asset.visibility = 'timeline'"#);
     }
 
-    let mut bind_index = 2u32;
+    let mut bind_index = if include_viewer { 2 } else { 1 };
     if search.is_favorite.is_some() {
         sql.push_str(&format!(r#" AND asset."isFavorite" = ${bind_index}"#));
         bind_index += 1;
@@ -129,7 +123,22 @@ pub async fn get_map_markers(
         album = bind_index + 1,
     ));
 
-    let mut query = sqlx::query_as::<_, MapMarkerRow>(&sql).bind(search.auth_user_id);
+    (sql, include_viewer)
+}
+
+pub async fn get_map_markers(
+    pool: &Pool<Postgres>,
+    search: &MapMarkerSearch,
+) -> Result<Vec<MapMarkerRow>, sqlx::Error> {
+    if search.owner_ids.is_empty() && search.album_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let (sql, include_viewer) = map_marker_sql(search);
+    let mut query = sqlx::query_as::<_, MapMarkerRow>(&sql);
+    if include_viewer {
+        query = query.bind(search.auth_user_id);
+    }
     if let Some(is_favorite) = search.is_favorite {
         query = query.bind(is_favorite);
     }
@@ -189,4 +198,39 @@ pub async fn reverse_geocode_country(
     .bind(longitude)
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search(archived: Option<bool>) -> MapMarkerSearch {
+        MapMarkerSearch {
+            owner_ids: vec![Uuid::nil()],
+            album_ids: vec![],
+            auth_user_id: Uuid::nil(),
+            is_archived: archived,
+            is_favorite: None,
+            file_created_after: None,
+            file_created_before: None,
+        }
+    }
+
+    #[test]
+    fn default_map_query_starts_at_first_parameter() {
+        let (sql, include_viewer) = map_marker_sql(&search(None));
+        assert!(!include_viewer);
+        assert!(sql.contains(r#"asset."ownerId" = ANY($1)"#));
+        assert!(sql.contains(r#"aa."albumId" = ANY($2)"#));
+        assert!(!sql.contains("$3"));
+    }
+
+    #[test]
+    fn archived_map_query_binds_viewer_before_owners() {
+        let (sql, include_viewer) = map_marker_sql(&search(Some(true)));
+        assert!(include_viewer);
+        assert!(sql.contains(r#"asset."ownerId" = $1 AND"#));
+        assert!(sql.contains(r#"asset."ownerId" = ANY($2)"#));
+        assert!(sql.contains(r#"aa."albumId" = ANY($3)"#));
+    }
 }

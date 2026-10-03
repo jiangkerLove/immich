@@ -432,7 +432,7 @@ fn parse_bitrate_to_bps(bitrate: &str) -> i64 {
     } else if trimmed.ends_with('K') || trimmed.ends_with('k') {
         value * 1_000
     } else {
-        value * 1_000
+        value
     }
 }
 
@@ -807,5 +807,13 @@ mod tests {
         asset.video_height = 720;
         assert_eq!(get_transcode_target(&config, &asset), TranscodeTarget::None);
         assert!(!is_remux_required(&config, &asset));
+    }
+
+    #[test]
+    fn bitrate_without_a_suffix_is_already_bits_per_second() {
+        assert_eq!(parse_bitrate_to_bps("5000000"), 5_000_000);
+        assert_eq!(parse_bitrate_to_bps("2M"), 2_000_000);
+        assert_eq!(parse_bitrate_to_bps("128k"), 128_000);
+        assert_eq!(parse_bitrate_to_bps("0"), 0);
     }
 }

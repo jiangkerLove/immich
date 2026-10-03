@@ -263,6 +263,8 @@ impl AlbumService {
             for album in &mut albums {
                 if let Some(metadata) = metadata_map.get(&album.id) {
                     apply_album_metadata(album, metadata);
+                } else {
+                    album.asset_count = 0;
                 }
             }
         }
@@ -785,7 +787,6 @@ impl AlbumService {
 
         let users = album::get_album_users(&self.db.pool, album_id, auth_user_id).await?;
         let has_shared_link = album::album_has_shared_link(&self.db.pool, album_id).await?;
-        let asset_count = album::count_album_assets(&self.db.pool, album_id).await?;
         let has_shared_users = users.len() > 1;
         let is_shared = has_shared_users || has_shared_link;
 
@@ -834,7 +835,7 @@ impl AlbumService {
                 })
                 .collect(),
             has_shared_link,
-            asset_count,
+            asset_count: 0,
             last_modified_asset_timestamp: None,
             start_date: None,
             end_date: None,

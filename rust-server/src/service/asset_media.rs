@@ -299,7 +299,9 @@ impl AssetMediaService {
 
         let edited = query.edited.unwrap_or(false) || auth.shared_link.is_some();
         if query.size.as_deref() == Some("original") {
-            return Ok(thumbnail_redirect(asset_id, "original", edited));
+            return Err(ErrorResp::BadRequest(
+                "May not request original file".to_string(),
+            ));
         }
 
         let file_type = match query.size.as_deref() {

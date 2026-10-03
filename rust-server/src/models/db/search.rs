@@ -68,6 +68,8 @@ pub async fn search_metadata_ids(
     append_search_filters(&mut query, filter, &schema);
     query.push(" ORDER BY asset.\"fileCreatedAt\" ");
     query.push(if order_desc { "DESC" } else { "ASC" });
+    query.push(", asset.id ");
+    query.push(if order_desc { "DESC" } else { "ASC" });
     query.push(" LIMIT ");
     query.push_bind(limit);
     query.push(" OFFSET ");
@@ -152,7 +154,7 @@ pub async fn search_smart_ids(
     append_search_filters(&mut query, filter, &schema);
     query.push(" ORDER BY smart_search.embedding <=> CAST(");
     query.push_bind(embedding);
-    query.push(" AS vector) LIMIT ");
+    query.push(" AS vector), asset.id ASC LIMIT ");
     query.push_bind(limit);
     query.push(" OFFSET ");
     query.push_bind(offset);
@@ -466,16 +468,18 @@ fn append_search_filters(
                 query.push(
                     r#"
                     AND EXISTS (
-                        SELECT 1 FROM tag_asset
+                        SELECT 1
+                        FROM tag_asset
+                        INNER JOIN tag_closure ON tag_asset."tagId" = tag_closure.id_descendant
                         WHERE tag_asset."assetId" = asset.id
-                          AND tag_asset."tagId" = ANY(
+                          AND tag_closure.id_ancestor = ANY(
                     "#,
                 );
                 query.push_bind(ids.clone());
                 query.push(
                     r#")
                         GROUP BY tag_asset."assetId"
-                        HAVING COUNT(DISTINCT tag_asset."tagId") = "#,
+                        HAVING COUNT(DISTINCT tag_closure.id_ancestor) >= "#,
                 );
                 query.push_bind(ids.len() as i64);
                 query.push(") ");

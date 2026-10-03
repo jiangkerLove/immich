@@ -24,6 +24,7 @@ pub struct TimelineFilter {
     pub visibility: Option<String>,
     pub use_default_visibility: bool,
     pub with_stacked: bool,
+    pub viewer_id: Uuid,
     pub shared_link_id: Option<Uuid>,
     pub order_by_taken_at: bool,
     pub order_desc: bool,
@@ -75,7 +76,10 @@ pub async fn get_time_buckets(
         query.push(r#"ORDER BY "timeBucket" ASC"#);
     }
 
-    query.build_query_as::<TimeBucketItem>().fetch_all(pool).await
+    query
+        .build_query_as::<TimeBucketItem>()
+        .fetch_all(pool)
+        .await
 }
 
 pub async fn get_time_bucket_json(
@@ -213,13 +217,9 @@ pub async fn get_time_bucket_json(
     query.push(order_date_expr);
     query.push(" ");
     query.push(order_dir);
-    query.push(
-        r#", asset."fileCreatedAt" "#,
-    );
+    query.push(r#", asset."fileCreatedAt" "#);
     query.push(order_dir);
-    query.push(
-        r#", asset."originalFileName" "#,
-    );
+    query.push(r#", asset."originalFileName" "#);
     query.push(order_dir);
     query.push(
         r#"
@@ -311,9 +311,23 @@ fn append_asset_filters(
     }
 
     if !filter.owner_ids.is_empty() {
-        query.push(r#" AND asset."ownerId" = ANY("#);
-        query.push_bind(filter.owner_ids.clone());
-        query.push("::uuid[]) ");
+        if filter.person_id.is_some() {
+            query.push(r#" AND (asset."ownerId" = ANY("#);
+            query.push_bind(filter.owner_ids.clone());
+            query.push(
+                r#"::uuid[]) OR EXISTS (
+                    SELECT 1
+                    FROM album_asset
+                    INNER JOIN album ON album.id = album_asset."albumId" AND album."deletedAt" IS NULL
+                    INNER JOIN album_user ON album_user."albumId" = album.id AND album_user."userId" = "#,
+            );
+            query.push_bind(filter.viewer_id);
+            query.push(r#" WHERE album_asset."assetId" = asset.id)) "#);
+        } else {
+            query.push(r#" AND asset."ownerId" = ANY("#);
+            query.push_bind(filter.owner_ids.clone());
+            query.push("::uuid[]) ");
+        }
     }
 
     if let Some(album_id) = filter.album_id {
@@ -357,16 +371,14 @@ fn append_asset_filters(
 
     if let Some(person_id) = filter.person_id {
         let face_col = schema.face_person_col_quoted();
-        query.push(
-            format!(
-                r#"
+        query.push(format!(
+            r#"
             AND EXISTS (
                 SELECT 1 FROM asset_face
                 WHERE asset_face."assetId" = asset.id
                   AND asset_face.{face_col} =
             "#
-            ),
-        );
+        ));
         query.push_bind(person_id);
         query.push(
             r#"
@@ -533,13 +545,11 @@ pub async fn user_owns_tag(
     user_id: &Uuid,
     tag_id: &Uuid,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"SELECT EXISTS(SELECT 1 FROM tag WHERE id = $1 AND "userId" = $2)"#,
-    )
-    .bind(tag_id)
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
+    sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM tag WHERE id = $1 AND "userId" = $2)"#)
+        .bind(tag_id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn user_owns_person(
