@@ -374,27 +374,30 @@ impl PersonService {
         require_permission(auth, Permission::PersonReassign)?;
         self.require_person_owner(auth, &[*target_id]).await?;
 
-        let target_face_asset_id =
-            person::get_face_asset_id(&self.pool, &auth.user.id, target_id).await?;
+        let target_needs_feature = person::get_face_asset_id(&self.pool, &auth.user.id, target_id)
+            .await?
+            .is_none();
         let mut change_feature_photo = Vec::new();
-        if target_face_asset_id.is_none() {
-            change_feature_photo.push(*target_id);
-        }
 
         for item in &dto.data {
             self.require_person_owner(auth, &[item.person_id]).await?;
-            if let Some(face_id) =
-                person::get_face_id_for_asset(&self.pool, &item.person_id, &item.asset_id).await?
-            {
+            let face_ids =
+                person::list_face_ids_for_asset(&self.pool, &item.person_id, &item.asset_id)
+                    .await?;
+            let source_feature =
+                person::get_face_asset_id(&self.pool, &auth.user.id, &item.person_id).await?;
+            change_feature_photo.extend(feature_photo_targets(
+                target_needs_feature,
+                *target_id,
+                item.person_id,
+                source_feature,
+                &face_ids,
+            ));
+            for face_id in face_ids {
                 if !face::owner_owns_face(&self.pool, &auth.user.id, &face_id).await? {
                     return Err(ErrorResp::BadRequest(
                         "Not found or no person.create access".to_string(),
                     ));
-                }
-                if person::get_face_asset_id(&self.pool, &auth.user.id, &item.person_id).await?
-                    == Some(face_id)
-                {
-                    change_feature_photo.push(item.person_id);
                 }
                 person::reassign_face(&self.pool, &face_id, target_id).await?;
             }
@@ -731,6 +734,26 @@ impl PersonService {
     }
 }
 
+/// Official `reassignFaces` only refreshes a feature photo after a face actually moves.
+pub(crate) fn feature_photo_targets(
+    target_needs_feature: bool,
+    target_id: Uuid,
+    source_id: Uuid,
+    source_feature_face: Option<Uuid>,
+    moved_face_ids: &[Uuid],
+) -> Vec<Uuid> {
+    let mut ids = Vec::new();
+    for face_id in moved_face_ids {
+        if target_needs_feature {
+            ids.push(target_id);
+        }
+        if source_feature_face == Some(*face_id) {
+            ids.push(source_id);
+        }
+    }
+    ids
+}
+
 struct MergeDecision {
     conflict: bool,
     copy_name: Option<String>,
@@ -840,7 +863,8 @@ pub(crate) async fn cleanup_people(pool: &PgPool) -> Result<(), String> {
 mod tests {
     use chrono::NaiveDate;
 
-    use super::merge_decision;
+    use super::{feature_photo_targets, merge_decision};
+    use uuid::Uuid;
 
     fn date(value: &str) -> NaiveDate {
         NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
@@ -876,5 +900,21 @@ mod tests {
 
         let birth_onto_unknown = merge_decision("Alice", None, "Alice", Some(date("1976-06-30")));
         assert!(birth_onto_unknown.conflict);
+    }
+
+    #[test]
+    fn feature_photo_waits_until_a_face_moves() {
+        let target = Uuid::nil();
+        let source = Uuid::from_u128(1);
+        let face = Uuid::from_u128(2);
+        assert!(feature_photo_targets(true, target, source, None, &[]).is_empty());
+        assert_eq!(
+            feature_photo_targets(true, target, source, Some(face), &[face]),
+            vec![target, source]
+        );
+        assert_eq!(
+            feature_photo_targets(false, target, source, None, &[face]),
+            Vec::<Uuid>::new()
+        );
     }
 }

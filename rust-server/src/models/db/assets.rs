@@ -625,6 +625,7 @@ pub async fn get_stack(
                     SELECT COUNT(*)
                     FROM asset stacked
                     WHERE stacked."stackId" = s.id
+                      AND stacked.id != s."primaryAssetId"
                       AND stacked."deletedAt" IS NULL
                       AND stacked.visibility = 'timeline'
                 ) + 1 AS asset_count
@@ -635,6 +636,11 @@ pub async fn get_stack(
     .bind(stack_id)
     .fetch_optional(pool)
     .await
+}
+
+/// Official `mapStack`: timeline members other than the primary, plus one for the primary.
+pub(crate) fn stack_display_count(timeline_non_primary: i64) -> i64 {
+    timeline_non_primary + 1
 }
 
 pub async fn filter_accessible_ids(
@@ -1365,4 +1371,15 @@ pub async fn update_stack_id(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stack_display_count;
+
+    #[test]
+    fn stack_count_adds_the_primary_once() {
+        assert_eq!(stack_display_count(1), 2);
+        assert_eq!(stack_display_count(0), 1);
+    }
 }

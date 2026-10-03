@@ -81,13 +81,12 @@ impl OcrService {
             return Ok(OcrOutcome::Failed);
         };
 
-        if asset.visibility == "hidden" {
-            return Ok(OcrOutcome::Skipped);
+        if let Some(outcome) = ocr_gate(asset.preview_path.is_some(), asset.visibility == "hidden")
+        {
+            return Ok(outcome);
         }
 
-        let Some(preview_path) = asset.preview_path else {
-            return Ok(OcrOutcome::Failed);
-        };
+        let preview_path = asset.preview_path.unwrap_or_default();
 
         if !Path::new(&preview_path).exists() {
             return Ok(OcrOutcome::Failed);
@@ -129,5 +128,28 @@ impl OcrService {
             .map_err(|err| err.to_string())?;
 
         Ok(OcrOutcome::Success)
+    }
+}
+
+/// Official `handleOcr`: missing preview is Failed, then hidden is Skipped.
+pub(crate) fn ocr_gate(has_preview: bool, hidden: bool) -> Option<OcrOutcome> {
+    if !has_preview {
+        return Some(OcrOutcome::Failed);
+    }
+    if hidden {
+        return Some(OcrOutcome::Skipped);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_asset_without_preview_fails_before_skip() {
+        assert_eq!(ocr_gate(false, true), Some(OcrOutcome::Failed));
+        assert_eq!(ocr_gate(true, true), Some(OcrOutcome::Skipped));
+        assert_eq!(ocr_gate(true, false), None);
     }
 }

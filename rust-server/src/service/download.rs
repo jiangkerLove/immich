@@ -12,7 +12,7 @@ use crate::models::response::response::ErrorResp;
 use crate::service::access::{require_album_access, require_assets_access};
 use crate::utils::permission::require_permission;
 use crate::utils::preferences::resolve_preferences;
-use crate::utils::zip_archive::{ZipEntry, archive_entry_name, zip_response};
+use crate::utils::zip_archive::{ZipEntry, zip_response};
 
 const DEFAULT_ARCHIVE_SIZE: i64 = 4 * 1024 * 1024 * 1024;
 
@@ -158,8 +158,8 @@ impl DownloadService {
             };
 
             entries.push(ZipEntry {
-                path: path.clone(),
-                name: archive_entry_name(&asset.original_file_name, &path),
+                path,
+                name: asset.original_file_name.clone(),
             });
         }
 

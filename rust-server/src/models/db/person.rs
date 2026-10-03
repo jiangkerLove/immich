@@ -837,11 +837,11 @@ pub async fn owner_owns_people(
     Ok(count as usize == ids.len())
 }
 
-pub async fn get_face_id_for_asset(
+pub async fn list_face_ids_for_asset(
     pool: &Pool<Postgres>,
     person_id: &Uuid,
     asset_id: &Uuid,
-) -> Result<Option<Uuid>, sqlx::Error> {
+) -> Result<Vec<Uuid>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let face_col = schema.face_person_col_quoted();
     sqlx::query_scalar(&format!(
@@ -851,12 +851,11 @@ pub async fn get_face_id_for_asset(
             WHERE {face_col} = $1
               AND "assetId" = $2
               AND "deletedAt" IS NULL
-            LIMIT 1
         "#
     ))
     .bind(person_id)
     .bind(asset_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
 }
 

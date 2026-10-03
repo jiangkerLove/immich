@@ -9,7 +9,6 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 use crate::models::response::response::ErrorResp;
-use crate::utils::file_response::{file_extension, file_stem};
 
 pub struct ZipEntry {
     pub path: String,
@@ -98,10 +97,6 @@ fn resolve_path(path: &str) -> String {
         .unwrap_or_else(|_| path.to_string())
 }
 
-pub fn archive_entry_name(original_file_name: &str, path: &str) -> String {
-    format!("{}{}", file_stem(original_file_name), file_extension(path))
-}
-
 fn unique_archive_name(original: &str, counts: &mut HashMap<String, u32>) -> String {
     let mut filename = sanitize_filename(original);
     if filename.is_empty() {
@@ -144,4 +139,24 @@ fn sanitize_filename(name: &str) -> String {
         })
         .collect();
     sanitized.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_names_keep_original_filename_and_number_duplicates() {
+        let mut counts = HashMap::new();
+        assert_eq!(
+            unique_archive_name("IMG_0001.HEIC", &mut counts),
+            "IMG_0001.HEIC"
+        );
+        assert_eq!(
+            unique_archive_name("IMG_0001.HEIC", &mut counts),
+            "IMG_0001+1.HEIC"
+        );
+        assert_eq!(unique_archive_name("a/b:c.jpg", &mut counts), "a_b_c.jpg");
+        assert_eq!(unique_archive_name("   ", &mut counts), "unnamed");
+    }
 }

@@ -129,16 +129,12 @@ impl FaceDetectionService {
             .map(|face| face.id)
             .collect();
 
-        let height_scale = if existing_faces.is_empty() {
-            1.0
-        } else {
-            detection.image_height as f64 / existing_faces[0].image_height as f64
-        };
-        let width_scale = if existing_faces.is_empty() {
-            1.0
-        } else {
-            detection.image_width as f64 / existing_faces[0].image_width as f64
-        };
+        let (stored_width, stored_height) = existing_faces
+            .first()
+            .map(|face| (face.image_width, face.image_height))
+            .unwrap_or((1, 1));
+        let width_scale = face_match_scale(detection.image_width, stored_width);
+        let height_scale = face_match_scale(detection.image_height, stored_height);
 
         let mut faces_to_add = Vec::new();
         let mut face_ids_to_remove = Vec::new();
@@ -222,6 +218,12 @@ fn parse_existing_faces(value: Option<serde_json::Value>) -> Vec<DetectFaceAsset
         .unwrap_or_default()
 }
 
+/// Official `imageHeight || 1`: a stored size of 0 is treated as 1.
+fn face_match_scale(detected: i32, stored: i32) -> f64 {
+    let denom = if stored == 0 { 1 } else { stored };
+    detected as f64 / f64::from(denom)
+}
+
 fn iou(face: &DetectFaceAssetFace, new_box: &BoundingBox) -> f64 {
     let x1 = f64::max(face.bounding_box_x1 as f64, new_box.x1);
     let y1 = f64::max(face.bounding_box_y1 as f64, new_box.y1);
@@ -238,5 +240,16 @@ fn iou(face: &DetectFaceAssetFace, new_box: &BoundingBox) -> f64 {
         0.0
     } else {
         intersection / union
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::face_match_scale;
+
+    #[test]
+    fn zero_stored_face_size_scales_as_one() {
+        assert_eq!(face_match_scale(800, 0), 800.0);
+        assert_eq!(face_match_scale(400, 200), 2.0);
     }
 }
