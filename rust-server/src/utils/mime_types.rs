@@ -14,8 +14,9 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 ];
 
 const SIDECAR_EXTENSIONS: &[&str] = &[".xmp"];
-const HEIF_IMAGE_EXTENSIONS: &[&str] = &[".heic", ".heif", ".hif"];
-const POSSIBLY_ANIMATED_IMAGE_EXTENSIONS: &[&str] = &[".avif", ".gif", ".webp"];
+const HEIF_IMAGE_EXTENSIONS: &[&str] = &[".avif", ".heic", ".heif", ".hif"];
+const POSSIBLY_ANIMATED_IMAGE_EXTENSIONS: &[&str] =
+    &[".avif", ".gif", ".heic", ".heif", ".jxl", ".png", ".webp"];
 
 fn to_vec(extensions: &[&str]) -> Vec<String> {
     extensions.iter().map(|ext| (*ext).to_string()).collect()
@@ -66,4 +67,25 @@ fn has_extension(path: &str, extensions: &[&str]) -> bool {
     extensions
         .iter()
         .any(|extension| lower.ends_with(extension))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_heif_image_path, is_possibly_animated_image_path};
+
+    #[test]
+    fn animated_and_heif_extensions_match_official() {
+        for path in [
+            "a.avif", "a.GIF", "a.heic", "a.heif", "a.jxl", "a.PNG", "a.webp",
+        ] {
+            assert!(is_possibly_animated_image_path(path), "{path}");
+        }
+        assert!(!is_possibly_animated_image_path("a.cr3"));
+        assert!(!is_possibly_animated_image_path("a.jpg"));
+
+        for path in ["a.AVIF", "a.heic", "a.heif", "a.hif"] {
+            assert!(is_heif_image_path(path), "{path}");
+        }
+        assert!(!is_heif_image_path("a.jpg"));
+    }
 }

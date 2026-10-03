@@ -232,14 +232,16 @@ pub async fn list_for_user(
             {hidden_clause}
             GROUP BY {group_by}
             HAVING person.name <> '' OR COUNT(af."assetId") >= {minimum_faces}
-            ORDER BY (
-                SELECT fs_ref.embedding <=> fs_target.embedding
-                FROM face_search fs_ref
-                CROSS JOIN face_search fs_target
-                WHERE fs_ref."faceId" = person."faceAssetId"
-                  AND fs_target."faceId" = $2
-                LIMIT 1
-            ) ASC NULLS LAST
+            ORDER BY person."isHidden" ASC,
+                     person."isFavorite" DESC,
+                     (
+                         SELECT fs_ref.embedding <=> fs_target.embedding
+                         FROM face_search fs_ref
+                         CROSS JOIN face_search fs_target
+                         WHERE fs_ref."faceId" = person."faceAssetId"
+                           AND fs_target."faceId" = $2
+                         LIMIT 1
+                     ) ASC NULLS LAST
             LIMIT $3 OFFSET $4
             "#,
             minimum_faces = minimum_faces_sql(),

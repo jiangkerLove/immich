@@ -349,13 +349,15 @@ impl BackgroundTaskProcessor {
         };
 
         if let (Some(stack_id), Some(primary_asset_id)) = (asset.stack_id, asset.primary_asset_id) {
-            let replacements =
+            let timeline_ids =
                 asset_delete::list_stack_timeline_asset_ids(&self.pool, &stack_id, &asset.id)
                     .await
                     .map_err(|err| err.to_string())?;
+            let (remaining, replacements) =
+                asset_delete::remaining_stack_members(primary_asset_id, asset.id, &timeline_ids);
             match asset_delete::stack_action_after_asset_delete(
                 primary_asset_id == asset.id,
-                replacements.len(),
+                remaining,
             ) {
                 asset_delete::StackDeleteAction::Delete => {
                     stack::delete(&self.pool, &stack_id)

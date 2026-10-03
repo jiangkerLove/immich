@@ -90,24 +90,28 @@ impl DatabaseBackupRunner {
 
         if let Err(err) = result {
             tracing::error!("database restore failed, rolling back: {err}");
-            if let Ok(mut cb) = progress.lock() {
-                cb("rollback", 0);
-            }
-            let rollback_progress = std::sync::Arc::clone(&progress);
-            self.restore_from_file(
-                std::path::Path::new(&restore_point),
-                &username,
-                false,
-                move |value| {
-                    if let Ok(mut cb) = rollback_progress.lock() {
-                        cb("rollback", (value * 100.0) as i32);
-                    }
-                },
-            )
-            .await?;
+            self.rollback_restore_point(&restore_point, &username, &progress)
+                .await?;
             return Err(err);
         }
 
+        if let Err(err) = self.finish_restored_database(&progress).await {
+            tracing::error!("database restore health check failed, rolling back: {err}");
+            self.rollback_restore_point(&restore_point, &username, &progress)
+                .await?;
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    async fn finish_restored_database<F>(
+        &self,
+        progress: &std::sync::Arc<std::sync::Mutex<F>>,
+    ) -> Result<(), BackupRunnerError>
+    where
+        F: FnMut(&str, i32) + Send,
+    {
         if let Ok(mut cb) = progress.lock() {
             cb("migrations", 90);
         }
@@ -134,6 +138,32 @@ impl DatabaseBackupRunner {
             cb("restore", 100);
         }
         Ok(())
+    }
+
+    async fn rollback_restore_point<F>(
+        &self,
+        restore_point: &str,
+        username: &str,
+        progress: &std::sync::Arc<std::sync::Mutex<F>>,
+    ) -> Result<(), BackupRunnerError>
+    where
+        F: FnMut(&str, i32) + Send + 'static,
+    {
+        if let Ok(mut cb) = progress.lock() {
+            cb("rollback", 0);
+        }
+        let rollback_progress = std::sync::Arc::clone(progress);
+        self.restore_from_file(
+            std::path::Path::new(restore_point),
+            username,
+            false,
+            move |value| {
+                if let Ok(mut cb) = rollback_progress.lock() {
+                    cb("rollback", (value * 100.0) as i32);
+                }
+            },
+        )
+        .await
     }
 
     async fn restore_from_file(

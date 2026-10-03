@@ -95,7 +95,8 @@ pub async fn list_stack_timeline_asset_ids(
             WHERE "stackId" = $1
               AND id != $2
               AND visibility = 'timeline'
-              AND status != 'deleted'
+              AND "deletedAt" IS NULL
+            ORDER BY "fileCreatedAt" ASC
         "#,
     )
     .bind(stack_id)
@@ -133,6 +134,22 @@ pub fn deletion_file_paths(
         paths.push(original_path.to_string());
     }
     paths
+}
+
+/// Official stack members exclude the primary, then add it back unless it is the asset being deleted.
+/// `timeline_ids` is every remaining timeline asset in `fileCreatedAt` order, including the primary when it is visible.
+pub fn remaining_stack_members(
+    primary_id: Uuid,
+    deleted_id: Uuid,
+    timeline_ids: &[Uuid],
+) -> (usize, Vec<Uuid>) {
+    let non_primary: Vec<Uuid> = timeline_ids
+        .iter()
+        .copied()
+        .filter(|id| *id != primary_id)
+        .collect();
+    let remaining = non_primary.len() + usize::from(primary_id != deleted_id);
+    (remaining, non_primary)
 }
 
 pub fn stack_action_after_asset_delete(
@@ -276,6 +293,31 @@ mod tests {
         assert_eq!(
             stack_action_after_asset_delete(false, 2),
             StackDeleteAction::Keep
+        );
+    }
+
+    #[test]
+    fn hidden_primary_still_counts_as_a_remaining_stack_member() {
+        let primary = Uuid::from_u128(1);
+        let kept_timeline = Uuid::from_u128(2);
+        let deleted_timeline = Uuid::from_u128(3);
+        let (remaining, promote) =
+            remaining_stack_members(primary, deleted_timeline, &[kept_timeline]);
+        assert_eq!(remaining, 2);
+        assert!(promote.iter().all(|id| *id != primary));
+        assert_eq!(
+            stack_action_after_asset_delete(false, remaining),
+            StackDeleteAction::Keep
+        );
+
+        let older = Uuid::from_u128(4);
+        let newer = Uuid::from_u128(5);
+        let (remaining, promote) = remaining_stack_members(primary, primary, &[older, newer]);
+        assert_eq!(remaining, 2);
+        assert_eq!(promote, vec![older, newer]);
+        assert_eq!(
+            stack_action_after_asset_delete(true, remaining),
+            StackDeleteAction::PromoteFirst
         );
     }
 }

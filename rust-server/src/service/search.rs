@@ -152,6 +152,7 @@ pub struct SearchPlacesQuery {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchSuggestionQuery {
     #[serde(rename = "type")]
     pub suggestion_type: String,
@@ -161,6 +162,67 @@ pub struct SearchSuggestionQuery {
     pub model: Option<String>,
     pub lens_model: Option<String>,
     pub include_null: Option<String>,
+}
+
+struct SuggestionFilters<'a> {
+    country: Option<&'a str>,
+    state: Option<&'a str>,
+    make: Option<&'a str>,
+    model: Option<&'a str>,
+    lens_model: Option<&'a str>,
+}
+
+/// Official `getSuggestions` only applies the filters that belong to that type.
+fn suggestion_filters(query: &SearchSuggestionQuery) -> SuggestionFilters<'_> {
+    let country = query.country.as_deref();
+    let state = query.state.as_deref();
+    let make = query.make.as_deref();
+    let model = query.model.as_deref();
+    let lens_model = query.lens_model.as_deref();
+    match query.suggestion_type.as_str() {
+        "state" => SuggestionFilters {
+            country,
+            state: None,
+            make: None,
+            model: None,
+            lens_model: None,
+        },
+        "city" => SuggestionFilters {
+            country,
+            state,
+            make: None,
+            model: None,
+            lens_model: None,
+        },
+        "camera-make" => SuggestionFilters {
+            country: None,
+            state: None,
+            make: None,
+            model,
+            lens_model,
+        },
+        "camera-model" => SuggestionFilters {
+            country: None,
+            state: None,
+            make,
+            model: None,
+            lens_model,
+        },
+        "camera-lens-model" => SuggestionFilters {
+            country: None,
+            state: None,
+            make,
+            model,
+            lens_model: None,
+        },
+        _ => SuggestionFilters {
+            country: None,
+            state: None,
+            make: None,
+            model: None,
+            lens_model: None,
+        },
+    }
 }
 
 impl SearchService {
@@ -596,14 +658,16 @@ impl SearchService {
             _ => return Ok(vec![]),
         };
 
+        let filters = suggestion_filters(query);
         let mut suggestions = search::get_exif_suggestions(
             &self.pool,
             field,
             &user_ids,
-            query.country.as_deref(),
-            query.state.as_deref(),
-            query.make.as_deref(),
-            query.model.as_deref(),
+            filters.country,
+            filters.state,
+            filters.make,
+            filters.model,
+            filters.lens_model,
         )
         .await?
         .into_iter()
@@ -968,4 +1032,46 @@ fn reject_mixed_shape(
         active.join("/")
     );
     Err(ErrorResp::BadRequest(message))
+}
+
+#[cfg(test)]
+mod suggestion_filter_tests {
+    use super::{SearchSuggestionQuery, suggestion_filters};
+
+    #[test]
+    fn suggestion_query_reads_camel_case_lens_and_null_flag() {
+        let query: SearchSuggestionQuery = serde_json::from_value(serde_json::json!({
+            "type": "camera-make",
+            "lensModel": "XF 23mm",
+            "includeNull": "true",
+            "country": "China"
+        }))
+        .unwrap();
+
+        assert_eq!(query.lens_model.as_deref(), Some("XF 23mm"));
+        assert_eq!(query.include_null.as_deref(), Some("true"));
+        let filters = suggestion_filters(&query);
+        assert_eq!(filters.lens_model, Some("XF 23mm"));
+        assert!(filters.country.is_none());
+        assert!(filters.make.is_none());
+    }
+
+    #[test]
+    fn city_suggestions_ignore_camera_filters() {
+        let query = SearchSuggestionQuery {
+            suggestion_type: "city".into(),
+            country: Some("China".into()),
+            state: Some("Zhejiang".into()),
+            make: Some("Canon".into()),
+            model: Some("R5".into()),
+            lens_model: Some("RF".into()),
+            include_null: None,
+        };
+        let filters = suggestion_filters(&query);
+        assert_eq!(filters.country, Some("China"));
+        assert_eq!(filters.state, Some("Zhejiang"));
+        assert!(filters.make.is_none());
+        assert!(filters.model.is_none());
+        assert!(filters.lens_model.is_none());
+    }
 }

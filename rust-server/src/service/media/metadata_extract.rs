@@ -96,15 +96,17 @@ impl MetadataExtractService {
                 }
             }
         }
-        if !should_probe && !is_possibly_animated_image_path(&asset.original_path) {
-            remove_tag(&mut media_tags, "Duration");
-        }
-
         let probe = if should_probe {
             Some(ffprobe::probe(&asset.original_path).await?)
         } else {
             None
         };
+
+        // Official deletes the EXIF Duration tag when a video probe ran, or when the
+        // file cannot be an animation (for example a CR3 that reports Duration: 1s).
+        if probe.is_some() || !is_possibly_animated_image_path(&asset.original_path) {
+            remove_tag(&mut media_tags, "Duration");
+        }
 
         if let Some(probe) = probe.as_ref() {
             merge_probe_tags(&mut media_tags, probe);

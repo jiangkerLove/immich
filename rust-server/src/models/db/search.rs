@@ -288,6 +288,7 @@ pub async fn get_explore_city_asset_ids(
               AND asset.visibility = 'timeline'
               AND asset.type = 'IMAGE'
               AND asset."deletedAt" IS NULL
+            ORDER BY asset_exif.city
             LIMIT $3
         "#,
     )
@@ -326,6 +327,18 @@ pub async fn get_explore_recent_asset_ids(
         .collect())
 }
 
+pub(crate) fn quoted_exif_suggestion_column(field: &str) -> Option<&'static str> {
+    match field {
+        "country" => Some(r#""country""#),
+        "state" => Some(r#""state""#),
+        "city" => Some(r#""city""#),
+        "make" => Some(r#""make""#),
+        "model" => Some(r#""model""#),
+        "lensModel" => Some(r#""lensModel""#),
+        _ => None,
+    }
+}
+
 pub async fn get_exif_suggestions(
     pool: &Pool<Postgres>,
     field: &str,
@@ -334,35 +347,32 @@ pub async fn get_exif_suggestions(
     state: Option<&str>,
     make: Option<&str>,
     model: Option<&str>,
+    lens_model: Option<&str>,
 ) -> Result<Vec<String>, sqlx::Error> {
     if user_ids.is_empty() {
         return Ok(vec![]);
     }
 
-    let allowed = ["country", "state", "city", "make", "model", "lensModel"];
-    if !allowed.contains(&field) {
+    let Some(column) = quoted_exif_suggestion_column(field) else {
         return Ok(vec![]);
-    }
+    };
 
     let mut query = QueryBuilder::new(format!(
         r#"
-        SELECT DISTINCT asset_exif."{field}"
+        SELECT DISTINCT asset_exif.{column}
         FROM asset_exif
         INNER JOIN asset ON asset.id = asset_exif."assetId"
         WHERE asset."ownerId" = ANY(
         "#
     ));
     query.push_bind(user_ids);
-    query.push(
+    query.push(format!(
         r#")
           AND asset.visibility = 'timeline'
           AND asset."deletedAt" IS NULL
-          AND asset_exif."#,
-    );
-    query.push(field);
-    query.push(r#" IS NOT NULL AND asset_exif."#);
-    query.push(field);
-    query.push(" != '' ");
+          AND asset_exif.{column} IS NOT NULL
+          AND asset_exif.{column} != '' "#
+    ));
 
     if let Some(country) = country {
         query.push(r#" AND asset_exif.country = "#);
@@ -379,6 +389,10 @@ pub async fn get_exif_suggestions(
     if let Some(model) = model {
         query.push(r#" AND asset_exif.model = "#);
         query.push_bind(model);
+    }
+    if let Some(lens_model) = lens_model {
+        query.push(r#" AND asset_exif."lensModel" = "#);
+        query.push_bind(lens_model);
     }
 
     query.push(" ORDER BY 1");
@@ -716,5 +730,19 @@ fn append_nullable_exif_string(
             query.push("= ");
             query.push_bind(text.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quoted_exif_suggestion_column;
+
+    #[test]
+    fn lens_model_column_is_quoted() {
+        assert_eq!(
+            quoted_exif_suggestion_column("lensModel"),
+            Some(r#""lensModel""#)
+        );
+        assert!(quoted_exif_suggestion_column("fileName").is_none());
     }
 }
