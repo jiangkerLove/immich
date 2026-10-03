@@ -39,7 +39,9 @@
     "accel": "disabled",
     "accelDecode": true,
     "realtime": {
-      "enabled": false
+      "enabled": false,
+      "videoCodecs": ["h264", "hevc"],
+      "resolutions": [480, 720, 1080]
     }
   },
   "integrityChecks": {
@@ -89,7 +91,7 @@
     "videoConversion": {
       "concurrency": 1
     },
-    "notification": {
+    "notifications": {
       "concurrency": 5
     },
     "ocr": {
@@ -164,6 +166,7 @@
     "defaultStorageQuota": null,
     "enabled": false,
     "issuerUrl": "",
+    "accountManagementUrl": "",
     "endSessionEndpoint": "",
     "mobileOverrideEnabled": false,
     "mobileRedirectUri": "",

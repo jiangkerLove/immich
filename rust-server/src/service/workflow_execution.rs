@@ -15,8 +15,8 @@ use crate::service::job::JobService;
 use crate::service::plugin_runtime::{self, PluginRuntime};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::workflow::{
-    TYPE_ASSET_V1, WorkflowRunEnd, plugin_result_should_continue, shape_asset_v1_payload,
-    should_write_workflow_log, workflow_run_log,
+    TYPE_ASSET_V1, WorkflowRunEnd, plugin_config_should_persist, plugin_result_should_continue,
+    shape_asset_v1_payload, should_write_workflow_log, workflow_run_log,
 };
 
 const WORKFLOW_TYPE_ASSET_V1: &str = TYPE_ASSET_V1;
@@ -175,7 +175,10 @@ impl WorkflowExecutionService {
             *asset_data = self.read_asset_v1(asset_id).await?;
         }
 
-        if let Some(config) = result.get("config") {
+        if let Some(config) = result
+            .get("config")
+            .filter(|config| plugin_config_should_persist(config))
+        {
             workflow::update_step_config(&self.pool, &step.id, config)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -308,6 +311,9 @@ async fn apply_asset_v1_changes(
         rating: exif
             .and_then(|value| value.get("rating"))
             .and_then(parse_rating),
+        clear_rating: exif
+            .and_then(|value| value.get("rating"))
+            .is_some_and(Value::is_null),
         description: exif
             .and_then(|value| value.get("description"))
             .and_then(|value| value.as_str())

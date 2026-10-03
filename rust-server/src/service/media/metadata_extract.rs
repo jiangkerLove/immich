@@ -14,8 +14,7 @@ use crate::models::db::metadata_job::{
 use crate::service::job::EntityJob;
 use crate::service::job::JobService;
 use crate::service::media::exiftool::{
-    self, tag_f64, tag_i32, tag_string, tag_string_list, tag_validated_f64, tag_validated_i32,
-    tag_value,
+    self, tag_f64, tag_i32, tag_string, tag_validated_f64, tag_validated_i32, tag_value,
 };
 use crate::service::media::ffprobe::{self, ProbeResult};
 use crate::service::media::metadata_postprocess;
@@ -594,24 +593,49 @@ fn tag_nested_string(tags: &Value, object: &str, field: &str) -> Option<String> 
         })
 }
 
+/// Official `getTagList`: a present list wins even when it is empty.
+/// `TagsList`, then `HierarchicalSubject` (`|` becomes `/`), then `Keywords`.
 fn collect_tags(tags: &Value) -> Vec<String> {
-    let mut result = tag_string_list(tags, "TagsList");
-    if result.is_empty() {
-        result = tag_string_list(tags, "HierarchicalSubject");
-        result = result
-            .into_iter()
-            .map(|tag| {
-                tag.split('|')
-                    .map(|part| part.replace('/', "|"))
-                    .collect::<Vec<_>>()
-                    .join("/")
-            })
-            .collect();
+    if let Some(items) = present_tag_items(tags, "TagsList") {
+        return items.iter().filter_map(json_tag_string).collect();
     }
-    if result.is_empty() {
-        result = tag_string_list(tags, "Keywords");
+    if let Some(items) = present_tag_items(tags, "HierarchicalSubject") {
+        return items.iter().filter_map(hierarchical_subject).collect();
     }
-    result
+    if let Some(items) = present_tag_items(tags, "Keywords") {
+        return items.iter().filter_map(json_tag_string).collect();
+    }
+    Vec::new()
+}
+
+fn present_tag_items(tags: &Value, name: &str) -> Option<Vec<Value>> {
+    let value = tag_value(tags, name)?;
+    Some(match value {
+        Value::Array(items) => items,
+        other => vec![other],
+    })
+}
+
+fn json_tag_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn hierarchical_subject(value: &Value) -> Option<String> {
+    if value.is_number() || value.is_boolean() {
+        return json_tag_string(value);
+    }
+    let text = value.as_str()?;
+    Some(
+        text.split('|')
+            .map(|part| part.replace('/', "|"))
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -759,9 +783,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_heif_orientation, bits_per_sample, camera_make, camera_model, earliest_file_date,
-        extract_exif_date, fallback_asset_date, gps_coordinates, image_dimensions, lens_model,
-        merge_sidecar_tags, metadata_dimension_updates, parse_exif_date, resolve_time_zone,
+        apply_heif_orientation, bits_per_sample, camera_make, camera_model, collect_tags,
+        earliest_file_date, extract_exif_date, fallback_asset_date, gps_coordinates,
+        image_dimensions, lens_model, merge_sidecar_tags, metadata_dimension_updates,
+        parse_exif_date, resolve_time_zone,
     };
     use crate::service::media::exiftool::{tag_validated_f64, tag_validated_i32};
 
@@ -991,6 +1016,29 @@ mod tests {
         assert_eq!(
             metadata_dimension_updates(true, None, Some(200), Some(300), Some(400)),
             (Some(300), None)
+        );
+    }
+
+    #[test]
+    fn empty_tag_list_does_not_fall_through_and_numbers_are_kept() {
+        assert!(
+            collect_tags(&json!({
+                "TagsList": [],
+                "HierarchicalSubject": ["Place|City"]
+            }))
+            .is_empty()
+        );
+        assert_eq!(
+            collect_tags(&json!({ "TagsList": [1, "beach"] })),
+            vec!["1".to_string(), "beach".to_string()]
+        );
+        assert_eq!(
+            collect_tags(&json!({ "HierarchicalSubject": ["Place|City/Old", 7] })),
+            vec!["Place/City|Old".to_string(), "7".to_string()]
+        );
+        assert_eq!(
+            collect_tags(&json!({ "Keywords": "sunset" })),
+            vec!["sunset".to_string()]
         );
     }
 }

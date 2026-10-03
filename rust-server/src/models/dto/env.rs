@@ -66,6 +66,13 @@ pub struct EnvDto {
 }
 
 impl EnvDto {
+    /// Official `!!configFile`: an empty `IMMICH_CONFIG_FILE` does not lock the settings UI.
+    pub fn has_config_file(&self) -> bool {
+        self.immich_config_file
+            .as_ref()
+            .is_some_and(|path| !path.is_empty())
+    }
+
     /// Host for `psql`/`pg_dump` and for building a parts-style URL.
     /// Matches Immich: prefer `DB_HOSTNAME` (default `database`); bare `DB_URL` is a legacy host alias.
     pub fn database_host(&self) -> &str {

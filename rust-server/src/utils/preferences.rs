@@ -88,14 +88,16 @@ pub fn resolve_preferences(stored: Value) -> Value {
 }
 
 /// A stored `null` must not erase a default object the web reads without a fallback.
-fn fill_missing_defaults(target: &mut Value, defaults: &Value) {
+pub(crate) fn fill_missing_defaults(target: &mut Value, defaults: &Value) {
     let (Value::Object(target_map), Value::Object(default_map)) = (target, defaults) else {
         return;
     };
     for (key, default_value) in default_map {
         match target_map.get_mut(key) {
             Some(existing)
-                if existing.is_null() || (default_value.is_object() && !existing.is_object()) =>
+                if existing.is_null()
+                    || (default_value.is_object() && !existing.is_object())
+                    || (default_value.is_array() && !existing.is_array()) =>
             {
                 *existing = default_value.clone();
             }

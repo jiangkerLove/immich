@@ -40,6 +40,9 @@ pub struct UpdateAssetReq {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub rating: Option<i32>,
+    /// Workflow writeback passes `rating: null`, which clears the stored rating.
+    #[serde(skip)]
+    pub clear_rating: bool,
     pub description: Option<String>,
     #[serde(
         default,
@@ -796,7 +799,11 @@ fn build_exif_fields(dto: &UpdateAssetReq) -> ExifUpdateFields {
         time_zone,
         latitude: dto.latitude,
         longitude: dto.longitude,
-        rating: dto.rating.map(Some),
+        rating: if dto.clear_rating {
+            Some(None)
+        } else {
+            dto.rating.map(Some)
+        },
     }
 }
 

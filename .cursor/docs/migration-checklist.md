@@ -306,7 +306,7 @@ cd rust-server && cargo +stable test --offline --lib
 
 ## 11. 2026-10-02 服务对照（未对齐则继续改）
 
-对照范围：官方 `server/src/services/` 与当前工作区 `rust-server/src/service/` 的业务分支。不是每个 SQL 字面逐行证明。同步、外部库、人脸任务、元数据/实况、智能搜索、OCR 任务状态、HLS 播放列表、CLI 子命令已对齐，不重复列入。
+对照范围：官方 `server/src` 里会改变结果的实现，对的是分支和 SQL，不是同名函数。下表只记已经改过、或核对后决定保留的行为。全量文件和已读逻辑记在 `.cursor/docs/parity-line-compare.md`。
 
 遥测里任务和队列仍用 `immich.jobs` / `immich.queues`。HTTP、数据库、Redis、主机指标用 OpenTelemetry 语义名（`http.server.request.duration`、`db.client.operation.duration`、`db.client.connection.count`、`system.cpu.utilization`、`system.memory.usage`、`system.filesystem.usage`）。配置校验失败带 Zod 的 `code`、`expected`、`input`、`values`、范围字段；cron 失败说明与 `cron` 4.4 相同。`schema-check` 的漂移行用 sql-tools `asHuman` 句式，向量列对比维度，CHECK 对比表达式。期望结构仍是 `1_baseline.sql`。
 
@@ -366,4 +366,7 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 重分配人脸 | 同一张照片上这个人的每张脸都改挂到目标人物；只有真的挪走了脸才重选封面 | 多张脸不再只挪一张。没匹配到脸时不再随便换封面 |
 | 已改 | 人脸检测缩放 | 旧脸框宽或高为 0 时按 1 来缩放 | 宽高为 0 的旧框不再把新检测全部当成新脸 |
 | 已改 | 堆栈张数 | 时间线上除封面以外的张数，再加 1 | 封面在时间线上时不再被数两次 |
+| 已改 | 工作流写回 | `continue` 缺省继续；`config` 为 null、false、0、空字符串时不保存；评分 null 清空评分 | 插件返回空配置不再把步骤配置写成 null。把评分设成 null 会清掉原来的星级 |
+| 已改 | 元数据关键词 | `TagsList` 即使是空数组也不回退到层级主题；没有关键词时清空照片上的标签 | 一张照片后来去掉关键词，相册标签页不再留着旧标签。空的 `TagsList` 不会再误用层级主题 |
+| 已改 | 系统设置可点 | 空的 `IMMICH_CONFIG_FILE` 不锁设置页；配置补上实时转码列表、账号管理地址和 `notifications` 并发 | 设置里的开关不再因为空环境变量整页禁掉。展开实时转码时不再因为缺编码和分辨率而报错 |
 | 已改 | 资产统计、边车、回收站原图、搜索范围、改密码、堆栈/标签权限、批量打标签、存储标签、OAuth 资料、API Key、反向地理编码、相册分享、认证状态 | 统计权限是 `asset.statistics`；边车任务只带资源 id；回收站仍可取原图/缩略图/视频；旧版统计按可见性收用户；智能搜索保留空白查询；改密码只更新密码；堆栈和标签错误带权限名；批量打标签只处理有权限的子集；创建用户时清洗存储标签；ID Token 无邮箱时用 userinfo；创建/轮换 API Key 带嵌套 `apiKey`；国家名用英文官方名；相册分享可带 assetIds；PIN 用户缺失时 401 文案为 `Unauthorized` | 已按官方对齐 |

@@ -109,7 +109,7 @@ impl Services {
                 pool.clone(),
                 ServerBuildConfig::from_env(env),
                 library_path.clone(),
-                env.immich_config_file.is_some(),
+                env.has_config_file(),
                 env.immich_allow_setup.unwrap_or(true),
             ),
             session: SessionService::new(pool.clone()),

@@ -2,7 +2,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::models::db::system_metadata::{get_json, set_json};
-use crate::utils::preferences::merge_preferences;
+use crate::utils::preferences::{fill_missing_defaults, merge_preferences};
 
 const CONFIG_KEY: &str = "system-config";
 const DEFAULTS_JSON: &str = include_str!("../../config/system_config_defaults.json");
@@ -37,6 +37,11 @@ fn apply_machine_learning_env(config: &mut Value) {
     }
 }
 
+fn overlay_stored_config(merged: &mut Value, defaults: &Value, stored: Value) {
+    merge_preferences(merged, stored);
+    fill_missing_defaults(merged, defaults);
+}
+
 pub async fn get_merged(pool: &PgPool) -> Result<Value, sqlx::Error> {
     let base = defaults();
     let mut merged = base.clone();
@@ -46,12 +51,12 @@ pub async fn get_merged(pool: &PgPool) -> Result<Value, sqlx::Error> {
             sqlx::Error::Configuration(err.into())
         })?;
         warn_unknown_keys(&base, &partial);
-        merge_preferences(&mut merged, partial);
+        overlay_stored_config(&mut merged, &base, partial);
         return finish_merged_config(true, merged);
     }
     if let Some(stored) = get_json(pool, CONFIG_KEY).await? {
         warn_unknown_keys(&base, &stored);
-        merge_preferences(&mut merged, stored);
+        overlay_stored_config(&mut merged, &base, stored);
     }
     finish_merged_config(false, merged)
 }
@@ -355,6 +360,28 @@ mod tests {
         });
         normalize_external_domain(&mut plain).unwrap();
         assert_eq!(plain["server"]["externalDomain"], "https://immich.example");
+    }
+
+    #[test]
+    fn settings_page_fields_survive_a_wiped_section() {
+        let defaults = defaults();
+        let mut merged = defaults.clone();
+        overlay_stored_config(
+            &mut merged,
+            &defaults,
+            serde_json::json!({
+                "ffmpeg": { "realtime": null },
+                "oauth": { "accountManagementUrl": null },
+                "job": { "notifications": null }
+            }),
+        );
+        assert_eq!(
+            merged["ffmpeg"]["realtime"]["videoCodecs"],
+            serde_json::json!(["h264", "hevc"])
+        );
+        assert!(merged["ffmpeg"]["realtime"]["resolutions"].is_array());
+        assert_eq!(merged["oauth"]["accountManagementUrl"], "");
+        assert_eq!(merged["job"]["notifications"]["concurrency"], 5);
     }
 
     #[test]

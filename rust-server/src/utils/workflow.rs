@@ -44,6 +44,14 @@ pub fn workflow_run_log(end: WorkflowRunEnd) -> WorkflowRunLog {
     }
 }
 
+/// Official `if (result?.config)` skips null, false, 0, and `""`.
+pub fn plugin_config_should_persist(config: &serde_json::Value) -> bool {
+    if config.is_null() || config.as_bool() == Some(false) || config.as_str() == Some("") {
+        return false;
+    }
+    config.as_f64() != Some(0.0)
+}
+
 /// Plugin methods halt the remaining steps by returning `{ workflow: { continue: false } }`.
 pub fn plugin_result_should_continue(result: &serde_json::Value) -> bool {
     result
@@ -223,6 +231,16 @@ mod tests {
             &[TYPE_ASSET_V1.to_string()],
             "UnknownTrigger"
         ));
+    }
+
+    #[test]
+    fn empty_plugin_config_is_not_written_back() {
+        assert!(!plugin_config_should_persist(&json!(null)));
+        assert!(!plugin_config_should_persist(&json!(false)));
+        assert!(!plugin_config_should_persist(&json!(0)));
+        assert!(!plugin_config_should_persist(&json!("")));
+        assert!(plugin_config_should_persist(&json!({})));
+        assert!(plugin_config_should_persist(&json!({"keep": true})));
     }
 
     #[test]

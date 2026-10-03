@@ -34,9 +34,9 @@ pub async fn run_post_processing(
         .locked_properties
         .iter()
         .any(|property| property == "tags")
-        && let Some(tags) = exif.tags.as_ref().filter(|tags| !tags.is_empty())
     {
-        metadata_job::sync_asset_tags_from_exif(pool, &asset.owner_id, &asset.id, tags)
+        let tags = exif.tags.clone().unwrap_or_default();
+        metadata_job::sync_asset_tags_from_exif(pool, &asset.owner_id, &asset.id, &tags)
             .await
             .map_err(|err| err.to_string())?;
     }

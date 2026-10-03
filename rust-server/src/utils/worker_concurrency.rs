@@ -17,7 +17,7 @@ const FIXED_CONCURRENCY_QUEUES: &[&str] = &[
 pub fn config_key_for_queue(queue: &str) -> Option<&'static str> {
     Some(match queue {
         QUEUE_BACKGROUND => "backgroundTask",
-        QUEUE_NOTIFICATIONS => "notification",
+        QUEUE_NOTIFICATIONS => "notifications",
         QUEUE_THUMBNAIL => "thumbnailGeneration",
         QUEUE_EDITOR => "editor",
         QUEUE_VIDEO => "videoConversion",
