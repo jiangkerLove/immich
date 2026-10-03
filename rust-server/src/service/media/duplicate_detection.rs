@@ -121,25 +121,15 @@ impl DuplicateDetectionService {
         asset: &DuplicateSearchAssetRow,
         duplicate_assets: &[DuplicateMatchRow],
     ) -> Result<Vec<Uuid>, String> {
-        let mut duplicate_ids: HashSet<Uuid> = duplicate_assets
-            .iter()
-            .filter_map(|row| row.duplicate_id)
-            .collect();
-
-        let target_duplicate_id = asset.duplicate_id.unwrap_or_else(|| {
-            duplicate_ids
-                .iter()
-                .copied()
-                .next()
-                .unwrap_or_else(Uuid::new_v4)
-        });
-
-        let source_ids: Vec<Uuid> = if asset.duplicate_id.is_some() {
-            duplicate_ids.into_iter().collect()
+        let mut duplicate_ids = ordered_unique_duplicate_ids(duplicate_assets);
+        let target_duplicate_id = if let Some(existing) = asset.duplicate_id {
+            existing
+        } else if duplicate_ids.is_empty() {
+            Uuid::new_v4()
         } else {
-            duplicate_ids.remove(&target_duplicate_id);
-            duplicate_ids.into_iter().collect()
+            duplicate_ids.remove(0)
         };
+        let source_ids = duplicate_ids;
 
         let mut asset_ids_to_update: Vec<Uuid> = duplicate_assets
             .iter()
@@ -158,5 +148,57 @@ impl DuplicateDetectionService {
         .map_err(|err| err.to_string())?;
 
         Ok(asset_ids_to_update)
+    }
+}
+
+/// Official `updateDuplicates` builds a JS `Set`, which keeps first-seen order.
+/// The first id is the merge target when the asset has no `duplicateId` yet.
+fn ordered_unique_duplicate_ids(rows: &[DuplicateMatchRow]) -> Vec<Uuid> {
+    let mut seen = HashSet::new();
+    let mut ids = Vec::new();
+    for row in rows {
+        if let Some(id) = row.duplicate_id {
+            if seen.insert(id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ordered_unique_duplicate_ids;
+    use crate::models::db::ml_job::DuplicateMatchRow;
+    use uuid::Uuid;
+
+    #[test]
+    fn duplicate_ids_keep_first_seen_order() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let rows = [
+            DuplicateMatchRow {
+                asset_id: Uuid::from_u128(10),
+                duplicate_id: Some(first),
+                distance: 0.0,
+            },
+            DuplicateMatchRow {
+                asset_id: Uuid::from_u128(11),
+                duplicate_id: Some(first),
+                distance: 0.1,
+            },
+            DuplicateMatchRow {
+                asset_id: Uuid::from_u128(12),
+                duplicate_id: Some(second),
+                distance: 0.2,
+            },
+            DuplicateMatchRow {
+                asset_id: Uuid::from_u128(13),
+                duplicate_id: None,
+                distance: 0.3,
+            },
+        ];
+
+        assert_eq!(ordered_unique_duplicate_ids(&rows), vec![first, second]);
     }
 }

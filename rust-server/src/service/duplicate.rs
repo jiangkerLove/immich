@@ -362,6 +362,10 @@ async fn compute_merge(
     let description = unique_description_lines(assets_list);
     let latitude = unique_coordinate(assets_list, "latitude");
     let longitude = unique_coordinate(assets_list, "longitude");
+    let (latitude, longitude) = match (latitude, longitude) {
+        (Some(lat), Some(lon)) => (Some(lat), Some(lon)),
+        _ => (None, None),
+    };
 
     let mut album_ids = HashSet::new();
     for asset_id in group_asset_ids {
@@ -406,7 +410,7 @@ fn unique_description_lines(assets_list: &[AssetResponse]) -> Option<String> {
             .and_then(|exif| exif.get("description"))
             .and_then(|value| value.as_str())
         {
-            for line in text.split('\n') {
+            for line in text.split(['\n', '\r']) {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && unique.insert(trimmed.to_string()) {
                     lines.push(trimmed.to_string());

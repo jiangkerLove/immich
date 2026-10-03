@@ -116,12 +116,7 @@ impl MetadataExtractService {
             .map_err(|err| err.to_string())?;
         let modify_date = metadata.modified().ok().and_then(system_time_to_utc);
         let created_date = metadata.created().ok().and_then(system_time_to_utc);
-        let fallback_date = earliest_file_date([
-            asset.file_created_at,
-            created_date,
-            modify_date,
-            asset.file_modified_at,
-        ]);
+        let fallback_date = fallback_asset_date(asset.file_created_at, created_date, modify_date);
         let file_size = metadata.len() as i64;
 
         let (width, height) = image_dimensions(&media_tags);
@@ -738,17 +733,52 @@ fn earliest_file_date<const N: usize>(dates: [Option<DateTime<Utc>>; N]) -> Opti
     dates.into_iter().flatten().min()
 }
 
+/// Official `getDates` fallback: ignore a zero birthtime, then take the earlier of
+/// filesystem mtime and birthtime, then the earlier of that and `fileCreatedAt`.
+/// The stored `fileModifiedAt` is not part of this fallback.
+fn fallback_asset_date(
+    file_created_at: Option<DateTime<Utc>>,
+    birthtime: Option<DateTime<Utc>>,
+    mtime: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    let filesystem = match birthtime.filter(|date| date.timestamp_millis() > 0) {
+        Some(birth) => match mtime {
+            Some(modified) => Some(birth.min(modified)),
+            None => Some(birth),
+        },
+        None => mtime,
+    };
+    earliest_file_date([file_created_at, filesystem])
+}
+
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, TimeZone, Timelike, Utc};
+    use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
     use serde_json::json;
 
     use super::{
         apply_heif_orientation, bits_per_sample, camera_make, camera_model, earliest_file_date,
-        extract_exif_date, gps_coordinates, image_dimensions, lens_model, merge_sidecar_tags,
-        metadata_dimension_updates, parse_exif_date, resolve_time_zone,
+        extract_exif_date, fallback_asset_date, gps_coordinates, image_dimensions, lens_model,
+        merge_sidecar_tags, metadata_dimension_updates, parse_exif_date, resolve_time_zone,
     };
     use crate::service::media::exiftool::{tag_validated_f64, tag_validated_i32};
+
+    #[test]
+    fn fallback_date_ignores_zero_birthtime_and_uses_file_created_at() {
+        let file_created = Utc.with_ymd_and_hms(2020, 1, 2, 3, 4, 5).unwrap();
+        let mtime = Utc.with_ymd_and_hms(2021, 6, 7, 8, 9, 10).unwrap();
+        let epoch = DateTime::from_timestamp_millis(0).unwrap();
+        assert_eq!(
+            fallback_asset_date(Some(file_created), Some(epoch), Some(mtime)),
+            Some(file_created)
+        );
+
+        let birth = Utc.with_ymd_and_hms(2019, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(
+            fallback_asset_date(Some(file_created), Some(birth), Some(mtime)),
+            Some(birth)
+        );
+    }
 
     #[test]
     fn preserves_exif_offset_and_local_wall_clock_time() {

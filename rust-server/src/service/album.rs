@@ -559,10 +559,13 @@ impl AlbumService {
         for album_id in allowed_albums {
             let existing =
                 album::filter_asset_ids_in_album(&self.db.pool, &album_id, &dto.asset_ids).await?;
-            let not_present: Vec<Uuid> = allowed_assets
+            let not_present: Vec<Uuid> = dto
+                .asset_ids
                 .iter()
-                .filter(|asset_id| !existing.contains(asset_id))
                 .copied()
+                .filter(|asset_id| {
+                    allowed_assets.contains(asset_id) && !existing.contains(asset_id)
+                })
                 .collect();
 
             if not_present.is_empty() {
