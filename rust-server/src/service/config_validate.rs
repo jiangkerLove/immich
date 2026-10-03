@@ -137,6 +137,11 @@ fn walk_config(defaults: &Value, incoming: &Value, path: &str) -> Result<Value, 
             }
         }
         (Value::Array(default_items), Value::Array(items)) => {
+            let items = if field_path(path) == "machineLearning.urls" && items.is_empty() {
+                default_items
+            } else {
+                items
+            };
             if field_path(path) == "machineLearning.urls" && items.is_empty() {
                 return Err(issue(path, "Too small: expected array to have >=1 items"));
             }
@@ -592,6 +597,24 @@ mod tests {
         assert!(err.iter().any(|issue| {
             issue.code == "custom" && issue.message == "Invalid cron expression. Unknown alias: not"
         }));
+    }
+
+    #[test]
+    fn empty_machine_learning_urls_use_the_default() {
+        let defaults = crate::utils::system_config::defaults();
+        let mut config = defaults.clone();
+        config["machineLearning"]["urls"] = Value::Array(Vec::new());
+        let normalized = normalize_admin_config(&defaults, &config).unwrap();
+        assert_eq!(
+            normalized["machineLearning"]["urls"],
+            defaults["machineLearning"]["urls"]
+        );
+        assert!(
+            !normalized["machineLearning"]["urls"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

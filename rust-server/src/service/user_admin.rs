@@ -5,7 +5,9 @@ use crate::ext::bcrypt::hash_bcrypt;
 use crate::models::db::assets::{self, AssetStatsRow};
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::user_metadata::UserMetadataPO;
-use crate::models::db::users::{UserDb, map_user_admin, map_user_admin_with_license};
+use crate::models::db::users::{
+    UserDb, cluster_group_ids, map_user_admin, map_user_admin_with_license,
+};
 use crate::models::dto::auth::AuthDto;
 use crate::models::request::user::UserPreferencesUpdateReq;
 use crate::models::response::asset::AssetStatsResponse;
@@ -92,9 +94,14 @@ impl UserAdminService {
             .unwrap_or(false);
 
         let users = UserDb::list_admin(&self.pool, query.id.as_ref(), with_deleted).await?;
+        let ids: Vec<Uuid> = users.iter().map(|user| user.id).collect();
+        let groups = cluster_group_ids(&self.pool, &ids).await?;
         Ok(users
             .into_iter()
-            .map(|user| map_user_admin(user, None))
+            .map(|user| {
+                let cluster_group_id = groups.get(&user.id).copied();
+                map_user_admin(user, None, cluster_group_id)
+            })
             .collect())
     }
 

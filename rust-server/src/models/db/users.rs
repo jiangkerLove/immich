@@ -840,12 +840,13 @@ impl TryFrom<String> for UserStatus {
 }
 
 pub fn map_user(user: UserDb) -> crate::models::response::user::UserResponse {
+    let avatar_color = avatar_color_or_default(&user.email, user.avatar_color.as_deref());
     crate::models::response::user::UserResponse {
         id: user.id.to_string(),
         email: user.email,
         name: user.name,
         profile_image_path: user.profile_image_path,
-        avatar_color: user.avatar_color.unwrap_or_default(),
+        avatar_color,
         profile_changed_at: user.profile_changed_at,
     }
 }
@@ -853,13 +854,15 @@ pub fn map_user(user: UserDb) -> crate::models::response::user::UserResponse {
 pub fn map_user_admin(
     user: UserDb,
     license: Option<crate::models::response::user::UserLicenseResponse>,
+    cluster_group_id: Option<Uuid>,
 ) -> crate::models::response::user::UserAdminResponse {
+    let avatar_color = avatar_color_or_default(&user.email, user.avatar_color.as_deref());
     crate::models::response::user::UserAdminResponse {
         id: user.id.to_string(),
         email: user.email,
         name: user.name,
         profile_image_path: user.profile_image_path,
-        avatar_color: user.avatar_color.unwrap_or_default(),
+        avatar_color,
         profile_changed_at: user.profile_changed_at,
         storage_label: user.storage_label,
         should_change_password: user.should_change_password,
@@ -872,7 +875,37 @@ pub fn map_user_admin(
         quota_usage_in_bytes: user.quota_usage_in_bytes,
         status: user.status.as_str().to_string(),
         license,
+        cluster_group_id,
     }
+}
+
+const AVATAR_COLORS: [&str; 10] = [
+    "primary", "pink", "red", "yellow", "blue", "green", "purple", "orange", "gray", "amber",
+];
+
+/// Matches `emailToAvatarColor` when the stored color is missing.
+fn avatar_color_or_default(email: &str, stored: Option<&str>) -> String {
+    if let Some(color) = stored.filter(|color| !color.is_empty()) {
+        return color.to_string();
+    }
+    let sum: u32 = email.chars().map(|ch| ch as u32).sum();
+    AVATAR_COLORS[(sum as usize) % AVATAR_COLORS.len()].to_string()
+}
+
+pub async fn cluster_group_ids(
+    pool: &Pool<Postgres>,
+    user_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, Uuid>, sqlx::Error> {
+    if user_ids.is_empty() || !PersonSchema::get(pool).await?.is_cluster_groups() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"SELECT id, "clusterGroupId" FROM "user" WHERE id = ANY($1)"#,
+    )
+    .bind(user_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 pub fn map_license(
@@ -898,7 +931,11 @@ pub async fn map_user_admin_with_license(
     let license = UserMetadataPO::get_license(pool, &user.id)
         .await?
         .map(map_license);
-    Ok(map_user_admin(user, license))
+    let cluster_group_id = cluster_group_ids(pool, &[user.id])
+        .await?
+        .get(&user.id)
+        .copied();
+    Ok(map_user_admin(user, license, cluster_group_id))
 }
 
 #[derive(Debug, sqlx::FromRow)]

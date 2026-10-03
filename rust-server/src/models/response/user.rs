@@ -45,6 +45,7 @@ pub struct UserAdminResponse {
     pub quota_usage_in_bytes: i64,
     pub status: String,
     pub license: Option<UserLicenseResponse>,
+    pub cluster_group_id: Option<uuid::Uuid>,
 }
 
 impl IntoResponse for UserAdminResponse {

@@ -331,4 +331,7 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 相册改成员 | 成员角色为 owner 时拒绝 | 已按相册成员角色判断 |
 | 已改 | 记忆空更新、标签重名预检、邮件模板预览回退、API Key 默认名、登录邮箱 | 空更新成功；重命名交给数据库；相册更新预览回退邀请模板；空名称用 `API Key`；登录按原样邮箱 | 已按官方对齐 |
 | 已改 | 重复项解决、人物批量更新、工作流搜索、工作流缺失、通知删除 | 解决前校验重复组归属；批量更新失败原因一律 `unknown`；搜索不按 `logging` 过滤；工作流不存在时任务成功；删除通知不因已删再报错 | 已按官方对齐 |
+| 已改 | 用户偏好默认值 | 含 `recentlyAdded.sidebarWeb`、`memories.sidebarWeb`；标签默认关闭 | 已补上。缺 `recentlyAdded` 时侧边栏渲染抛错，登录后页面停在加载动画。已保存的空值也会补回这些字段 |
+| 已改 | 当前用户响应 | `clusterGroupId`；头像色为空时按邮箱计算 | 分享设置读取 `clusterGroupId`。旧库没有人物分组表时该字段为 null |
+| 已改 | 机器学习地址 | 空的 `machineLearning.urls` 用默认地址 | 保存系统设置会提交整份配置。地址列表为空时改回 `IMMICH_MACHINE_LEARNING_URL` 或 `http://immich-machine-learning:3003`，不再挡住其它设置 |
 | 已改 | 资产统计、边车、回收站原图、搜索范围、改密码、堆栈/标签权限、批量打标签、存储标签、OAuth 资料、API Key、反向地理编码、相册分享、认证状态 | 统计权限是 `asset.statistics`；边车任务只带资源 id；回收站仍可取原图/缩略图/视频；旧版统计按可见性收用户；智能搜索保留空白查询；改密码只更新密码；堆栈和标签错误带权限名；批量打标签只处理有权限的子集；创建用户时清洗存储标签；ID Token 无邮箱时用 userinfo；创建/轮换 API Key 带嵌套 `apiKey`；国家名用英文官方名；相册分享可带 assetIds；PIN 用户缺失时 401 文案为 `Unauthorized` | 已按官方对齐 |

@@ -8,7 +8,33 @@ const CONFIG_KEY: &str = "system-config";
 const DEFAULTS_JSON: &str = include_str!("../../config/system_config_defaults.json");
 
 pub fn defaults() -> Value {
-    serde_json::from_str(DEFAULTS_JSON).unwrap_or_else(|_| Value::Object(Default::default()))
+    let mut config =
+        serde_json::from_str(DEFAULTS_JSON).unwrap_or_else(|_| Value::Object(Default::default()));
+    apply_machine_learning_env(&mut config);
+    config
+}
+
+/// Matches `defaults` in `server/src/dtos/config.dto.ts`.
+fn apply_machine_learning_env(config: &mut Value) {
+    let Some(machine_learning) = config
+        .get_mut("machineLearning")
+        .and_then(|value| value.as_object_mut())
+    else {
+        return;
+    };
+    if std::env::var("IMMICH_MACHINE_LEARNING_ENABLED")
+        .ok()
+        .as_deref()
+        == Some("false")
+    {
+        machine_learning.insert("enabled".to_string(), Value::Bool(false));
+    }
+    if let Some(url) = std::env::var("IMMICH_MACHINE_LEARNING_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+    {
+        machine_learning.insert("urls".to_string(), Value::Array(vec![Value::String(url)]));
+    }
 }
 
 pub async fn get_merged(pool: &PgPool) -> Result<Value, sqlx::Error> {

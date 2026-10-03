@@ -1,7 +1,7 @@
 use sqlx::postgres::PgPoolOptions;
 
 use crate::constants::SERVER_VERSION;
-use crate::models::db::users::{UserDb, map_user_admin};
+use crate::models::db::users::{UserDb, cluster_group_ids, map_user_admin};
 use crate::models::dto::env::EnvDto;
 use crate::service::bootstrap;
 use crate::utils::crypto::random_bytes_as_text;
@@ -178,9 +178,16 @@ async fn list_users(settings: &EnvDto) -> Result<(), String> {
     let users = UserDb::list_admin(&pool, None, true)
         .await
         .map_err(|err| err.to_string())?;
+    let ids: Vec<_> = users.iter().map(|user| user.id).collect();
+    let groups = cluster_group_ids(&pool, &ids)
+        .await
+        .map_err(|err| err.to_string())?;
     let mapped: Vec<_> = users
         .into_iter()
-        .map(|user| map_user_admin(user, None))
+        .map(|user| {
+            let cluster_group_id = groups.get(&user.id).copied();
+            map_user_admin(user, None, cluster_group_id)
+        })
         .collect();
     println!(
         "{}",
