@@ -884,7 +884,7 @@ const AVATAR_COLORS: [&str; 10] = [
 ];
 
 /// Matches `emailToAvatarColor` when the stored color is missing.
-fn avatar_color_or_default(email: &str, stored: Option<&str>) -> String {
+pub(crate) fn avatar_color_or_default(email: &str, stored: Option<&str>) -> String {
     if let Some(color) = stored.filter(|color| !color.is_empty()) {
         return color.to_string();
     }

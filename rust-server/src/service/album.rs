@@ -7,6 +7,7 @@ use crate::models::db::album::{self, AlbumAccessLevel, AlbumUserRole};
 use crate::models::db::assets;
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::user_metadata::UserMetadataPO;
+use crate::models::db::users::avatar_color_or_default;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::{check_album_ids_access, require_album_access};
@@ -817,10 +818,8 @@ impl AlbumService {
             album_users: users
                 .into_iter()
                 .map(|user| {
-                    let avatar_color = user
-                        .avatar_color
-                        .filter(|color| !color.is_empty())
-                        .unwrap_or_else(|| email_to_avatar_color(&user.email));
+                    let avatar_color =
+                        avatar_color_or_default(&user.email, user.avatar_color.as_deref());
                     AlbumUserResponse {
                         user: AlbumUserInfo {
                             id: user.user_id,
@@ -913,12 +912,4 @@ fn apply_album_metadata(album: &mut AlbumResponse, metadata: &album::AlbumMetada
 
 fn format_album_datetime(value: &DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn email_to_avatar_color(email: &str) -> String {
-    const COLORS: [&str; 10] = [
-        "primary", "pink", "blue", "green", "yellow", "red", "purple", "orange", "gray", "amber",
-    ];
-    let sum: u32 = email.chars().map(|ch| ch as u32).sum();
-    COLORS[(sum as usize) % COLORS.len()].to_string()
 }

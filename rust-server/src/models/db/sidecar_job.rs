@@ -14,7 +14,7 @@ pub struct SidecarWriteAsset {
     pub id: Uuid,
     pub original_path: String,
     pub sidecar_path: Option<String>,
-    pub description: String,
+    pub description: Option<String>,
     pub date_time_original: Option<DateTime<Utc>>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,

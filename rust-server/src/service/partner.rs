@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::models::db::album;
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::partner::{self, PartnerDirection, PartnerRow};
+use crate::models::db::users::avatar_color_or_default;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::permission::require_permission;
@@ -142,16 +143,12 @@ impl PartnerService {
 }
 
 fn map_partner(row: PartnerRow) -> PartnerResponse {
-    let avatar_color = row
-        .avatar_color
-        .clone()
-        .unwrap_or_else(|| email_to_avatar_color(&row.email));
     PartnerResponse {
         id: row.user_id,
-        email: row.email,
+        email: row.email.clone(),
         name: row.name,
         profile_image_path: row.profile_image_path,
-        avatar_color,
+        avatar_color: avatar_color_or_default(&row.email, row.avatar_color.as_deref()),
         profile_changed_at: format_datetime(&row.profile_changed_at),
         in_timeline: row.in_timeline,
     }
@@ -159,12 +156,4 @@ fn map_partner(row: PartnerRow) -> PartnerResponse {
 
 fn format_datetime(value: &DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn email_to_avatar_color(email: &str) -> String {
-    const COLORS: [&str; 10] = [
-        "primary", "pink", "blue", "green", "yellow", "red", "purple", "orange", "gray", "amber",
-    ];
-    let sum: u32 = email.bytes().map(u32::from).sum();
-    COLORS[(sum as usize) % COLORS.len()].to_string()
 }

@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::models::db::activity::{self, ActivityRow};
 use crate::models::db::auth_permission::Permission;
+use crate::models::db::users::avatar_color_or_default;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_album_access;
@@ -224,20 +225,9 @@ fn map_activity_user(row: &ActivityRow) -> ActivityUserResponse {
         email: row.user_email.clone(),
         name: row.user_name.clone(),
         profile_image_path: row.user_profile_image_path.clone(),
-        avatar_color: row
-            .user_avatar_color
-            .clone()
-            .unwrap_or_else(|| email_to_avatar_color(&row.user_email)),
+        avatar_color: avatar_color_or_default(&row.user_email, row.user_avatar_color.as_deref()),
         profile_changed_at: row
             .user_profile_changed_at
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     }
-}
-
-fn email_to_avatar_color(email: &str) -> String {
-    const COLORS: [&str; 10] = [
-        "primary", "pink", "blue", "green", "yellow", "red", "purple", "orange", "gray", "amber",
-    ];
-    let sum: u32 = email.bytes().map(u32::from).sum();
-    COLORS[(sum as usize) % COLORS.len()].to_string()
 }

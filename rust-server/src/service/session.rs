@@ -75,8 +75,31 @@ const SESSION_SELECT: &str = r#"
     "isPendingSyncReset" as is_pending_sync_reset
 "#;
 
+const SESSION_SELECT_ALIASED: &str = r#"
+    s.id,
+    s."deviceType" as device_type,
+    s."deviceOS" as device_os,
+    s."createdAt" as created_at,
+    s."updatedAt" as updated_at,
+    s."expiresAt" as expires_at,
+    s."appVersion" as app_version,
+    s."isPendingSyncReset" as is_pending_sync_reset
+"#;
+
 fn format_datetime(value: &DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn joined_session_columns_are_qualified() {
+        let select = super::SESSION_SELECT_ALIASED;
+        assert!(select.contains("s.id"));
+        assert!(select.contains(r#"s."deviceType""#));
+        assert!(select.contains(r#"s."updatedAt""#));
+        assert!(!select.lines().any(|line| line.trim() == "id,"));
+    }
 }
 
 pub async fn list_sessions_for_user(
@@ -85,7 +108,7 @@ pub async fn list_sessions_for_user(
 ) -> Result<Vec<SessionResponse>, ErrorResp> {
     let rows = sqlx::query_as::<_, SessionRow>(&format!(
         r#"
-            SELECT {SESSION_SELECT}
+            SELECT {SESSION_SELECT_ALIASED}
             FROM session s
             INNER JOIN "user" u ON u.id = s."userId" AND u."deletedAt" IS NULL
             WHERE s."userId" = $1
@@ -174,7 +197,7 @@ impl SessionService {
 
         let rows = sqlx::query_as::<_, SessionRow>(&format!(
             r#"
-                SELECT {SESSION_SELECT}
+                SELECT {SESSION_SELECT_ALIASED}
                 FROM session s
                 INNER JOIN "user" u ON u.id = s."userId" AND u."deletedAt" IS NULL
                 WHERE s."userId" = $1

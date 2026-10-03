@@ -207,14 +207,10 @@ fn build_write_tags(
         locked_properties.iter().map(String::as_str).collect();
 
     if locked.contains("description") {
-        values.insert(
-            "Description",
-            TagWriteValue::Text(asset.description.clone()),
-        );
-        values.insert(
-            "ImageDescription",
-            TagWriteValue::Text(asset.description.clone()),
-        );
+        if let Some(description) = &asset.description {
+            values.insert("Description", TagWriteValue::Text(description.clone()));
+            values.insert("ImageDescription", TagWriteValue::Text(description.clone()));
+        }
     }
 
     if locked.contains("dateTimeOriginal") || locked.contains("timeZone") {

@@ -1,11 +1,11 @@
 use chrono::{DateTime, NaiveDate, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::models::db::person_schema::PersonSchema;
 use crate::utils::bytes::hex_or_buffer_to_base64;
 use crate::utils::sync::SyncAck;
-use crate::models::db::person_schema::PersonSchema;
 
 #[derive(Debug, Clone)]
 pub struct SyncQueryOptions {
@@ -258,7 +258,7 @@ pub async fn album_get_upserts(
         Some(ack) => {
             sqlx::query(
                 r#"
-                SELECT DISTINCT ON ("album"."id", "album"."updateId")
+                SELECT
                   "album"."id",
                   "album"."albumName" as name,
                   "album"."description",
@@ -269,7 +269,7 @@ pub async fn album_get_upserts(
                   "album"."order",
                   "album"."updateId"::text as update_id
                 FROM "album"
-                LEFT JOIN "album_user" as "album_users" ON "album"."id" = "album_users"."albumId"
+                INNER JOIN "album_user" as "album_users" ON "album"."id" = "album_users"."albumId"
                 WHERE "album"."updateId" < $1::uuid
                   AND "album"."updateId" > $2::uuid
                   AND "album_users"."userId" = $3
@@ -285,7 +285,7 @@ pub async fn album_get_upserts(
         None => {
             sqlx::query(
                 r#"
-                SELECT DISTINCT ON ("album"."id", "album"."updateId")
+                SELECT
                   "album"."id",
                   "album"."albumName" as name,
                   "album"."description",
@@ -296,7 +296,7 @@ pub async fn album_get_upserts(
                   "album"."order",
                   "album"."updateId"::text as update_id
                 FROM "album"
-                LEFT JOIN "album_user" as "album_users" ON "album"."id" = "album_users"."albumId"
+                INNER JOIN "album_user" as "album_users" ON "album"."id" = "album_users"."albumId"
                 WHERE "album"."updateId" < $1::uuid
                   AND "album_users"."userId" = $2
                 ORDER BY "album"."updateId" ASC
@@ -330,12 +330,10 @@ pub async fn album_get_album_users(
     pool: &PgPool,
     album_id: &Uuid,
 ) -> Result<Vec<AlbumUserRow>, sqlx::Error> {
-    let rows = sqlx::query(
-        r#"SELECT "userId", role FROM "album_user" WHERE "albumId" = $1"#,
-    )
-    .bind(album_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(r#"SELECT "userId", role FROM "album_user" WHERE "albumId" = $1"#)
+        .bind(album_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows
         .into_iter()
         .map(|row| AlbumUserRow {
@@ -505,7 +503,10 @@ pub async fn album_asset_get_backfill(
             .await?
         }
     };
-    Ok(rows.into_iter().map(|row| map_album_asset_row(&row)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| map_album_asset_row(&row))
+        .collect())
 }
 
 pub async fn album_asset_get_updates(
@@ -557,7 +558,10 @@ pub async fn album_asset_get_updates(
             .await?
         }
     };
-    Ok(rows.into_iter().map(|row| map_album_asset_row(&row)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| map_album_asset_row(&row))
+        .collect())
 }
 
 pub async fn album_asset_get_creates(
@@ -604,7 +608,10 @@ pub async fn album_asset_get_creates(
             .await?
         }
     };
-    Ok(rows.into_iter().map(|row| map_album_asset_row(&row)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| map_album_asset_row(&row))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -2439,7 +2446,10 @@ pub async fn partner_asset_get_backfill(
             .await?
         }
     };
-    Ok(rows.into_iter().map(|row| map_partner_asset_row(&row)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| map_partner_asset_row(&row))
+        .collect())
 }
 
 pub async fn partner_asset_get_deletes(
@@ -2537,7 +2547,10 @@ pub async fn partner_asset_get_upserts(
             .await?
         }
     };
-    Ok(rows.into_iter().map(|row| map_partner_asset_row(&row)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| map_partner_asset_row(&row))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

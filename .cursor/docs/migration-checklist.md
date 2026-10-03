@@ -336,4 +336,9 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 机器学习地址 | 空的 `machineLearning.urls` 用默认地址 | 保存系统设置会提交整份配置。地址列表为空时改回 `IMMICH_MACHINE_LEARNING_URL` 或 `http://immich-machine-learning:3003`，不再挡住其它设置 |
 | 已改 | 人物列表 | `GROUP BY` 人物主键；最少人脸数读偏好；统计含共享相册；人名搜索阈值 0.5 | `/api/people` 不再因分组缺列返回 500。统计和按名字搜索与官方 SQL 一致 |
 | 已改 | 人脸归属 | 按当前查看者的 `ownerId` 取人物；回忆排除隐藏人物时同时匹配照片主人 | 同一人物组里不会串到别人的名字或隐藏状态 |
+| 已改 | 会话列表 | 查询列带 `session` 表别名 | `/api/sessions` 联表 `user` 时 `id` 不再歧义，用户设置里的设备列表可以打开 |
+| 已改 | 同步相册增量 | 每个用户在相册里只有一条成员记录，按 `updateId` 排序 | 去掉与排序冲突的 `DISTINCT ON`，手机同步相册不再因 `SELECT DISTINCT ON expressions must match initial ORDER BY expressions` 失败 |
+| 已改 | 相册描述 | 空描述返回 `''`，不因数据库 NULL 失败 | 列表和详情用 `COALESCE(description, '')`。从官方库迁过来的空描述相册可以打开 |
+| 已改 | 边车写回 | 描述为空时不写这条 EXIF | `asset_exif.description` 为 NULL 时任务不再解码失败 |
+| 已改 | 头像色 | `UserAvatarColor` 顺序，按邮箱码点求和 | 相册成员、活动、合作伙伴与用户接口用同一套颜色 |
 | 已改 | 资产统计、边车、回收站原图、搜索范围、改密码、堆栈/标签权限、批量打标签、存储标签、OAuth 资料、API Key、反向地理编码、相册分享、认证状态 | 统计权限是 `asset.statistics`；边车任务只带资源 id；回收站仍可取原图/缩略图/视频；旧版统计按可见性收用户；智能搜索保留空白查询；改密码只更新密码；堆栈和标签错误带权限名；批量打标签只处理有权限的子集；创建用户时清洗存储标签；ID Token 无邮箱时用 userinfo；创建/轮换 API Key 带嵌套 `apiKey`；国家名用英文官方名；相册分享可带 assetIds；PIN 用户缺失时 401 文案为 `Unauthorized` | 已按官方对齐 |

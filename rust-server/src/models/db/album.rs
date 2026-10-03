@@ -291,12 +291,10 @@ pub async fn album_user_exists(
 }
 
 pub async fn count_album_owners(pool: &PgPool, album_id: &Uuid) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"SELECT COUNT(*) FROM album_user WHERE "albumId" = $1 AND role = 'owner'"#,
-    )
-    .bind(album_id)
-    .fetch_one(pool)
-    .await
+    sqlx::query_scalar(r#"SELECT COUNT(*) FROM album_user WHERE "albumId" = $1 AND role = 'owner'"#)
+        .bind(album_id)
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn add_album_user(
@@ -345,13 +343,11 @@ pub async fn remove_album_user(
     album_id: &Uuid,
     user_id: &Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"DELETE FROM album_user WHERE "albumId" = $1 AND "userId" = $2"#,
-    )
-    .bind(album_id)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"DELETE FROM album_user WHERE "albumId" = $1 AND "userId" = $2"#)
+        .bind(album_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -413,7 +409,7 @@ pub async fn get_album_row(
         r#"
             SELECT id,
                    "albumName" as album_name,
-                   description,
+                   COALESCE(description, '') as description,
                    "createdAt" as created_at,
                    "updatedAt" as updated_at,
                    "albumThumbnailAssetId" as album_thumbnail_asset_id,
@@ -457,12 +453,10 @@ pub async fn get_album_users(
 }
 
 pub async fn album_has_shared_link(pool: &PgPool, album_id: &Uuid) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"SELECT EXISTS(SELECT 1 FROM shared_link WHERE "albumId" = $1)"#,
-    )
-    .bind(album_id)
-    .fetch_one(pool)
-    .await
+    sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM shared_link WHERE "albumId" = $1)"#)
+        .bind(album_id)
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn count_album_assets(pool: &PgPool, album_id: &Uuid) -> Result<i64, sqlx::Error> {
@@ -512,7 +506,10 @@ pub async fn count_shared_albums(pool: &PgPool, user_id: &Uuid) -> Result<i64, s
     .await
 }
 
-pub async fn count_owned_not_shared_albums(pool: &PgPool, user_id: &Uuid) -> Result<i64, sqlx::Error> {
+pub async fn count_owned_not_shared_albums(
+    pool: &PgPool,
+    user_id: &Uuid,
+) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         r#"
             SELECT COUNT(*)
