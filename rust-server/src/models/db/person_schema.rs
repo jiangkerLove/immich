@@ -39,6 +39,16 @@ impl PersonSchema {
         }
     }
 
+    /// Primary key columns. Grouping by these lets PostgreSQL select the rest of `person`.
+    pub fn person_group_by(&self, prefix: &str) -> String {
+        match self.variant {
+            PersonSchemaVariant::Legacy => format!("{prefix}id"),
+            PersonSchemaVariant::ClusterGroups => {
+                format!(r#"{prefix}"ownerId", {prefix}"personGroupId""#)
+            }
+        }
+    }
+
     /// Same as [`person_id_expr`] but aliased as `id` for SELECT lists.
     pub fn person_id_as_id(&self, prefix: &str) -> String {
         match self.variant {
@@ -224,6 +234,10 @@ mod tests {
             r#"person."personGroupId" AS id"#
         );
         assert_eq!(schema.face_person_col(), "personGroupId");
+        assert_eq!(
+            schema.person_group_by("person."),
+            r#"person."ownerId", person."personGroupId""#
+        );
     }
 
     #[test]

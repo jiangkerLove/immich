@@ -268,7 +268,7 @@ pub async fn map_assets(
     let people_map = if strip_metadata || auth.shared_link.is_some() {
         std::collections::HashMap::new()
     } else {
-        person::get_people_by_asset_ids(pool, &ids)
+        person::get_people_by_asset_ids(pool, &ids, &auth.user.id)
             .await?
             .into_iter()
             .map(|(asset_id, person_rows)| {

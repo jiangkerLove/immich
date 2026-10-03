@@ -407,7 +407,7 @@ async fn apply_tagged_faces(
         return Ok(());
     };
 
-    let existing_faces = face::get_faces_by_asset(pool, &asset.id)
+    let existing_faces = face::get_faces_by_asset(pool, &asset.id, &asset.owner_id)
         .await
         .map_err(|err| err.to_string())?;
     let faces_to_remove: Vec<Uuid> = existing_faces

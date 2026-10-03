@@ -90,18 +90,17 @@ fn face_select(schema: &PersonSchema) -> &'static str {
 
 fn join_person(schema: &PersonSchema) -> String {
     if schema.is_cluster_groups() {
-        r#"LEFT JOIN person p ON p."personGroupId" = af."personGroupId" AND p."ownerId" = (
-            SELECT a."ownerId" FROM asset a WHERE a.id = af."assetId"
-        )"#
-        .to_string()
+        r#"LEFT JOIN person p ON p."personGroupId" = af."personGroupId" AND p."ownerId" = $2"#
+            .to_string()
     } else {
-        r#"LEFT JOIN person p ON p.id = af."personId""#.to_string()
+        r#"LEFT JOIN person p ON p.id = af."personId" AND p."ownerId" = $2"#.to_string()
     }
 }
 
 pub async fn get_faces_by_asset(
     pool: &Pool<Postgres>,
     asset_id: &Uuid,
+    viewing_user_id: &Uuid,
 ) -> Result<Vec<AssetFaceWithPersonRow>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let sql = format!(
@@ -119,6 +118,7 @@ pub async fn get_faces_by_asset(
     );
     sqlx::query_as::<_, AssetFaceWithPersonRow>(&sql)
         .bind(asset_id)
+        .bind(viewing_user_id)
         .fetch_all(pool)
         .await
 }
@@ -126,6 +126,7 @@ pub async fn get_faces_by_asset(
 pub async fn get_face_by_id(
     pool: &Pool<Postgres>,
     face_id: &Uuid,
+    viewing_user_id: &Uuid,
 ) -> Result<Option<AssetFaceWithPersonRow>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let sql = format!(
@@ -141,6 +142,7 @@ pub async fn get_face_by_id(
     );
     sqlx::query_as::<_, AssetFaceWithPersonRow>(&sql)
         .bind(face_id)
+        .bind(viewing_user_id)
         .fetch_optional(pool)
         .await
 }
@@ -206,7 +208,10 @@ pub async fn delete_asset_face(pool: &Pool<Postgres>, face_id: &Uuid) -> Result<
     Ok(())
 }
 
-pub async fn soft_delete_asset_face(pool: &Pool<Postgres>, face_id: &Uuid) -> Result<(), sqlx::Error> {
+pub async fn soft_delete_asset_face(
+    pool: &Pool<Postgres>,
+    face_id: &Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"UPDATE asset_face SET "deletedAt" = now() WHERE id = $1 AND "deletedAt" IS NULL"#,
     )
@@ -247,10 +252,10 @@ pub async fn get_person_face_asset_id(
         r#"SELECT "faceAssetId" FROM person WHERE {where_id}"#,
         where_id = schema.where_owner_and_id("", "$1", "$2"),
     ))
-        .bind(owner_id)
-        .bind(person_id)
-        .fetch_optional(pool)
-        .await
+    .bind(owner_id)
+    .bind(person_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn set_person_face_asset_id(
@@ -264,21 +269,20 @@ pub async fn set_person_face_asset_id(
         r#"UPDATE person SET "faceAssetId" = $1 WHERE {where_id}"#,
         where_id = schema.where_owner_and_id("", "$2", "$3"),
     ))
-        .bind(face_asset_id)
-        .bind(owner_id)
-        .bind(person_id)
-        .execute(pool)
-        .await?;
+    .bind(face_asset_id)
+    .bind(owner_id)
+    .bind(person_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 pub async fn asset_has_edits(pool: &Pool<Postgres>, asset_id: &Uuid) -> Result<bool, sqlx::Error> {
-    let exists: bool = sqlx::query_scalar(
-        r#"SELECT EXISTS(SELECT 1 FROM asset_edit WHERE "assetId" = $1)"#,
-    )
-    .bind(asset_id)
-    .fetch_one(pool)
-    .await?;
+    let exists: bool =
+        sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM asset_edit WHERE "assetId" = $1)"#)
+            .bind(asset_id)
+            .fetch_one(pool)
+            .await?;
     Ok(exists)
 }
 
@@ -442,11 +446,9 @@ pub struct NewMlFace<'a> {
 }
 
 pub async fn delete_ml_faces(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"DELETE FROM asset_face WHERE "sourceType" = 'machine-learning'"#,
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"DELETE FROM asset_face WHERE "sourceType" = 'machine-learning'"#)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

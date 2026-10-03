@@ -184,7 +184,7 @@ pub async fn get_memory_assets(
     }
 
     let schema = PersonSchema::get(pool).await?;
-    let join = schema.join_person_to_face("person", "asset_face");
+    let join = schema.join_person_to_face_with_owner("person", "asset_face", "asset");
 
     let sql = format!(
         r#"
@@ -234,10 +234,7 @@ pub struct MemoryUpdateData {
     pub seen_at: Option<DateTime<Utc>>,
 }
 
-fn append_search_filters<'a>(
-    query: &mut QueryBuilder<'a, Postgres>,
-    filter: &MemorySearchFilter,
-) {
+fn append_search_filters<'a>(query: &mut QueryBuilder<'a, Postgres>, filter: &MemorySearchFilter) {
     if let Some(for_date) = filter.for_date {
         query.push(
             r#"
@@ -304,10 +301,7 @@ pub async fn owner_has_memory(
         .await
 }
 
-pub async fn get_by_id(
-    pool: &Pool<Postgres>,
-    id: &Uuid,
-) -> Result<Option<MemoryRow>, sqlx::Error> {
+pub async fn get_by_id(pool: &Pool<Postgres>, id: &Uuid) -> Result<Option<MemoryRow>, sqlx::Error> {
     let tables = resolve_memory_tables(pool).await;
     if tables.kind == MemoryTableKind::Missing {
         return Ok(None);
@@ -417,10 +411,7 @@ pub async fn update(
         return Err(sqlx::Error::RowNotFound);
     }
 
-    let mut query = QueryBuilder::new(format!(
-        r#"UPDATE {} SET "#,
-        tables.memory_table
-    ));
+    let mut query = QueryBuilder::new(format!(r#"UPDATE {} SET "#, tables.memory_table));
     let mut separated = query.separated(", ");
 
     if let Some(is_saved) = data.is_saved {

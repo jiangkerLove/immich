@@ -28,8 +28,11 @@ pub async fn search_by_name(
     let select = schema.person_select_columns("");
     let mut query = format!(
         r#"
+            WITH similarity_threshold AS (
+                SELECT set_config('pg_trgm.word_similarity_threshold', '0.5', true) AS thresh
+            )
             SELECT {select}
-            FROM person
+            FROM similarity_threshold, person
             WHERE "ownerId" = $1
               AND f_unaccent(name) %> f_unaccent($2)
         "#
@@ -67,6 +70,7 @@ struct AssetPersonRow {
 pub async fn get_people_by_asset_ids(
     pool: &Pool<Postgres>,
     asset_ids: &[Uuid],
+    viewing_user_id: &Uuid,
 ) -> Result<HashMap<Uuid, Vec<PersonRow>>, sqlx::Error> {
     if asset_ids.is_empty() {
         return Ok(HashMap::new());
@@ -89,6 +93,7 @@ pub async fn get_people_by_asset_ids(
                 p."updatedAt" as updated_at
             FROM asset_face af
             INNER JOIN person p ON {join}
+                AND p."ownerId" = $2
             WHERE af."assetId" = ANY($1)
               AND af."deletedAt" IS NULL
               AND af."isVisible" = TRUE
@@ -97,6 +102,7 @@ pub async fn get_people_by_asset_ids(
         person_id_select = schema.person_id_as_id("p."),
     ))
     .bind(asset_ids)
+    .bind(viewing_user_id)
     .fetch_all(pool)
     .await?;
 
@@ -184,7 +190,6 @@ pub async fn get_by_id_for_owner(
 
 pub struct PersonListFilter {
     pub with_hidden: bool,
-    pub minimum_faces: i32,
     pub closest_face_id: Option<Uuid>,
     pub limit: i64,
     pub offset: i64,
@@ -197,13 +202,14 @@ pub async fn list_for_user(
 ) -> Result<Vec<PersonRow>, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
     let person_list_select = schema.person_list_select_columns();
-    let person_id = schema.person_id_expr("person.");
+    let group_by = schema.person_group_by("person.");
     let join = schema.join_person_to_face("person", "af");
     let list_from = format!(
         r#"
     FROM person
     INNER JOIN asset_face af ON {join}
     INNER JOIN asset a ON a.id = af."assetId"
+        AND a."ownerId" = person."ownerId"
         AND a.visibility = 'timeline'::asset_visibility_enum
         AND a."deletedAt" IS NULL
     WHERE person."ownerId" = $1
@@ -224,22 +230,22 @@ pub async fn list_for_user(
             SELECT {person_list_select}
             {list_from}
             {hidden_clause}
-            GROUP BY {person_id}
-            HAVING person.name <> '' OR COUNT(af."assetId") >= $2
+            GROUP BY {group_by}
+            HAVING person.name <> '' OR COUNT(af."assetId") >= {minimum_faces}
             ORDER BY (
                 SELECT fs_ref.embedding <=> fs_target.embedding
                 FROM face_search fs_ref
                 CROSS JOIN face_search fs_target
                 WHERE fs_ref."faceId" = person."faceAssetId"
-                  AND fs_target."faceId" = $3
+                  AND fs_target."faceId" = $2
                 LIMIT 1
             ) ASC NULLS LAST
-            LIMIT $4 OFFSET $5
-            "#
+            LIMIT $3 OFFSET $4
+            "#,
+            minimum_faces = minimum_faces_sql(),
         );
         return sqlx::query_as::<_, PersonRow>(&query)
             .bind(owner_id)
-            .bind(filter.minimum_faces)
             .bind(closest_face_id)
             .bind(filter.limit)
             .bind(filter.offset)
@@ -252,24 +258,36 @@ pub async fn list_for_user(
         SELECT {person_list_select}
         {list_from}
         {hidden_clause}
-        GROUP BY {person_id}
-        HAVING person.name <> '' OR COUNT(af."assetId") >= $2
+        GROUP BY {group_by}
+        HAVING person.name <> '' OR COUNT(af."assetId") >= {minimum_faces}
         ORDER BY person."isHidden" ASC,
                  person."isFavorite" DESC,
                  (NULLIF(person.name, '') IS NULL) ASC,
                  COUNT(af."assetId") DESC,
                  NULLIF(person.name, '') ASC NULLS LAST,
                  person."createdAt" ASC
-        LIMIT $3 OFFSET $4
-        "#
+        LIMIT $2 OFFSET $3
+        "#,
+        minimum_faces = minimum_faces_sql(),
     );
     sqlx::query_as::<_, PersonRow>(&query)
         .bind(owner_id)
-        .bind(filter.minimum_faces)
         .bind(filter.limit)
         .bind(filter.offset)
         .fetch_all(pool)
         .await
+}
+
+fn minimum_faces_sql() -> &'static str {
+    r#"COALESCE(
+            (
+                SELECT value -> 'people' ->> 'minimumFaces'
+                FROM user_metadata
+                WHERE "userId" = $1
+                  AND key = 'preferences'
+            ),
+            '3'
+        )::int"#
 }
 
 #[derive(Debug, FromRow)]
@@ -427,6 +445,7 @@ pub struct PersonStatisticsRow {
 
 pub async fn get_statistics(
     pool: &Pool<Postgres>,
+    user_id: &Uuid,
     person_id: &Uuid,
 ) -> Result<PersonStatisticsRow, sqlx::Error> {
     let schema = PersonSchema::get(pool).await?;
@@ -438,11 +457,24 @@ pub async fn get_statistics(
             LEFT JOIN asset a ON a.id = af."assetId"
                 AND a.visibility = 'timeline'
                 AND a."deletedAt" IS NULL
-            WHERE af.{face_col} = $1
+                AND (
+                    a."ownerId" = $1
+                    OR EXISTS (
+                        SELECT 1
+                        FROM album_asset
+                        INNER JOIN album ON album.id = album_asset."albumId"
+                            AND album."deletedAt" IS NULL
+                        INNER JOIN album_user ON album_user."albumId" = album.id
+                            AND album_user."userId" = $1
+                        WHERE album_asset."assetId" = a.id
+                    )
+                )
+            WHERE af.{face_col} = $2
               AND af."deletedAt" IS NULL
               AND af."isVisible" = TRUE
         "#
     ))
+    .bind(user_id)
     .bind(person_id)
     .fetch_one(pool)
     .await
@@ -544,6 +576,7 @@ pub async fn get_distinct_names(
         SELECT DISTINCT ON (LOWER(name)) {person_id}, name
         FROM person
         WHERE "ownerId" = $1
+          AND name <> ''
         ORDER BY LOWER(name), "createdAt" ASC
         "#
     ))

@@ -7,7 +7,6 @@ use crate::models::db::asset_edit;
 use crate::models::db::auth_permission::Permission;
 use crate::models::db::face::{self, CreateAssetFaceData};
 use crate::models::db::person::{self, PersonListFilter};
-use crate::models::db::user_metadata::UserMetadataPO;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::face::{AssetFaceResponse, map_asset_face_with_edits};
 use crate::models::response::response::ErrorResp;
@@ -18,7 +17,6 @@ use crate::service::job::JobService;
 use crate::service::media::visibility::asset_dimensions_from_exif;
 use crate::utils::file_response::{FileResponse, file_response, guess_mime};
 use crate::utils::permission::require_permission;
-use crate::utils::preferences::resolve_preferences;
 use crate::utils::query::parse_query_bool;
 use crate::utils::transform::{ImageDimensions, Point, transform_points};
 
@@ -185,10 +183,8 @@ impl PersonService {
             closest_face_id = Some(face_id);
         }
 
-        let minimum_faces = self.get_minimum_faces(&auth.user.id).await?;
         let filter = PersonListFilter {
             with_hidden,
-            minimum_faces,
             closest_face_id,
             limit: size + 1,
             offset,
@@ -222,7 +218,7 @@ impl PersonService {
     ) -> Result<PersonStatisticsResponse, ErrorResp> {
         require_permission(auth, Permission::PersonStatistics)?;
         self.require_person_owner(auth, &[*id]).await?;
-        let stats = person::get_statistics(&self.pool, id).await?;
+        let stats = person::get_statistics(&self.pool, &auth.user.id, id).await?;
         Ok(PersonStatisticsResponse {
             assets: stats.assets,
         })
@@ -594,7 +590,7 @@ impl PersonService {
         require_permission(auth, Permission::FaceRead)?;
         require_assets_access(&self.pool, auth, &[*asset_id], Permission::AssetRead).await?;
 
-        let rows = face::get_faces_by_asset(&self.pool, asset_id).await?;
+        let rows = face::get_faces_by_asset(&self.pool, asset_id, &auth.user.id).await?;
         let edits = asset_edit::list_by_asset(&self.pool, asset_id).await?;
         let asset = face::get_asset_for_faces(&self.pool, asset_id).await?;
         let exif_dims = asset
@@ -636,7 +632,7 @@ impl PersonService {
             ));
         }
 
-        let face_row = face::get_face_by_id(&self.pool, face_id)
+        let face_row = face::get_face_by_id(&self.pool, face_id, &auth.user.id)
             .await?
             .ok_or_else(|| ErrorResp::BadRequest("Face not found".to_string()))?;
 
@@ -702,19 +698,6 @@ impl PersonService {
             }
         }
         Ok(())
-    }
-
-    async fn get_minimum_faces(&self, user_id: &Uuid) -> Result<i32, ErrorResp> {
-        let stored = UserMetadataPO::get_preferences_json(&self.pool, user_id)
-            .await
-            .map_err(ErrorResp::from)?;
-        let prefs = resolve_preferences(stored);
-        Ok(prefs
-            .get("people")
-            .and_then(|value| value.get("minimumFaces"))
-            .and_then(|value| value.as_i64())
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or(3))
     }
 
     async fn unlink_people_thumbnails(
