@@ -56,7 +56,7 @@
 |------|----------------|
 | `dtos/asset-response.dto.ts` | 堆张数是成员列表长度加 1，成员列表不含主照片。人物按人物组去重。共享链接不返回人物。 |
 | `dtos/sync.dto.ts` | 相册 v1 的拥有者取角色为 owner 的那个成员。 |
-| `middleware/auth.guard.ts` | 时间线、搜索、资产统计在需要提升权限时返回 401，文案是 Elevated permission is required。守卫里其余分支还没读。 |
+| `middleware/auth.guard.ts` | 时间线、搜索、资产统计在需要提升权限时返回 401，文案是 Elevated permission is required。`setup: true`（start-restore）要求 `allowSetup && !hasAdmin`，否则 400 `Admin setup is not available`。其余分支还没读。 |
 | `database.ts` | 同步用的资源列、相册资源列、伙伴资源列、EXIF 列读过，并和 Rust 的选出列对过。同文件里给接口用的其他列清单还没读。 |
 | `services/workflow-execution.service.ts` | 找不到工作流当成功。步骤方法名以 noop 开头则跳过且不看 continue。`continue` 缺省为 true，false 时停住，日志是 halted 并带步骤。插件抛错记 error、带步骤，任务失败。全部走完记 completed 且不带步骤。只有 logging 为真才写日志。`config` 为 null、false、0 或空字符串时不写回，空对象会写回。写回资源时评分 null 会清空评分；纬度、经度和描述的 null 不改原值。插件加载和宿主函数还没读。 |
 | `repositories/album.repository.ts` | 相册照片数和起止日期只算未删除、可见性为 archive 或 timeline 的照片。成员按角色排序；判断 owner 时看该用户自己的角色，不看排序后的第一个人。 |
@@ -75,8 +75,8 @@
 | `services/download.service.ts` | 拆包在加入当前文件后再判断是否超过 4GiB。安卓动态照片在偏好关闭时不打进包。压缩包条目用原始文件名，第二个同名是 `名+1.扩展名`。 |
 | `services/duplicate.service.ts` | 还没有组 id 时，用搜索结果里第一次出现的那个。纬度和经度必须都只有一个值才写入。描述按换行和回车拆开再去重。可见性按锁定、归档、时间线、否则隐藏。机器学习关闭、没有嵌入、已堆叠或隐藏或锁定时的任务状态读过。列表 SQL 还没读。 |
 | `services/hls.service.ts` | 主播放列表带宽是码率乘 1.35 后取整，编码串包含 `mp4a.40.2`，帧率三位小数。高于源分辨率或不在配置里的变体丢掉。一个变体都没有则 404。muxer `-r`/`-ac 2`；HW 输入选项在 `-i` 前；NVENC/VAAPI/QSV 码率、preset、strictGop、scale `-2`/`-1`、SW decode 滤镜顺序与 `utils/media.ts` 对齐。`twoPass`/`temporalAQ`/cqMode=icq 等配置分支仍可再对。 |
-| `services/library.service.ts` | 文件不在磁盘且已经离线则不动；已经离线且状态不是 deleted 才检查是否回到导入路径、是否仍被排除。mtime 不同才排队更新。回收站里的离线只改 `isOffline`，不清 `deletedAt`。监听：add/change 走扩展/排除/隐藏过滤后入队 SyncFiles；unlink 不过滤直接 RemoveAsset；创建/改库不重挂 watcher。排除 glob：`*` 不跨 `/`、`**` 可跨、dot 文件可匹配；watch/crawl 大小写不敏感。 |
-| `services/maintenance.service.ts` | API 进程的维护状态固定是未进行。检测旧安装时，API 要管理员，维护进程不要登录。进入维护和维修动作还没读。 |
+| `services/library.service.ts` | 文件不在磁盘且已经离线则不动；已经离线且状态不是 deleted 才检查是否回到导入路径、是否仍被排除。mtime 不同才排队更新。回收站里的离线只改 `isOffline`，不清 `deletedAt`。监听：add/change 走扩展/排除/隐藏过滤后入队 SyncFiles；unlink 不过滤直接 RemoveAsset；创建/改库不重挂 watcher。排除 glob：`*` 不跨 `/`、`**` 可跨、dot 文件可匹配；watch/crawl 大小写不敏感。离线批量：导入前缀 `${path}%` 不裁尾斜杠；排除用 picomatch；只写 `isOffline`/`deletedAt`。 |
+| `services/maintenance.service.ts` | API 进程的维护状态固定是未进行。检测旧安装：非递归 readdir、计入目录、缺目录失败；API 要管理员，维护进程不要登录。worker 登录写 1 天 cookie 且 201；`setAction` 异步后 201。 |
 | `services/map.service.ts` | 未要求包含归档时，标记查询不给查看者留一个空的参数位。反向地理编码返回几条、字段叫什么还没读。 |
 | `services/memory.service.ts` | 更新只接受是否保存、记忆时间和看过时间。这三个都没传时不发 UPDATE。往年回忆的序列结束在去年。选片：时间线、有预览、未删、每年 20 张；搜索丢掉空回忆且排除隐藏人物；GET 不过滤隐藏人物；`hideAt` 为当天 23:59:59.999；清理先删非时间线关联再删 30 天未保存；某用户失败不跳过同天其他人。 |
 | `services/metadata.service.ts` | 没有 EXIF 日期时，用文件创建时间和 mtime 里更早的，birthtime 小于等于 0 不用，库存的 `fileModifiedAt` 不参与。GPS 正好是 0,0 不算有位置。HEIF 的 Rotation 映射到方向。探测过视频，或文件不可能是动画时，先删掉 Duration 再写探测时长。关键词优先 `TagsList`，空数组也不改用后面的层级主题或 Keywords；层级主题把 `|` 换成 `/`，数字原样转成字符串。没有关键词时清空这张照片上的标签关联，标签被锁定时不动。相机、镜头、评分 0 变空、位深、连拍 id 的取值顺序读过。动态照片：`MotionPhoto`/`MicroVideo` 按 JS 真值（数字 0 不算）；目录取 `ContainerDirectory` 或 `Directory`；尾部切片 position 为负则失败；短读零填充到 length；新建运动视频用调用方 UUID 当主键和路径；写盘后内联跑元数据再入队转码；提取失败只打日志不拖垮元数据任务；隐藏已有 timeline 运动视频不发 websocket；CID 配对不按 libraryId / deletedAt 过滤。 |
@@ -280,12 +280,12 @@
 | `maintenance-worker.controller.ts` | 逻辑未对 |
 | `maintenance-worker.service.ts` | 逻辑未对 |
 
-### middleware（7，已读逻辑 1）
+### middleware（7，已读逻辑 2）
 
 | 文件 | 状态 |
 |------|------|
-| `asset-upload.interceptor.ts` | 逻辑未对 |
-| `auth.guard.ts` | 逻辑部分对 |
+| `asset-upload.interceptor.ts` | 逻辑部分对（checksum 短路已对） |
+| `auth.guard.ts` | 逻辑部分对（elevated + setup） |
 | `error.interceptor.ts` | 逻辑未对 |
 | `file-upload.interceptor.ts` | 逻辑未对 |
 | `global-exception.filter.ts` | 逻辑未对 |
@@ -412,7 +412,7 @@
 | `workflow-execution.service.ts` | 逻辑部分对 |
 | `workflow.service.ts` | 逻辑部分对 |
 
-### utils（32，已读逻辑 5）
+### utils（32，已读逻辑 10）
 
 | 文件 | 状态 |
 |------|------|
@@ -422,24 +422,24 @@
 | `config.ts` | 逻辑未对 |
 | `database-backups.ts` | 逻辑未对 |
 | `database.ts` | 逻辑未对 |
-| `date.ts` | 逻辑未对 |
-| `duplicate.ts` | 逻辑未对 |
+| `date.ts` | 逻辑部分对（Luxon 固定区名） |
+| `duplicate.ts` | 逻辑部分对（Boolean 计数） |
 | `editor.ts` | 逻辑未对 |
 | `event.ts` | 逻辑未对 |
 | `fetch.ts` | 逻辑未对 |
 | `file.ts` | 逻辑未对 |
 | `logger.ts` | 逻辑未对 |
-| `maintenance.ts` | 逻辑未对 |
-| `media.ts` | 逻辑未对 |
+| `maintenance.ts` | 逻辑部分对（detectPriorInstall） |
+| `media.ts` | 逻辑部分对（HW 已对） |
 | `mime-types.ts` | 逻辑部分对 |
-| `misc.ts` | 逻辑未对 |
+| `misc.ts` | 逻辑部分对（离线检测改用 Rust picomatch） |
 | `object.ts` | 逻辑未对 |
 | `pagination.ts` | 逻辑未对 |
 | `preferences.ts` | 逻辑部分对 |
 | `profile-image.ts` | 逻辑未对 |
-| `replace-template-tags.ts` | 逻辑未对 |
+| `replace-template-tags.ts` | 逻辑部分对 |
 | `request.ts` | 逻辑未对 |
-| `response.ts` | 逻辑未对 |
+| `response.ts` | 逻辑部分对（cookie Max-Age） |
 | `search-cursor.ts` | 逻辑未对 |
 | `search-filter.ts` | 逻辑部分对 |
 | `set.ts` | 逻辑未对 |
@@ -461,8 +461,8 @@
 
 按文件读函数体，不要只核对有没有这个函数。建议顺序：
 
-1. `utils/` 剩余纯逻辑（request/database helpers）与 middleware 未读分支
-2. 其余 controllers 状态码边角（maintenance end、backup/integrity DELETE 200 vs 204）
+1. middleware 错误体（`global-exception.filter` / `error.interceptor`：message-only、correlation 头、勿泄漏 SQL）
+2. `utils/request.ts` 客户端 IP（trust proxy）与 `deviceType` 回退；`utils/file.ts` RAW mime / Cache-Control
 3. `emails/license.email.tsx`（FutoLayout，若启用许可证邮件再对）
 4. DTO `map*` 字段与搜索/同步未读 SQL 边角
 

@@ -6,6 +6,8 @@ use serde::Serialize;
 use crate::utils::cookie::ImmichCookie;
 
 const COOKIE_MAX_AGE_SECS: i64 = 400 * 24 * 60 * 60;
+/// Shared-link and maintenance cookies are 1 day in TS `respondWithCookie`.
+const SHORT_COOKIE_MAX_AGE_SECS: i64 = 24 * 60 * 60;
 
 pub fn json_response<T: Serialize>(value: &T) -> Response<Body> {
     Response::builder()
@@ -22,8 +24,18 @@ pub fn json_response_with_status<T: Serialize>(status: StatusCode, value: &T) ->
         .unwrap()
 }
 
+fn cookie_max_age(name: &str) -> i64 {
+    match name {
+        "immich_maintenance_token" | "immich_shared_link_token" => SHORT_COOKIE_MAX_AGE_SECS,
+        _ => COOKIE_MAX_AGE_SECS,
+    }
+}
+
 fn build_cookie(name: &str, value: &str, is_secure: bool, http_only: bool) -> String {
-    let mut cookie = format!("{name}={value}; Path=/; SameSite=Lax; Max-Age={COOKIE_MAX_AGE_SECS}");
+    let mut cookie = format!(
+        "{name}={value}; Path=/; SameSite=Lax; Max-Age={}",
+        cookie_max_age(name)
+    );
     if http_only {
         cookie.push_str("; HttpOnly");
     }
@@ -71,10 +83,30 @@ pub fn respond_with_oauth_state_cookies<T: Serialize>(
 }
 
 pub fn respond_with_maintenance_cookie(is_secure: bool, token: &str) -> Response<Body> {
+    // Nest @Post() without @HttpCode → 201.
     let mut response = Response::builder()
-        .status(StatusCode::NO_CONTENT)
+        .status(StatusCode::CREATED)
         .body(Body::empty())
         .unwrap();
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&build_cookie(
+            ImmichCookie::MaintenanceToken.as_str(),
+            token,
+            is_secure,
+            true,
+        ))
+        .unwrap(),
+    );
+    response
+}
+
+pub fn respond_with_maintenance_login_cookie<T: Serialize>(
+    body: &T,
+    is_secure: bool,
+    token: &str,
+) -> Response<Body> {
+    let mut response = json_response_with_status(StatusCode::CREATED, body);
     response.headers_mut().append(
         header::SET_COOKIE,
         HeaderValue::from_str(&build_cookie(

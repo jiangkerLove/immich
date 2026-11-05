@@ -1,8 +1,8 @@
+use axum::Extension;
+use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, Response, StatusCode};
-use axum::Extension;
-use axum::Json;
 
 use crate::app_state::AppState;
 use crate::models::dto::auth::AuthDto;
@@ -11,8 +11,10 @@ use crate::models::dto::maintenance::{
 };
 use crate::models::request::auth::LoginReq;
 use crate::models::response::response::ErrorResp;
-use crate::utils::cookie::{parse_immich_cookies, ImmichCookie};
-use crate::utils::response::respond_with_maintenance_cookie;
+use crate::utils::cookie::{ImmichCookie, parse_immich_cookies};
+use crate::utils::response::{
+    respond_with_maintenance_cookie, respond_with_maintenance_login_cookie,
+};
 
 fn maintenance_token(headers: &HeaderMap) -> Option<String> {
     let cookie = headers
@@ -40,19 +42,31 @@ pub async fn maintenance_status_handler(
 pub async fn maintenance_login_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(login_details): Extension<LoginReq>,
     Json(mut dto): Json<MaintenanceLoginReq>,
-) -> Result<Json<crate::models::dto::maintenance::MaintenanceAuthResp>, ErrorResp> {
+) -> Result<Response<Body>, ErrorResp> {
     if dto.token.is_none() {
         dto.token = maintenance_token(&headers);
     }
 
     if let Some(worker) = state.maintenance_worker.as_ref() {
-        return Ok(Json(worker.maintenance_login(&dto).await?));
+        let token = dto
+            .token
+            .clone()
+            .ok_or_else(|| ErrorResp::Unauthorized("Missing JWT Token".to_string()))?;
+        let auth = worker.maintenance_login(&dto).await?;
+        return Ok(respond_with_maintenance_login_cookie(
+            &auth,
+            login_details.is_secure,
+            &token,
+        ));
     }
 
-    Ok(Json(
-        state.services.maintenance.maintenance_login(&dto).await?,
-    ))
+    // API process: same as TS MaintenanceController — always 400.
+    match state.services.maintenance.maintenance_login(&dto).await {
+        Err(err) => Err(err),
+        Ok(_) => Err(ErrorResp::BadRequest("Not in maintenance mode".to_string())),
+    }
 }
 
 pub async fn detect_prior_install_handler(
@@ -60,7 +74,11 @@ pub async fn detect_prior_install_handler(
     Extension(auth): Extension<AuthDto>,
 ) -> Result<Json<MaintenanceDetectInstallResp>, ErrorResp> {
     Ok(Json(
-        state.services.maintenance.detect_prior_install(&auth).await?,
+        state
+            .services
+            .maintenance
+            .detect_prior_install(&auth)
+            .await?,
     ))
 }
 
@@ -87,8 +105,9 @@ pub async fn set_maintenance_mode_handler(
         .await?;
 
     if jwt.is_empty() {
+        // Nest @Post() without @HttpCode → 201 (End action returns void).
         return Ok(Response::builder()
-            .status(axum::http::StatusCode::NO_CONTENT)
+            .status(StatusCode::CREATED)
             .body(Body::empty())
             .unwrap());
     }
@@ -106,7 +125,11 @@ pub async fn maintenance_set_action_handler(
     let worker = state
         .maintenance_worker
         .as_ref()
-        .ok_or_else(|| ErrorResp::ServerError("Maintenance worker unavailable".to_string()))?;
-    worker.set_action(dto).await;
-    Ok(StatusCode::NO_CONTENT)
+        .ok_or_else(|| ErrorResp::ServerError("Maintenance worker unavailable".to_string()))?
+        .clone();
+    // TS `void this.service.setAction(dto)` — respond before restore finishes.
+    tokio::spawn(async move {
+        worker.set_action(dto).await;
+    });
+    Ok(StatusCode::CREATED)
 }

@@ -1,17 +1,15 @@
+use axum::Extension;
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
-use axum::Extension;
-use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
-use crate::service::integrity::{
-    IntegrityReportResponse, IntegrityReportSummaryResponse,
-};
+use crate::service::integrity::{IntegrityReportResponse, IntegrityReportSummaryResponse};
 
 #[derive(Debug, Deserialize)]
 pub struct IntegrityGetReportQuery {
@@ -25,9 +23,7 @@ pub async fn get_integrity_summary_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
 ) -> Result<Json<IntegrityReportSummaryResponse>, ErrorResp> {
-    Ok(Json(
-        state.services.integrity.get_summary(&auth).await?,
-    ))
+    Ok(Json(state.services.integrity.get_summary(&auth).await?))
 }
 
 pub async fn get_integrity_report_handler(
@@ -58,7 +54,8 @@ pub async fn delete_integrity_report_handler(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ErrorResp> {
     state.services.integrity.delete_report(&auth, &id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    // Nest @Delete() without @HttpCode → 200.
+    Ok(StatusCode::OK)
 }
 
 pub async fn get_integrity_report_csv_handler(

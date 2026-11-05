@@ -393,3 +393,11 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | HLS 配置字段 | cqMode/temporalAQ/twoPass/bframes/refs 进入编码参数 | 与系统 ffmpeg 设置一致 |
 | 已改 | queue/job/backup/integrity/admin 通知权限 | 具名权限或 admin+All | 对齐控制器注解 |
 | 已改 | 更多 POST 201 | login/sign-up/user-admin/profile/download-info/admin-notification/backup-upload | Nest 默认 |
+| 已改 | 共享/维护 cookie | `SharedLinkToken` / `MaintenanceToken` Max-Age=1 天 | 与 `respondWithCookie` 一致 |
+| 已改 | 维护登录 / setAction | worker 登录设 cookie 且 201；`setAction` 异步后 201；End/start-restore cookie 201 | 避免恢复卡住 HTTP；维护页可带 cookie |
+| 已改 | backup/integrity DELETE | Nest 默认 DELETE→200（非 204） | 与官方状态码一致 |
+| 已改 | start-restore setup | `IMMICH_ALLOW_SETUP=false` 或已有 admin → 400 `Admin setup is not available` | 对齐 AuthGuard setup |
+| 已改 | 检测旧安装文件数 | 非递归 readdir，计入目录项，缺目录失败 | 与 `detectPriorInstall` 一致 |
+| 已改 | 库离线检测 | 导入前缀不裁尾 `/`；排除用 picomatch 语义；不写 `updatedAt` | `*` 不再跨目录误标离线 |
+| 已改 | 重复建议 EXIF 计数 | `0`/`false`/`""`/`null` 不计（JS Boolean） | 同分时保留候选与客户端一致 |
+| 已改 | 边车时区 | Luxon 名 `UTC-7`/`UTC+5:30`；无 zone 用本机时区 | 固定偏移照片写得出 DateTimeOriginal |

@@ -266,61 +266,48 @@ pub async fn detect_offline_external_assets(
         return Ok(0);
     }
 
-    let import_likes: Vec<String> = import_paths
-        .iter()
-        .map(|path| format!("{}%", path.trim_end_matches('/')))
-        .collect();
-    let exclusion_likes: Vec<String> = exclusion_patterns
-        .iter()
-        .map(|pattern| crate::utils::glob::glob_to_sql_like(pattern))
-        .collect();
-
-    let mut query = String::from(
+    // TS uses picomatch `~` for exclusions (`*` does not cross `/`) and
+    // `${importPath}%` without stripping a trailing slash. Filter in Rust with
+    // the same matcher used for watch/crawl so LIKE `%` cannot over-match.
+    let candidates = sqlx::query_as::<_, (Uuid, String)>(
         r#"
-            UPDATE asset
-            SET "isOffline" = true,
-                "deletedAt" = NOW(),
-                "updatedAt" = NOW()
+            SELECT id, "originalPath"
+            FROM asset
             WHERE "isOffline" = false
               AND "isExternal" = true
               AND "libraryId" = $1
-              AND (
         "#,
-    );
+    )
+    .bind(library_id)
+    .fetch_all(pool)
+    .await?;
 
-    query.push_str("NOT (");
-    for (index, _) in import_likes.iter().enumerate() {
-        if index > 0 {
-            query.push_str(" OR ");
-        }
-        query.push_str(&format!(r#""originalPath" LIKE ${}"#, index + 2));
-    }
-    query.push(')');
+    let offline_ids: Vec<Uuid> = candidates
+        .into_iter()
+        .filter_map(|(id, path)| {
+            let outside_import = !import_paths
+                .iter()
+                .any(|import| path.starts_with(import.as_str()));
+            let excluded = crate::utils::glob::path_matches_exclusion(&path, exclusion_patterns);
+            (outside_import || excluded).then_some(id)
+        })
+        .collect();
 
-    if !exclusion_likes.is_empty() {
-        query.push_str(" OR ");
-        for (index, _) in exclusion_likes.iter().enumerate() {
-            if index > 0 {
-                query.push_str(" OR ");
-            }
-            query.push_str(&format!(
-                r#""originalPath" LIKE ${}"#,
-                import_likes.len() + index + 2
-            ));
-        }
+    if offline_ids.is_empty() {
+        return Ok(0);
     }
 
-    query.push(')');
-
-    let mut q = sqlx::query(&query).bind(library_id);
-    for like in &import_likes {
-        q = q.bind(like);
-    }
-    for like in &exclusion_likes {
-        q = q.bind(like);
-    }
-
-    let result = q.execute(pool).await?;
+    let result = sqlx::query(
+        r#"
+            UPDATE asset
+            SET "isOffline" = true,
+                "deletedAt" = NOW()
+            WHERE id = ANY($1)
+        "#,
+    )
+    .bind(&offline_ids)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 

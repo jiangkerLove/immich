@@ -119,13 +119,14 @@ impl MaintenanceService {
     ) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
         use crate::models::db::users::UserDb;
 
-        if UserDb::get_admin(&self.pool)
+        // Matches AuthGuard `setup: true` → requireSetupAvailable().
+        let has_admin = UserDb::get_admin(&self.pool)
             .await
             .map_err(ErrorResp::from)?
-            .is_some()
-        {
+            .is_some();
+        if !crate::service::config_bootstrap::setup_allowed() || has_admin {
             return Err(ErrorResp::BadRequest(
-                "The server already has an admin".to_string(),
+                "Admin setup is not available".to_string(),
             ));
         }
 
@@ -227,36 +228,29 @@ async fn check_marker_access(path: &Path) -> (bool, bool) {
     }
 }
 
-async fn count_files(path: &Path) -> i32 {
-    let mut stack = vec![path.to_path_buf()];
+/// Non-recursive `readdir` count matching TS `detectPriorInstall`: every entry
+/// except `.immich` (files and directories). Missing directory fails the request.
+async fn count_files(path: &Path) -> Result<i32, ErrorResp> {
+    let mut entries = tokio::fs::read_dir(path).await.map_err(|err| {
+        ErrorResp::ServerError(format!(
+            "Unable to read storage folder {}: {err}",
+            path.display()
+        ))
+    })?;
     let mut count = 0i32;
 
-    while let Some(dir) = stack.pop() {
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let file_name = entry.file_name();
-            if file_name == ".immich" {
-                continue;
-            }
-
-            let file_type = match entry.file_type().await {
-                Ok(file_type) => file_type,
-                Err(_) => continue,
-            };
-
-            if file_type.is_dir() {
-                stack.push(entry.path());
-            } else if file_type.is_file() {
-                count += 1;
-            }
+    while let Some(entry) = entries.next_entry().await.map_err(|err| {
+        ErrorResp::ServerError(format!(
+            "Unable to read storage folder {}: {err}",
+            path.display()
+        ))
+    })? {
+        if entry.file_name() != ".immich" {
+            count += 1;
         }
     }
 
-    count
+    Ok(count)
 }
 
 pub async fn detect_prior_install_internal(
@@ -269,7 +263,7 @@ pub async fn detect_prior_install_internal(
         let folder_path = media.join(folder);
         let marker = folder_path.join(".immich");
         let (readable, writable) = check_marker_access(&marker).await;
-        let files = count_files(&folder_path).await;
+        let files = count_files(&folder_path).await?;
 
         folders.push(MaintenanceDetectInstallFolderResp {
             folder: (*folder).to_string(),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -264,19 +264,16 @@ fn merge_time_zone(
     time_zone: Option<&str>,
 ) -> Option<String> {
     let date_time = date_time_original?;
+    // Luxon `setZone(undefined)` uses the system zone.
     let Some(time_zone) = time_zone else {
-        return Some(date_time.to_rfc3339());
+        return Some(date_time.with_timezone(&chrono::Local).to_rfc3339());
     };
 
     if let Ok(tz) = time_zone.parse::<Tz>() {
         return Some(date_time.with_timezone(&tz).to_rfc3339());
     }
 
-    let offset = time_zone.parse::<FixedOffset>().ok().or_else(|| {
-        time_zone
-            .strip_prefix("UTC")
-            .and_then(|value| value.parse().ok())
-    })?;
+    let offset = crate::utils::date::parse_fixed_time_zone(time_zone)?;
     Some(date_time.with_timezone(&offset).to_rfc3339())
 }
 
@@ -291,6 +288,18 @@ mod tests {
         assert!(is_sidecar_changed(None, Some("/a.xmp")));
         assert!(!is_sidecar_changed(Some("/a.xmp"), Some("/a.xmp")));
         assert!(is_sidecar_changed(Some("/a.xmp"), Some("/b.xmp")));
+    }
+
+    #[test]
+    fn merge_time_zone_parses_luxon_utc_minus_seven() {
+        let instant = DateTime::parse_from_rfc3339("2023-11-19T18:11:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let formatted = merge_time_zone(Some(instant), Some("UTC-7")).expect("zone");
+        assert!(
+            formatted.contains("-07:00"),
+            "unexpected formatted datetime: {formatted}"
+        );
     }
 
     #[test]

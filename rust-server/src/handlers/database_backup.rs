@@ -1,8 +1,8 @@
+use axum::Extension;
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{Response, StatusCode};
-use axum::Extension;
-use axum::Json;
 
 use crate::app_state::AppState;
 use crate::models::dto::auth::AuthDto;
@@ -41,7 +41,8 @@ pub async fn delete_database_backups_handler(
         .database_backup
         .delete_backups(&auth, &dto.backups)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    // Nest @Delete() without @HttpCode → 200.
+    Ok(StatusCode::OK)
 }
 
 pub async fn upload_database_backup_handler(
@@ -58,10 +59,7 @@ pub async fn upload_database_backup_handler(
         .map_err(|err| ErrorResp::BadRequest(err.to_string()))?
     {
         if field.name().unwrap_or("") == "file" {
-            original_name = field
-                .file_name()
-                .unwrap_or("backup.sql.gz")
-                .to_string();
+            original_name = field.file_name().unwrap_or("backup.sql.gz").to_string();
             file_bytes = Some(
                 field
                     .bytes()
@@ -100,7 +98,11 @@ pub async fn maintenance_list_database_backups_handler(
     State(state): State<AppState>,
 ) -> Result<Json<DatabaseBackupListResponse>, ErrorResp> {
     Ok(Json(
-        state.services.database_backup.list_backups_internal().await?,
+        state
+            .services
+            .database_backup
+            .list_backups_internal()
+            .await?,
     ))
 }
 
@@ -124,7 +126,8 @@ pub async fn maintenance_delete_database_backups_handler(
         .database_backup
         .delete_backups_internal(&dto.backups)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    // Nest @Delete() without @HttpCode → 200.
+    Ok(StatusCode::OK)
 }
 
 pub async fn maintenance_upload_database_backup_handler(
@@ -140,10 +143,7 @@ pub async fn maintenance_upload_database_backup_handler(
         .map_err(|err| ErrorResp::BadRequest(err.to_string()))?
     {
         if field.name().unwrap_or("") == "file" {
-            original_name = field
-                .file_name()
-                .unwrap_or("backup.sql.gz")
-                .to_string();
+            original_name = field.file_name().unwrap_or("backup.sql.gz").to_string();
             file_bytes = Some(
                 field
                     .bytes()
@@ -163,5 +163,6 @@ pub async fn maintenance_upload_database_backup_handler(
         .upload_backup_internal(&original_name, file_bytes)
         .await?;
 
-    Ok(StatusCode::NO_CONTENT)
+    // Nest @Post() without @HttpCode → 201.
+    Ok(StatusCode::CREATED)
 }
