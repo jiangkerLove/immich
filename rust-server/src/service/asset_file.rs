@@ -10,7 +10,7 @@ use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::access::require_asset_access;
-use crate::utils::file_response::{file_response, FileResponse};
+use crate::utils::file_response::{FileResponse, file_response};
 use crate::utils::permission::require_permission;
 
 #[derive(Clone)]
@@ -82,11 +82,7 @@ impl AssetFileService {
         Ok(map_asset_file(row))
     }
 
-    pub async fn download(
-        &self,
-        auth: &AuthDto,
-        id: &Uuid,
-    ) -> Result<Response<Body>, ErrorResp> {
+    pub async fn download(&self, auth: &AuthDto, id: &Uuid) -> Result<Response<Body>, ErrorResp> {
         require_permission(auth, Permission::AssetFileDownload)?;
         self.require_file_access(auth, id).await?;
 
@@ -107,6 +103,7 @@ impl AssetFileService {
                 .to_string(),
             file_name: Some(file_name),
             cache_control: Some("private".to_string()),
+            range: None,
         })
         .await
     }
@@ -135,9 +132,13 @@ impl AssetFileService {
             .session
             .as_ref()
             .is_some_and(|session| session.has_elevated_permission);
-        let allowed =
-            asset_file::filter_owner_accessible_ids(&self.pool, &auth.user.id, &[*file_id], elevated)
-                .await?;
+        let allowed = asset_file::filter_owner_accessible_ids(
+            &self.pool,
+            &auth.user.id,
+            &[*file_id],
+            elevated,
+        )
+        .await?;
         if allowed.is_empty() {
             return Err(ErrorResp::BadRequest(
                 "Not found or no assetFile.read access".to_string(),

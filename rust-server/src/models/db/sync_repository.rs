@@ -59,7 +59,12 @@ pub struct AlbumUserRow {
 }
 
 fn dt(v: DateTime<Utc>) -> Value {
-    Value::String(v.to_rfc3339())
+    // Match JavaScript Date#toISOString(): millisecond precision and a trailing Z.
+    Value::String(v.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
+fn parse_real_text(row: &sqlx::postgres::PgRow, column: &str) -> f64 {
+    row.get::<String, _>(column).parse::<f64>().unwrap_or(0.0)
 }
 
 fn opt_date(v: Option<NaiveDate>) -> Value {
@@ -1542,7 +1547,7 @@ pub async fn asset_face_get_upserts(
                   "boundingBoxY1",
                   "boundingBoxX2",
                   "boundingBoxY2",
-                  "sourceType",
+                  "sourceType"::text as "sourceType",
                   "isVisible",
                   "asset_face"."deletedAt",
                   "asset_face"."updateId"::text as update_id
@@ -1572,7 +1577,7 @@ pub async fn asset_face_get_upserts(
                   "boundingBoxY1",
                   "boundingBoxX2",
                   "boundingBoxY2",
-                  "sourceType",
+                  "sourceType"::text as "sourceType",
                   "isVisible",
                   "asset_face"."deletedAt",
                   "asset_face"."updateId"::text as update_id
@@ -1599,10 +1604,10 @@ pub async fn asset_face_get_upserts(
                 "personId": row.get::<Option<Uuid>, _>("personId"),
                 "imageWidth": row.get::<i32, _>("imageWidth"),
                 "imageHeight": row.get::<i32, _>("imageHeight"),
-                "boundingBoxX1": row.get::<f64, _>("boundingBoxX1"),
-                "boundingBoxY1": row.get::<f64, _>("boundingBoxY1"),
-                "boundingBoxX2": row.get::<f64, _>("boundingBoxX2"),
-                "boundingBoxY2": row.get::<f64, _>("boundingBoxY2"),
+                "boundingBoxX1": row.get::<i32, _>("boundingBoxX1"),
+                "boundingBoxY1": row.get::<i32, _>("boundingBoxY1"),
+                "boundingBoxX2": row.get::<i32, _>("boundingBoxX2"),
+                "boundingBoxY2": row.get::<i32, _>("boundingBoxY2"),
                 "sourceType": row.get::<String, _>("sourceType"),
                 "isVisible": row.get::<bool, _>("isVisible"),
                 "deletedAt": opt_dt(row.get("deletedAt")),
@@ -1790,17 +1795,17 @@ pub async fn asset_ocr_get_upserts(
                 r#"
                 SELECT "asset_ocr"."id",
                   "asset_ocr"."assetId",
-                  "asset_ocr"."x1",
-                  "asset_ocr"."y1",
-                  "asset_ocr"."x2",
-                  "asset_ocr"."y2",
-                  "asset_ocr"."x3",
-                  "asset_ocr"."y3",
-                  "asset_ocr"."x4",
-                  "asset_ocr"."y4",
+                  "asset_ocr"."x1"::text as x1,
+                  "asset_ocr"."y1"::text as y1,
+                  "asset_ocr"."x2"::text as x2,
+                  "asset_ocr"."y2"::text as y2,
+                  "asset_ocr"."x3"::text as x3,
+                  "asset_ocr"."y3"::text as y3,
+                  "asset_ocr"."x4"::text as x4,
+                  "asset_ocr"."y4"::text as y4,
                   "asset_ocr"."text",
-                  "asset_ocr"."boxScore",
-                  "asset_ocr"."textScore",
+                  "asset_ocr"."boxScore"::text as "boxScore",
+                  "asset_ocr"."textScore"::text as "textScore",
                   "asset_ocr"."updateId"::text as update_id,
                   "asset_ocr"."isVisible"
                 FROM "asset_ocr"
@@ -1822,17 +1827,17 @@ pub async fn asset_ocr_get_upserts(
                 r#"
                 SELECT "asset_ocr"."id",
                   "asset_ocr"."assetId",
-                  "asset_ocr"."x1",
-                  "asset_ocr"."y1",
-                  "asset_ocr"."x2",
-                  "asset_ocr"."y2",
-                  "asset_ocr"."x3",
-                  "asset_ocr"."y3",
-                  "asset_ocr"."x4",
-                  "asset_ocr"."y4",
+                  "asset_ocr"."x1"::text as x1,
+                  "asset_ocr"."y1"::text as y1,
+                  "asset_ocr"."x2"::text as x2,
+                  "asset_ocr"."y2"::text as y2,
+                  "asset_ocr"."x3"::text as x3,
+                  "asset_ocr"."y3"::text as y3,
+                  "asset_ocr"."x4"::text as x4,
+                  "asset_ocr"."y4"::text as y4,
                   "asset_ocr"."text",
-                  "asset_ocr"."boxScore",
-                  "asset_ocr"."textScore",
+                  "asset_ocr"."boxScore"::text as "boxScore",
+                  "asset_ocr"."textScore"::text as "textScore",
                   "asset_ocr"."updateId"::text as update_id,
                   "asset_ocr"."isVisible"
                 FROM "asset_ocr"
@@ -1855,17 +1860,17 @@ pub async fn asset_ocr_get_upserts(
             data: json!({
                 "id": row.get::<Uuid, _>("id"),
                 "assetId": row.get::<Uuid, _>("assetId"),
-                "x1": row.get::<f64, _>("x1"),
-                "y1": row.get::<f64, _>("y1"),
-                "x2": row.get::<f64, _>("x2"),
-                "y2": row.get::<f64, _>("y2"),
-                "x3": row.get::<f64, _>("x3"),
-                "y3": row.get::<f64, _>("y3"),
-                "x4": row.get::<f64, _>("x4"),
-                "y4": row.get::<f64, _>("y4"),
+                "x1": parse_real_text(&row, "x1"),
+                "y1": parse_real_text(&row, "y1"),
+                "x2": parse_real_text(&row, "x2"),
+                "y2": parse_real_text(&row, "y2"),
+                "x3": parse_real_text(&row, "x3"),
+                "y3": parse_real_text(&row, "y3"),
+                "x4": parse_real_text(&row, "x4"),
+                "y4": parse_real_text(&row, "y4"),
                 "text": row.get::<String, _>("text"),
-                "boxScore": row.get::<f64, _>("boxScore"),
-                "textScore": row.get::<f64, _>("textScore"),
+                "boxScore": parse_real_text(&row, "boxScore"),
+                "textScore": parse_real_text(&row, "textScore"),
                 "isVisible": row.get::<bool, _>("isVisible"),
             }),
         })

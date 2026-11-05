@@ -15,7 +15,7 @@ use crate::service::job::JobService;
 use crate::utils::checksum::sha1_bytes;
 use crate::utils::file_walk::{is_hidden_path, walk_file_batches};
 use crate::utils::fs_access::has_read_access;
-use crate::utils::glob::path_matches_exclusion;
+use crate::utils::glob::{GlobMatchOptions, path_matches_exclusion, path_matches_exclusion_with};
 use crate::utils::mime_types::{is_video_path, supported_file_extensions};
 use crate::utils::path_normalize::normalize_path;
 use crate::utils::storage::StoragePaths;
@@ -249,7 +249,13 @@ impl LibraryProcessor {
             let filtered: Vec<String> = path_batch
                 .into_iter()
                 .filter(|path| !is_hidden_path(Path::new(path)))
-                .filter(|path| !path_matches_exclusion(path, &library_row.exclusion_patterns))
+                .filter(|path| {
+                    !path_matches_exclusion_with(
+                        path,
+                        &library_row.exclusion_patterns,
+                        GlobMatchOptions::CRAWL,
+                    )
+                })
                 .collect();
 
             crawl_count += filtered.len();

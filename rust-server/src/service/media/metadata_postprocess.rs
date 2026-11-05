@@ -18,6 +18,12 @@ use crate::utils::system_config::get_merged;
 
 const QUEUE_BACKGROUND: &str = "backgroundTask";
 
+#[derive(Debug, Default)]
+pub struct PostProcessResult {
+    /// Motion video assets that were written to disk and need inline metadata + encode.
+    pub motion_assets_needing_pipeline: Vec<Uuid>,
+}
+
 pub async fn run_post_processing(
     pool: &PgPool,
     jobs: &JobService,
@@ -29,7 +35,9 @@ pub async fn run_post_processing(
     file_size: i64,
     modify_date: Option<DateTime<Utc>>,
     local_date_time: Option<DateTime<Utc>>,
-) -> Result<(), String> {
+) -> Result<PostProcessResult, String> {
+    let mut result = PostProcessResult::default();
+
     if !asset
         .locked_properties
         .iter()
@@ -42,11 +50,11 @@ pub async fn run_post_processing(
     }
 
     if is_motion_photo(asset, media_tags) {
-        apply_motion_photos(
+        // TS catches extract errors so faces / CID linking still run and the metadata job succeeds.
+        match apply_motion_photos(
             pool,
             jobs,
             storage,
-            websocket,
             asset,
             media_tags,
             exif.date_time_original,
@@ -54,7 +62,17 @@ pub async fn run_post_processing(
             local_date_time,
             file_size,
         )
-        .await?;
+        .await
+        {
+            Ok(motion_ids) => result.motion_assets_needing_pipeline.extend(motion_ids),
+            Err(err) => {
+                tracing::error!(
+                    "Failed to extract motion video for {}: {}: {err}",
+                    asset.id,
+                    asset.original_path
+                );
+            }
+        }
     }
 
     if is_face_import_enabled(pool).await? && has_tagged_faces(media_tags) {
@@ -71,7 +89,7 @@ pub async fn run_post_processing(
         .await?;
     }
 
-    Ok(())
+    Ok(result)
 }
 
 async fn is_face_import_enabled(pool: &PgPool) -> Result<bool, String> {
@@ -85,8 +103,29 @@ async fn is_face_import_enabled(pool: &PgPool) -> Result<bool, String> {
 }
 
 fn is_motion_photo(asset: &MetadataExtractionAsset, tags: &Value) -> bool {
+    // Match JS `!!(tags.MotionPhoto || tags.MicroVideo)` — numeric 0 is falsy.
     asset.asset_type == "IMAGE"
-        && (tag_string(tags, "MotionPhoto").is_some() || tag_string(tags, "MicroVideo").is_some())
+        && (tag_truthy(tags, "MotionPhoto") || tag_truthy(tags, "MicroVideo"))
+}
+
+fn tag_truthy(tags: &Value, name: &str) -> bool {
+    match tag_value(tags, name) {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => value,
+        Some(Value::Number(number)) => number.as_f64().is_some_and(|value| value != 0.0),
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        Some(Value::Object(_)) => true,
+    }
+}
+
+fn motion_photo_directory(tags: &Value) -> Option<Vec<Value>> {
+    for key in ["ContainerDirectory", "Directory"] {
+        if let Some(Value::Array(items)) = tag_value(tags, key) {
+            return Some(items);
+        }
+    }
+    None
 }
 
 fn has_tagged_faces(tags: &Value) -> bool {
@@ -168,47 +207,44 @@ async fn apply_motion_photos(
     pool: &PgPool,
     jobs: &JobService,
     storage: &StoragePaths,
-    websocket: &WebSocketHub,
     asset: &MetadataExtractionAsset,
     tags: &Value,
     date_time_original: Option<DateTime<Utc>>,
     modify_date: Option<DateTime<Utc>>,
     local_date_time: Option<DateTime<Utc>>,
     file_size: i64,
-) -> Result<(), String> {
-    let is_motion_photo = tag_string(tags, "MotionPhoto").is_some();
-    let is_micro_video = tag_string(tags, "MicroVideo").is_some();
+) -> Result<Vec<Uuid>, String> {
+    let is_motion_photo_tag = tag_truthy(tags, "MotionPhoto");
+    let is_micro_video = tag_truthy(tags, "MicroVideo");
     let video_offset = tag_f64(tags, "MicroVideoOffset");
-    let has_motion_photo_video = tag_string(tags, "MotionPhotoVideo").is_some();
+    let has_motion_photo_video = tag_truthy(tags, "MotionPhotoVideo");
     let has_embedded_video_file = tag_string(tags, "EmbeddedVideoType")
         .is_some_and(|value| value == "MotionPhoto_Data")
-        && tag_string(tags, "EmbeddedVideoFile").is_some();
+        && tag_truthy(tags, "EmbeddedVideoFile");
 
     let mut length = 0usize;
     let mut padding = 0usize;
 
-    if is_motion_photo {
-        if let Some(directory_value) = tag_value(tags, "ContainerDirectory") {
-            if let Some(directory) = directory_value.as_array() {
-                for entry in directory {
-                    if entry
+    if is_motion_photo_tag {
+        if let Some(directory) = motion_photo_directory(tags) {
+            for entry in directory {
+                if entry
+                    .get("Item")
+                    .and_then(|item| item.get("Semantic"))
+                    .and_then(|value| value.as_str())
+                    == Some("MotionPhoto")
+                {
+                    length = entry
                         .get("Item")
-                        .and_then(|item| item.get("Semantic"))
-                        .and_then(|value| value.as_str())
-                        == Some("MotionPhoto")
-                    {
-                        length = entry
-                            .get("Item")
-                            .and_then(|item| item.get("Length"))
-                            .and_then(|value| value.as_u64())
-                            .unwrap_or(0) as usize;
-                        padding = entry
-                            .get("Item")
-                            .and_then(|item| item.get("Padding"))
-                            .and_then(|value| value.as_u64())
-                            .unwrap_or(0) as usize;
-                        break;
-                    }
+                        .and_then(|item| item.get("Length"))
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as usize;
+                    padding = entry
+                        .get("Item")
+                        .and_then(|item| item.get("Padding"))
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as usize;
+                    break;
                 }
             }
         }
@@ -216,12 +252,13 @@ async fn apply_motion_photos(
 
     if is_micro_video {
         if let Some(offset) = video_offset {
-            length = offset.round() as usize;
+            // TS assigns the number as-is; truncate toward zero like Buffer length.
+            length = offset.trunc() as usize;
         }
     }
 
     if length == 0 && !has_embedded_video_file && !has_motion_photo_video {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let video = if has_motion_photo_video {
@@ -229,29 +266,44 @@ async fn apply_motion_photos(
     } else if has_embedded_video_file {
         exiftool::extract_binary_tag(&asset.original_path, "EmbeddedVideoFile").await?
     } else {
-        let position = (file_size as usize)
-            .saturating_sub(length)
-            .saturating_sub(padding);
-        tokio::fs::read(&asset.original_path)
+        let size = file_size as i64;
+        let needed = length as i64 + padding as i64;
+        if size < needed {
+            return Err(format!(
+                "Motion photo video offset is past end of file (size={size}, length={length}, padding={padding})"
+            ));
+        }
+        let position = (size - needed) as u64;
+        let mut file = tokio::fs::File::open(&asset.original_path)
             .await
-            .map_err(|err| err.to_string())?
-            .into_iter()
-            .skip(position)
-            .take(length)
-            .collect()
+            .map_err(|err| err.to_string())?;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        file.seek(std::io::SeekFrom::Start(position))
+            .await
+            .map_err(|err| err.to_string())?;
+        let mut buf = vec![0u8; length];
+        let mut read = 0usize;
+        while read < length {
+            let n = file
+                .read(&mut buf[read..])
+                .await
+                .map_err(|err| err.to_string())?;
+            if n == 0 {
+                break;
+            }
+            read += n;
+        }
+        // TS Buffer.alloc(length) zero-pads a short read.
+        buf
     };
 
-    if video.is_empty() {
-        return Ok(());
-    }
-
     let checksum = sha1_bytes(&video);
-    let motion_asset_id =
+    let existing_id =
         assets::get_by_checksum(pool, &asset.owner_id, asset.library_id.as_ref(), &checksum)
             .await
             .map_err(|err| err.to_string())?;
 
-    let (motion_asset_id, is_new_motion_asset) = if let Some(existing_id) = motion_asset_id {
+    let (motion_asset_id, is_new_motion_asset) = if let Some(existing_id) = existing_id {
         (existing_id, false)
     } else {
         let motion_asset_id = Uuid::new_v4();
@@ -270,6 +322,7 @@ async fn apply_motion_photos(
         match assets::create_asset(
             pool,
             NewAsset {
+                id: Some(motion_asset_id),
                 owner_id: asset.owner_id,
                 library_id: asset.library_id,
                 asset_type: "VIDEO",
@@ -277,6 +330,7 @@ async fn apply_motion_photos(
                 checksum: &checksum,
                 file_created_at,
                 file_modified_at,
+                local_date_time,
                 is_favorite: false,
                 duration: None,
                 original_file_name: &motion_filename,
@@ -294,7 +348,14 @@ async fn apply_motion_photos(
                 }
                 (id, true)
             }
-            Err(_) => {
+            Err(err) => {
+                let is_checksum = matches!(
+                    &err,
+                    sqlx::Error::Database(db) if db.constraint().is_some_and(|c| c.contains("checksum"))
+                );
+                if !is_checksum {
+                    return Err(err.to_string());
+                }
                 let Some(existing_id) = assets::get_by_checksum(
                     pool,
                     &asset.owner_id,
@@ -304,7 +365,12 @@ async fn apply_motion_photos(
                 .await
                 .map_err(|err| err.to_string())?
                 else {
-                    return Ok(());
+                    tracing::warn!(
+                        "Unable to find existing motion video asset for {}: {}",
+                        asset.id,
+                        asset.original_path
+                    );
+                    return Ok(Vec::new());
                 };
                 (existing_id, false)
             }
@@ -312,11 +378,12 @@ async fn apply_motion_photos(
     };
 
     if !is_new_motion_asset {
-        let motion = assets::get_basic_by_id(pool, &motion_asset_id)
+        let motion = assets::get_basic_by_id_including_deleted(pool, &motion_asset_id)
             .await
             .map_err(|err| err.to_string())?;
         if let Some(motion) = motion {
             if motion.visibility == "timeline" {
+                // TS only updates visibility and logs; no websocket on_asset_hidden here.
                 assets::update_asset_fields(
                     pool,
                     &motion_asset_id,
@@ -329,7 +396,6 @@ async fn apply_motion_photos(
                 )
                 .await
                 .map_err(|err| err.to_string())?;
-                websocket.emit_asset_hidden(asset.owner_id, motion_asset_id);
             }
         }
     }
@@ -362,30 +428,24 @@ async fn apply_motion_photos(
         }
     }
 
-    let motion = assets::get_basic_by_id(pool, &motion_asset_id)
+    let motion = assets::get_basic_by_id_including_deleted(pool, &motion_asset_id)
         .await
         .map_err(|err| err.to_string())?;
     let Some(motion) = motion else {
-        return Ok(());
+        return Ok(Vec::new());
     };
 
+    let mut needing_pipeline = Vec::new();
     if !Path::new(&motion.original_path).exists() {
         StoragePaths::ensure_parent(Path::new(&motion.original_path))
             .map_err(|err| err.to_string())?;
         tokio::fs::write(&motion.original_path, &video)
             .await
             .map_err(|err| err.to_string())?;
-
-        jobs.queue_asset_extract_metadata(&motion_asset_id)
-            .await
-            .map_err(|err| err.to_string())?;
-        jobs.queue_asset_encode_video(&motion_asset_id)
-            .await
-            .map_err(|err| err.to_string())?;
+        needing_pipeline.push(motion_asset_id);
     }
 
-    let _ = local_date_time;
-    Ok(())
+    Ok(needing_pipeline)
 }
 
 async fn apply_tagged_faces(

@@ -451,56 +451,31 @@ pub async fn upsert_metadata(
 pub async fn find_live_photo_match(
     pool: &Pool<Postgres>,
     owner_id: &Uuid,
-    library_id: Option<&Uuid>,
+    _library_id: Option<&Uuid>,
     other_asset_id: &Uuid,
     live_photo_cid: &str,
     asset_type: &str,
 ) -> Result<Option<Uuid>, sqlx::Error> {
-    let row: Option<Uuid> = if let Some(library_id) = library_id {
-        sqlx::query_scalar(
-            r#"
+    // Match TS asset.repository.findLivePhotoMatch: owner, other id, type, and CID only.
+    // libraryId is accepted by the service but ignored; deletedAt is not filtered.
+    sqlx::query_scalar(
+        r#"
             SELECT asset.id
             FROM asset
             INNER JOIN asset_exif ON asset_exif."assetId" = asset.id
             WHERE asset.id != $1
               AND asset."ownerId" = $2
-              AND asset."libraryId" = $3
-              AND asset.type = $4
-              AND asset_exif."livePhotoCID" = $5
-              AND asset."deletedAt" IS NULL
-            LIMIT 1
-            "#,
-        )
-        .bind(other_asset_id)
-        .bind(owner_id)
-        .bind(library_id)
-        .bind(asset_type)
-        .bind(live_photo_cid)
-        .fetch_optional(pool)
-        .await?
-    } else {
-        sqlx::query_scalar(
-            r#"
-            SELECT asset.id
-            FROM asset
-            INNER JOIN asset_exif ON asset_exif."assetId" = asset.id
-            WHERE asset.id != $1
-              AND asset."ownerId" = $2
-              AND asset."libraryId" IS NULL
               AND asset.type = $3
               AND asset_exif."livePhotoCID" = $4
-              AND asset."deletedAt" IS NULL
             LIMIT 1
             "#,
-        )
-        .bind(other_asset_id)
-        .bind(owner_id)
-        .bind(asset_type)
-        .bind(live_photo_cid)
-        .fetch_optional(pool)
-        .await?
-    };
-    Ok(row)
+    )
+    .bind(other_asset_id)
+    .bind(owner_id)
+    .bind(asset_type)
+    .bind(live_photo_cid)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn sync_asset_tags_from_exif(

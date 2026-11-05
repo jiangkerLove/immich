@@ -396,7 +396,7 @@ async fn map_memory(
     memory: MemoryRow,
     auth: &AuthDto,
 ) -> Result<MemoryResponse, ErrorResp> {
-    let memory_assets = memory::get_memory_assets(pool, &[memory.id]).await?;
+    let memory_assets = memory::get_memory_assets_for_get(pool, &[memory.id]).await?;
     let mut assets_by_memory: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for row in memory_assets {
         assets_by_memory

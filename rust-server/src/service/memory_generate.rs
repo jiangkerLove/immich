@@ -59,8 +59,14 @@ async fn create_memories_for_day(
     users: &[crate::models::db::users::UserDb],
     target: NaiveDate,
 ) -> Result<(), sqlx::Error> {
+    // Match TS Promise.all per owner: one owner's failure must not skip the rest.
     for user in users {
-        create_on_this_day_memories(pool, &user.id, target).await?;
+        if let Err(err) = create_on_this_day_memories(pool, &user.id, target).await {
+            tracing::error!(
+                "Failed to create on-this-day memories for user {} on {target}: {err}",
+                user.id
+            );
+        }
     }
     Ok(())
 }
@@ -112,7 +118,12 @@ fn start_and_time(date: NaiveDate) -> chrono::DateTime<Utc> {
 }
 
 fn end_of_day(date: NaiveDate) -> chrono::DateTime<Utc> {
-    Utc.from_utc_datetime(&date.and_hms_opt(23, 59, 59).expect("valid end of day"))
+    // Luxon endOf('day') is 23:59:59.999.
+    Utc.from_utc_datetime(
+        &date
+            .and_hms_milli_opt(23, 59, 59, 999)
+            .expect("valid end of day"),
+    )
 }
 
 fn memory_at_for_year(target: NaiveDate, year: i32) -> chrono::DateTime<Utc> {

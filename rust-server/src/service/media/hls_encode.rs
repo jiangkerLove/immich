@@ -643,6 +643,8 @@ fn append_output_maps(
     if let Some(audio_index) = asset.audio_index {
         args.push("-map".into());
         args.push(format!("0:{audio_index}"));
+        // Match TS: always stereo-downmix when audio is re-encoded for HLS.
+        args.extend(["-ac".into(), "2".into()]);
     }
 }
 
@@ -752,8 +754,13 @@ fn append_hls_muxer(
     }
     args.extend([
         "-copyts".into(),
+        // Match TS: packetCount * timeBase / totalDuration
         "-r".into(),
-        format!("{}/{}", asset.packet_count, asset.total_duration),
+        format!(
+            "{}/{}",
+            asset.packet_count as i64 * asset.time_base as i64,
+            asset.total_duration.max(1)
+        ),
         "-avoid_negative_ts".into(),
         "disabled".into(),
         "-f".into(),
@@ -873,7 +880,7 @@ mod tests {
 
     #[test]
     fn tone_map_requires_hdr_and_enabled_tonemap() {
-        let settings = test_settings("hable", "disabled");
+        let _settings = test_settings("hable", "disabled");
         let hdr = test_asset(COLOR_TRANSFER_SMPTE2084);
         let sdr = test_asset(1);
 

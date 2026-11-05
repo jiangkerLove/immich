@@ -244,6 +244,7 @@ impl PersonService {
             content_type: guess_mime(&row.thumbnail_path),
             file_name: None,
             cache_control: Some("private, no-cache, no-transform".to_string()),
+            range: None,
         })
         .await
     }

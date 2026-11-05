@@ -95,7 +95,9 @@ pub async fn get_by_key(
         .fetch_optional(pool)
         .await?;
 
-    Ok(row.filter(|r| r.is_valid()).map(SharedLinkAuthRow::into_auth))
+    Ok(row
+        .filter(|r| r.is_valid())
+        .map(SharedLinkAuthRow::into_auth))
 }
 
 pub async fn get_by_slug(
@@ -108,7 +110,9 @@ pub async fn get_by_slug(
         .fetch_optional(pool)
         .await?;
 
-    Ok(row.filter(|r| r.is_valid()).map(SharedLinkAuthRow::into_auth))
+    Ok(row
+        .filter(|r| r.is_valid())
+        .map(SharedLinkAuthRow::into_auth))
 }
 
 pub async fn add_assets(
@@ -237,7 +241,10 @@ pub async fn list_for_user(
     }
 
     query.push(r#" ORDER BY sl."createdAt" DESC"#);
-    query.build_query_as::<SharedLinkRow>().fetch_all(pool).await
+    query
+        .build_query_as::<SharedLinkRow>()
+        .fetch_all(pool)
+        .await
 }
 
 pub async fn get_for_user(
@@ -253,7 +260,10 @@ pub async fn get_for_user(
         .await
 }
 
-pub async fn create(pool: &Pool<Postgres>, link: NewSharedLink<'_>) -> Result<SharedLinkRow, sqlx::Error> {
+pub async fn create(
+    pool: &Pool<Postgres>,
+    link: NewSharedLink<'_>,
+) -> Result<SharedLinkRow, sqlx::Error> {
     let id: Uuid = sqlx::query_scalar(
         r#"
             INSERT INTO shared_link (
@@ -379,6 +389,23 @@ pub async fn list_asset_ids(
     }
 
     query.build_query_scalar().fetch_all(pool).await
+}
+
+/// Junction rows for the link, including trashed assets still attached.
+pub async fn list_linked_asset_ids(
+    pool: &Pool<Postgres>,
+    link_id: &Uuid,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+            SELECT "assetId"
+            FROM shared_link_asset
+            WHERE "sharedLinkId" = $1
+        "#,
+    )
+    .bind(link_id)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn remove_assets(

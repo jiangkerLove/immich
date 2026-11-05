@@ -174,6 +174,22 @@ pub async fn get_memory_assets(
     pool: &Pool<Postgres>,
     memory_ids: &[Uuid],
 ) -> Result<Vec<MemoryAssetRow>, sqlx::Error> {
+    get_memory_assets_inner(pool, memory_ids, true).await
+}
+
+/// GET /memories/:id — TS getByIdBuilder has no hidden-person filter.
+pub async fn get_memory_assets_for_get(
+    pool: &Pool<Postgres>,
+    memory_ids: &[Uuid],
+) -> Result<Vec<MemoryAssetRow>, sqlx::Error> {
+    get_memory_assets_inner(pool, memory_ids, false).await
+}
+
+async fn get_memory_assets_inner(
+    pool: &Pool<Postgres>,
+    memory_ids: &[Uuid],
+    exclude_hidden_people: bool,
+) -> Result<Vec<MemoryAssetRow>, sqlx::Error> {
     if memory_ids.is_empty() {
         return Ok(vec![]);
     }
@@ -183,8 +199,23 @@ pub async fn get_memory_assets(
         return Ok(vec![]);
     }
 
-    let schema = PersonSchema::get(pool).await?;
-    let join = schema.join_person_to_face_with_owner("person", "asset_face", "asset");
+    let hidden_clause = if exclude_hidden_people {
+        let schema = PersonSchema::get(pool).await?;
+        let join = schema.join_person_to_face_with_owner("person", "asset_face", "asset");
+        format!(
+            r#"
+          AND NOT EXISTS (
+              SELECT 1
+              FROM asset_face
+              INNER JOIN person ON {join}
+              WHERE asset_face."assetId" = asset.id
+                AND person."isHidden" = TRUE
+          )
+            "#
+        )
+    } else {
+        String::new()
+    };
 
     let sql = format!(
         r#"
@@ -196,17 +227,12 @@ pub async fn get_memory_assets(
         WHERE ma."memoriesId" = ANY($1)
           AND asset.visibility = 'timeline'
           AND asset."deletedAt" IS NULL
-          AND NOT EXISTS (
-              SELECT 1
-              FROM asset_face
-              INNER JOIN person ON {join}
-              WHERE asset_face."assetId" = asset.id
-                AND person."isHidden" = TRUE
-          )
+          {hidden_clause}
         ORDER BY asset."fileCreatedAt" ASC
         "#,
         asset_id_column = tables.asset_id_column,
         asset_link_table = tables.asset_link_table,
+        hidden_clause = hidden_clause,
     );
 
     sqlx::query_as::<_, MemoryAssetRow>(&sql)
@@ -559,11 +585,12 @@ pub async fn cleanup_stale(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
         return Ok(());
     }
 
+    // asset_id_column already includes quotes (e.g. "assetId").
     let delete_assets_sql = format!(
         r#"
             DELETE FROM {asset_link} ma
             USING asset
-            WHERE ma."{asset_id_col}" = asset.id
+            WHERE ma.{asset_id_col} = asset.id
               AND asset.visibility <> 'timeline'::asset_visibility_enum
         "#,
         asset_link = tables.asset_link_table,

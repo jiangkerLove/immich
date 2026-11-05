@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use axum::body::Body;
-use axum::http::{header, Response};
+use axum::http::{Response, header};
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -12,7 +12,7 @@ use crate::models::db::integrity;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::websocket::WebSocketHub;
-use crate::utils::file_response::{file_response, FileResponse};
+use crate::utils::file_response::{FileResponse, file_response};
 use crate::utils::permission::require_admin;
 
 pub const INTEGRITY_TYPE_UNTRACKED: &str = "untracked_file";
@@ -24,7 +24,9 @@ fn parse_report_type(value: &str) -> Result<&'static str, ErrorResp> {
         INTEGRITY_TYPE_UNTRACKED => Ok(INTEGRITY_TYPE_UNTRACKED),
         INTEGRITY_TYPE_MISSING => Ok(INTEGRITY_TYPE_MISSING),
         INTEGRITY_TYPE_CHECKSUM => Ok(INTEGRITY_TYPE_CHECKSUM),
-        _ => Err(ErrorResp::BadRequest(format!("Invalid integrity report type: {value}"))),
+        _ => Err(ErrorResp::BadRequest(format!(
+            "Invalid integrity report type: {value}"
+        ))),
     }
 }
 
@@ -64,7 +66,10 @@ impl IntegrityService {
         Self { pool, websocket }
     }
 
-    pub async fn get_summary(&self, auth: &AuthDto) -> Result<IntegrityReportSummaryResponse, ErrorResp> {
+    pub async fn get_summary(
+        &self,
+        auth: &AuthDto,
+    ) -> Result<IntegrityReportSummaryResponse, ErrorResp> {
         require_admin(auth)?;
         let rows = integrity::get_summary(&self.pool)
             .await
@@ -114,10 +119,7 @@ impl IntegrityService {
             None
         };
 
-        Ok(IntegrityReportResponse {
-            items,
-            next_cursor,
-        })
+        Ok(IntegrityReportResponse { items, next_cursor })
     }
 
     pub async fn get_report_file(
@@ -141,6 +143,7 @@ impl IntegrityService {
             content_type: "application/octet-stream".to_string(),
             file_name: Some(file_name),
             cache_control: Some("private, no-cache, no-transform".to_string()),
+            range: None,
         })
         .await
     }
@@ -206,13 +209,20 @@ impl IntegrityService {
             ));
         }
 
-        let filename = format!("{}-{}.csv", chrono::Utc::now().timestamp_millis(), report_type);
+        let filename = format!(
+            "{}-{}.csv",
+            chrono::Utc::now().timestamp_millis(),
+            report_type
+        );
         Response::builder()
             .header(header::CONTENT_TYPE, "text/csv")
             .header(header::CACHE_CONTROL, "private, no-cache, no-transform")
             .header(
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", urlencoding::encode(&filename)),
+                format!(
+                    "attachment; filename=\"{}\"",
+                    urlencoding::encode(&filename)
+                ),
             )
             .body(Body::from(csv))
             .map_err(|err| ErrorResp::ServerError(err.to_string()))

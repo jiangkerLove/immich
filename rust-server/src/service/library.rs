@@ -131,7 +131,8 @@ impl LibraryService {
             &exclusion_patterns,
         )
         .await?;
-        crate::service::library_watcher::request_watch(row.id);
+        // Match TS: create does not start a watcher; watchAll runs on config init /
+        // when library.watch.enabled flips.
         Ok(map_library(row))
     }
 
@@ -164,7 +165,7 @@ impl LibraryService {
             dto.exclusion_patterns.as_deref(),
         )
         .await?;
-        crate::service::library_watcher::request_watch(*id);
+        // Match TS: path/exclusion edits stay stale until the next watchAll.
         Ok(map_library(row))
     }
 
@@ -182,7 +183,9 @@ impl LibraryService {
         dto: &ValidateLibraryReq,
     ) -> Result<ValidateLibraryResponse, ErrorResp> {
         require_admin(auth)?;
-        let import_paths = self.validate_paths(dto.import_paths.as_deref().unwrap_or(&[])).await?;
+        let import_paths = self
+            .validate_paths(dto.import_paths.as_deref().unwrap_or(&[]))
+            .await?;
         Ok(ValidateLibraryResponse { import_paths })
     }
 
@@ -194,13 +197,14 @@ impl LibraryService {
         require_admin(auth)?;
         self.find_or_fail(id).await?;
 
-        let stats = library::get_statistics(&self.pool, id)
-            .await?
-            .unwrap_or(library::LibraryStatsRow {
-                photos: 0,
-                videos: 0,
-                usage: 0,
-            });
+        let stats =
+            library::get_statistics(&self.pool, id)
+                .await?
+                .unwrap_or(library::LibraryStatsRow {
+                    photos: 0,
+                    videos: 0,
+                    usage: 0,
+                });
 
         Ok(LibraryStatsResponse {
             photos: stats.photos,
@@ -309,7 +313,10 @@ fn map_library(row: LibraryRow) -> LibraryResponse {
 }
 
 fn default_exclusions() -> Vec<String> {
-    DEFAULT_EXCLUSIONS.iter().map(|value| value.to_string()).collect()
+    DEFAULT_EXCLUSIONS
+        .iter()
+        .map(|value| value.to_string())
+        .collect()
 }
 
 fn is_under_media_location(path: &str, media_location: &Path) -> bool {

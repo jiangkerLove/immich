@@ -14,7 +14,7 @@ use crate::service::access::{require_asset_access, require_upload_access};
 use crate::service::album::AlbumService;
 use crate::service::job::JobService;
 use crate::service::websocket::WebSocketHub;
-use crate::utils::checksum::{decode_checksum, sha1_bytes};
+use crate::utils::checksum::{decode_checksum, from_checksum, sha1_bytes};
 use crate::utils::file_response::{
     FileResponse, file_extension, file_response, file_stem, guess_mime,
 };
@@ -110,6 +110,19 @@ impl AssetMediaService {
         }
     }
 
+    /// Match `AssetMediaService.getUploadAssetIdByChecksum` / AssetUploadInterceptor.
+    pub async fn get_upload_asset_id_by_checksum(
+        &self,
+        auth: &AuthDto,
+        checksum: &str,
+    ) -> Result<Option<Uuid>, ErrorResp> {
+        let bytes = from_checksum(checksum);
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        Ok(assets::get_upload_id_by_checksum(&self.pool, &auth.user.id, &bytes).await?)
+    }
+
     pub async fn upload_asset(
         &self,
         auth: &AuthDto,
@@ -120,6 +133,25 @@ impl AssetMediaService {
     ) -> Result<AssetMediaResponse, ErrorResp> {
         require_upload_access(auth)?;
         require_permission(auth, Permission::AssetUpload)?;
+
+        if file_bytes.is_empty() {
+            return Err(ErrorResp::BadRequest("File is empty".to_string()));
+        }
+
+        let check_name = dto.filename.as_deref().unwrap_or(original_name);
+        if !crate::utils::mime_types::is_asset_path(check_name) {
+            return Err(ErrorResp::BadRequest(format!(
+                "Unsupported file type {check_name}"
+            )));
+        }
+
+        if let Some((_, sidecar_name)) = sidecar {
+            if !crate::utils::mime_types::is_sidecar_path(sidecar_name) {
+                return Err(ErrorResp::BadRequest(format!(
+                    "Unsupported file type {sidecar_name}"
+                )));
+            }
+        }
 
         if let Some(quota) = auth.user.quota_size_in_bytes {
             if auth.user.quota_usage_in_bytes + file_bytes.len() as i64 > quota {
@@ -149,7 +181,7 @@ impl AssetMediaService {
         }
 
         let file_uuid = Uuid::new_v4().to_string().replace('-', "");
-        let ext = file_extension(original_name);
+        let ext = file_extension(check_name);
         let stored_name = format!("{file_uuid}{ext}");
         let upload_dir = self.storage.upload_folder(&auth.user.id, &file_uuid);
         tokio::fs::create_dir_all(&upload_dir)
@@ -163,12 +195,20 @@ impl AssetMediaService {
             .map_err(|e| ErrorResp::ServerError(e.to_string()))?;
         set_mtime(&upload_path, dto.file_modified_at);
 
-        let asset_type = guess_asset_type(&stored_name);
+        let asset_type = crate::utils::mime_types::asset_type_from_path(check_name);
         let visibility = dto.visibility.as_deref().unwrap_or("timeline");
+        if !matches!(visibility, "archive" | "timeline" | "hidden" | "locked") {
+            let _ = tokio::fs::remove_file(&upload_path).await;
+            return Err(ErrorResp::BadRequest(format!(
+                "Invalid visibility value: {visibility}"
+            )));
+        }
+        let duration = dto.duration.filter(|value| *value != 0);
 
         let asset_id = match assets::create_asset(
             &self.pool,
             NewAsset {
+                id: None,
                 owner_id: auth.user.id,
                 library_id: None,
                 asset_type,
@@ -176,8 +216,9 @@ impl AssetMediaService {
                 checksum: &checksum,
                 file_created_at: dto.file_created_at,
                 file_modified_at: dto.file_modified_at,
+                local_date_time: None,
                 is_favorite: dto.is_favorite.unwrap_or(false),
-                duration: dto.duration,
+                duration,
                 original_file_name: dto.filename.as_deref().unwrap_or(original_name),
                 live_photo_video_id: dto.live_photo_video_id,
                 visibility,
@@ -216,9 +257,9 @@ impl AssetMediaService {
             crate::models::db::asset_metadata::upsert_items(&self.pool, &asset_id, &pairs).await?;
         }
 
-        if let Some((bytes, name)) = sidecar {
-            let sidecar_name = if name.is_empty() { "sidecar.xmp" } else { name };
-            let sidecar_path = upload_dir.join(sidecar_name);
+        if let Some((bytes, _)) = sidecar {
+            // Match TS: sidecar is always stored as {uuid}.xmp regardless of client name.
+            let sidecar_path = upload_dir.join(format!("{file_uuid}.xmp"));
             if let Err(err) = tokio::fs::write(&sidecar_path, bytes).await {
                 let _ = self
                     .jobs
@@ -266,12 +307,13 @@ impl AssetMediaService {
         auth: &AuthDto,
         asset_id: &Uuid,
         edited: bool,
+        range: Option<String>,
     ) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
         require_asset_access(&self.pool, auth, asset_id, Permission::AssetDownload).await?;
         let use_edited = edited || auth.shared_link.is_some();
         let row = assets::get_for_original(&self.pool, asset_id, use_edited)
             .await?
-            .ok_or_else(|| ErrorResp::NotFound("Asset not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Not Found".to_string()))?;
 
         let path = row.edited_path.unwrap_or(row.original_path);
         let file_name = format!(
@@ -285,6 +327,7 @@ impl AssetMediaService {
             content_type: guess_mime(&file_name),
             file_name: Some(file_name),
             cache_control: None,
+            range,
         })
         .await
     }
@@ -294,6 +337,7 @@ impl AssetMediaService {
         auth: &AuthDto,
         asset_id: &Uuid,
         query: &AssetMediaOptionsQuery,
+        range: Option<String>,
     ) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
         require_asset_access(&self.pool, auth, asset_id, Permission::AssetView).await?;
 
@@ -312,7 +356,7 @@ impl AssetMediaService {
 
         let row = assets::get_for_thumbnail(&self.pool, asset_id, file_type, edited)
             .await?
-            .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Not Found".to_string()))?;
 
         if file_type == "fullsize" && is_web_supported_image(&row.original_path) && !edited {
             return Ok(thumbnail_redirect(asset_id, "original", false));
@@ -324,7 +368,7 @@ impl AssetMediaService {
 
         let path = row
             .path
-            .ok_or_else(|| ErrorResp::NotFound("Asset media not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::NotFound("Not Found".to_string()))?;
 
         let suffix = if auth.shared_link.is_some() && !auth.shared_link.as_ref().unwrap().show_exif
         {
@@ -339,6 +383,7 @@ impl AssetMediaService {
             content_type: guess_mime(&file_name),
             file_name: Some(file_name),
             cache_control: None,
+            range,
         })
         .await
     }
@@ -347,13 +392,12 @@ impl AssetMediaService {
         &self,
         auth: &AuthDto,
         asset_id: &Uuid,
+        range: Option<String>,
     ) -> Result<axum::http::Response<axum::body::Body>, ErrorResp> {
         require_asset_access(&self.pool, auth, asset_id, Permission::AssetView).await?;
         let row = assets::get_for_video(&self.pool, asset_id)
             .await?
-            .ok_or_else(|| {
-                ErrorResp::NotFound("Asset not found or asset is not a video".to_string())
-            })?;
+            .ok_or_else(|| ErrorResp::NotFound("Not Found".to_string()))?;
 
         let path = row.encoded_video_path.unwrap_or(row.original_path);
         file_response(FileResponse {
@@ -361,6 +405,7 @@ impl AssetMediaService {
             content_type: guess_mime(&path),
             file_name: None,
             cache_control: None,
+            range,
         })
         .await
     }
@@ -460,29 +505,6 @@ fn is_web_supported_image(path: &str) -> bool {
     [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]
         .iter()
         .any(|ext| lower.ends_with(ext))
-}
-
-fn guess_asset_type(filename: &str) -> &'static str {
-    let lower = filename.to_lowercase();
-    if lower.ends_with(".mp4")
-        || lower.ends_with(".mov")
-        || lower.ends_with(".webm")
-        || lower.ends_with(".mkv")
-    {
-        "VIDEO"
-    } else if lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".m4a") {
-        "AUDIO"
-    } else if lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".png")
-        || lower.ends_with(".webp")
-        || lower.ends_with(".heic")
-        || lower.ends_with(".gif")
-    {
-        "IMAGE"
-    } else {
-        "OTHER"
-    }
 }
 
 fn set_mtime(path: &std::path::Path, modified: DateTime<Utc>) {

@@ -277,7 +277,7 @@ impl MetadataExtractService {
         .await
         .map_err(|err| err.to_string())?;
 
-        metadata_postprocess::run_post_processing(
+        let post = metadata_postprocess::run_post_processing(
             &self.pool,
             &self.jobs,
             &self.storage,
@@ -290,6 +290,25 @@ impl MetadataExtractService {
             local_date_time,
         )
         .await?;
+
+        // Match TS: await handleMetadataExtraction({ id: motionAsset.id }) then queue encode.
+        // Motion videos are type VIDEO so they will not re-enter apply_motion_photos.
+        for motion_id in post.motion_assets_needing_pipeline {
+            let motion_job = EntityJob {
+                id: motion_id,
+                source: None,
+                notify: None,
+            };
+            Box::pin(self.extract_asset_metadata(&motion_id, &motion_job)).await?;
+            self.jobs
+                .queue_json_job(
+                    "videoConversion",
+                    "AssetEncodeVideo",
+                    serde_json::json!({ "id": motion_id }),
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+        }
 
         self.queue_follow_up_jobs(job).await?;
 

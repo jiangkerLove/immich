@@ -9,6 +9,7 @@ use crate::models::response::response::ErrorResp;
 use crate::service::access::require_assets_access;
 use crate::service::job::JobService;
 use crate::service::websocket::WebSocketHub;
+use crate::utils::permission::require_permission;
 
 #[derive(Clone)]
 pub struct TrashService {
@@ -39,6 +40,7 @@ impl TrashService {
     }
 
     pub async fn empty(&self, auth: &AuthDto) -> Result<TrashResponse, ErrorResp> {
+        require_permission(auth, Permission::AssetDelete)?;
         let count = trash::empty_for_user(&self.pool, &auth.user.id).await?;
         if count > 0 {
             self.jobs.queue_asset_empty_trash().await?;
@@ -47,6 +49,7 @@ impl TrashService {
     }
 
     pub async fn restore(&self, auth: &AuthDto) -> Result<TrashResponse, ErrorResp> {
+        require_permission(auth, Permission::AssetDelete)?;
         let count = trash::restore_all_for_user(&self.pool, &auth.user.id).await?;
         Ok(TrashResponse { count })
     }

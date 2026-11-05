@@ -379,12 +379,17 @@ struct EmailTemplateDefaults {
 
 async fn get_external_domain(pool: &PgPool) -> Result<String, ErrorResp> {
     let config = get_merged(pool).await?;
-    Ok(config
+    let domain = config
         .get("server")
         .and_then(|server| server.get("externalDomain"))
         .and_then(|domain| domain.as_str())
-        .unwrap_or_default()
-        .to_string())
+        .unwrap_or_default();
+    // Match TS getExternalDomain: empty config falls back to the public app URL.
+    Ok(if domain.is_empty() {
+        "https://my.immich.app".to_string()
+    } else {
+        domain.to_string()
+    })
 }
 
 async fn get_email_templates(pool: &PgPool) -> Result<EmailTemplateDefaults, ErrorResp> {
@@ -710,13 +715,12 @@ impl NotificationJobProcessor {
             return Ok(None);
         };
 
-        let thumb = assets::get_for_thumbnail(&self.pool, &thumbnail_id, "thumbnail", true)
-            .await?
-            .and_then(|row| row.path);
-
-        let Some(path) = thumb else {
+        // Match TS getAlbumThumbnailFiles: attach only when there is exactly one thumbnail file.
+        let paths = assets::list_asset_file_paths(&self.pool, &thumbnail_id, "thumbnail").await?;
+        if paths.len() != 1 {
             return Ok(None);
-        };
+        }
+        let path = paths.into_iter().next().unwrap();
 
         Ok(Some(SendMailAttachmentJob {
             filename: format!("album-thumbnail{}", file_extension(&path)),

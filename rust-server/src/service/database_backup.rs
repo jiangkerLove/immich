@@ -157,6 +157,7 @@ impl DatabaseBackupService {
             content_type: content_type.to_string(),
             file_name: Some(filename.to_string()),
             cache_control: Some("private, no-cache, no-transform".to_string()),
+            range: None,
         })
         .await
     }

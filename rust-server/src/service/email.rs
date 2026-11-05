@@ -1,6 +1,4 @@
-use std::path::Path;
-
-use lettre::message::{header, Attachment, Body, Mailbox, Message, MultiPart, SinglePart};
+use lettre::message::{Attachment, Body, Mailbox, Message, MultiPart, SinglePart, header};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
@@ -101,10 +99,9 @@ pub struct EmailService;
 impl EmailService {
     pub async fn verify_smtp(transport: &SmtpTransportConfig) -> Result<(), ErrorResp> {
         let mailer = build_mailer(transport)?;
-        mailer
-            .test_connection()
-            .await
-            .map_err(|err| ErrorResp::BadRequest(format!("Failed to verify SMTP configuration: {err}")))?;
+        mailer.test_connection().await.map_err(|err| {
+            ErrorResp::BadRequest(format!("Failed to verify SMTP configuration: {err}"))
+        })?;
         Ok(())
     }
 
@@ -149,17 +146,16 @@ impl EmailService {
         let mut related = MultiPart::related().multipart(alternative);
 
         for attachment in image_attachments {
-            if !is_supported_image_attachment(attachment) {
-                continue;
-            }
-            let bytes = tokio::fs::read(&attachment.path)
-                .await
-                .map_err(|err| ErrorResp::ServerError(format!("Unable to read attachment: {err}")))?;
+            // TS attaches any extension; keep the HTML cid in sync by always attaching.
+            let bytes = tokio::fs::read(&attachment.path).await.map_err(|err| {
+                ErrorResp::ServerError(format!("Unable to read attachment: {err}"))
+            })?;
             let content_type = mime_guess::from_path(&attachment.path)
                 .first_or_octet_stream()
                 .to_string();
+            // Lettre treats this argument as Content-ID; match nodemailer cid: album-thumbnail.
             related = related.singlepart(
-                Attachment::new_inline(attachment.filename.clone())
+                Attachment::new_inline(attachment.cid.clone())
                     .body(bytes, content_type.parse().unwrap()),
             );
         }
@@ -174,10 +170,7 @@ impl EmailService {
             .await
             .map_err(|err| ErrorResp::ServerError(format!("Failed to send email: {err}")))?;
 
-        Ok(response
-            .first_line()
-            .unwrap_or("ok")
-            .to_string())
+        Ok(response.first_line().unwrap_or("ok").to_string())
     }
 
     pub fn render_test(data: &TestEmailData, _custom_template: &str) -> RenderedEmail {
@@ -193,12 +186,15 @@ impl EmailService {
 
     pub fn render_welcome(data: &WelcomeEmailData, custom_template: &str) -> RenderedEmail {
         let content = if custom_template.is_empty() {
-            let password_block = data.password.as_ref().map(|password| {
-                format!(
-                    "<br /><strong>Password</strong>: {}",
-                    html_escape(password)
-                )
-            }).unwrap_or_default();
+            // Match TS `password &&`: empty string omits the password line.
+            let password_block = data
+                .password
+                .as_ref()
+                .filter(|password| !password.is_empty())
+                .map(|password| {
+                    format!("<br /><strong>Password</strong>: {}", html_escape(password))
+                })
+                .unwrap_or_default();
             format!(
                 r#"<p style="margin:0;">Hey <strong>{}</strong>!</p>
 <p>A new account has been created for you.</p>
@@ -209,16 +205,22 @@ impl EmailService {
                 html_escape(&data.display_name),
                 html_escape(&data.username),
                 base = html_escape(&data.base_url),
-                button = button("Login", &format!("{}/auth/login", data.base_url.trim_end_matches('/'))),
+                button = button(
+                    "Login",
+                    &format!("{}/auth/login", data.base_url.trim_end_matches('/'))
+                ),
             )
         } else {
             let rendered = replace_template_tags(
                 custom_template,
                 &[
-                    ("displayName", data.display_name.as_str()),
-                    ("username", data.username.as_str()),
-                    ("password", data.password.as_deref().unwrap_or("")),
-                    ("baseUrl", data.base_url.as_str()),
+                    ("displayName", Some(data.display_name.as_str())),
+                    ("username", Some(data.username.as_str())),
+                    (
+                        "password",
+                        data.password.as_deref().filter(|value| !value.is_empty()),
+                    ),
+                    ("baseUrl", Some(data.base_url.as_str())),
                 ],
             );
             format!(
@@ -226,7 +228,10 @@ impl EmailService {
 {button}
 <p style="font-size:12px;">If you cannot click the button use the link below to proceed with first login.<br />
 <a href="{base}">{base}</a></p>"#,
-                button = button("Login", &format!("{}/auth/login", data.base_url.trim_end_matches('/'))),
+                button = button(
+                    "Login",
+                    &format!("{}/auth/login", data.base_url.trim_end_matches('/'))
+                ),
                 base = html_escape(&data.base_url),
             )
         };
@@ -234,7 +239,10 @@ impl EmailService {
         wrap_layout("You have been invited to a new Immich instance.", &content)
     }
 
-    pub fn render_album_invite(data: &AlbumInviteEmailData, custom_template: &str) -> RenderedEmail {
+    pub fn render_album_invite(
+        data: &AlbumInviteEmailData,
+        custom_template: &str,
+    ) -> RenderedEmail {
         let album_url = format!(
             "{}/albums/{}",
             data.base_url.trim_end_matches('/'),
@@ -259,11 +267,11 @@ impl EmailService {
             let rendered = replace_template_tags(
                 custom_template,
                 &[
-                    ("albumName", data.album_name.as_str()),
-                    ("recipientName", data.recipient_name.as_str()),
-                    ("senderName", data.sender_name.as_str()),
-                    ("albumId", data.album_id.as_str()),
-                    ("baseUrl", data.base_url.as_str()),
+                    ("albumName", nonempty(&data.album_name)),
+                    ("recipientName", nonempty(&data.recipient_name)),
+                    ("senderName", nonempty(&data.sender_name)),
+                    ("albumId", nonempty(&data.album_id)),
+                    ("baseUrl", nonempty(&data.base_url)),
                 ],
             );
             format!(
@@ -281,7 +289,10 @@ impl EmailService {
         wrap_layout("You have been added to a shared album.", &content)
     }
 
-    pub fn render_album_update(data: &AlbumUpdateEmailData, custom_template: &str) -> RenderedEmail {
+    pub fn render_album_update(
+        data: &AlbumUpdateEmailData,
+        custom_template: &str,
+    ) -> RenderedEmail {
         let album_url = format!(
             "{}/albums/{}",
             data.base_url.trim_end_matches('/'),
@@ -305,10 +316,10 @@ impl EmailService {
             let rendered = replace_template_tags(
                 custom_template,
                 &[
-                    ("albumName", data.album_name.as_str()),
-                    ("recipientName", data.recipient_name.as_str()),
-                    ("albumId", data.album_id.as_str()),
-                    ("baseUrl", data.base_url.as_str()),
+                    ("albumName", nonempty(&data.album_name)),
+                    ("recipientName", nonempty(&data.recipient_name)),
+                    ("albumId", nonempty(&data.album_id)),
+                    ("baseUrl", nonempty(&data.base_url)),
                 ],
             );
             format!(
@@ -325,18 +336,6 @@ impl EmailService {
 
         wrap_layout("New media has been added to a shared album.", &content)
     }
-}
-
-fn is_supported_image_attachment(attachment: &EmailImageAttachment) -> bool {
-    let extension = Path::new(&attachment.path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    matches!(
-        extension.as_str(),
-        "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif"
-    )
 }
 
 fn build_mailer(
@@ -416,11 +415,37 @@ fn cid_image(cid: Option<&str>) -> String {
     .unwrap_or_default()
 }
 
-fn replace_template_tags(template: &str, variables: &[(&str, &str)]) -> String {
-    let mut result = template.to_string();
-    for (key, value) in variables {
-        result = result.replace(&format!("{{{key}}}"), value);
+fn nonempty(value: &str) -> Option<&str> {
+    (!value.is_empty()).then_some(value)
+}
+
+/// Match TS `/{(.*?)}/g`: one pass; missing/empty values leave `{key}` in place.
+fn replace_template_tags(template: &str, variables: &[(&str, Option<&str>)]) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        result.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            result.push('{');
+            rest = after;
+            continue;
+        };
+        let key = &after[..end];
+        let replacement = variables
+            .iter()
+            .find(|(name, value)| *name == key && value.is_some_and(|v| !v.is_empty()))
+            .and_then(|(_, value)| *value);
+        if let Some(value) = replacement {
+            result.push_str(value);
+        } else {
+            result.push('{');
+            result.push_str(key);
+            result.push('}');
+        }
+        rest = &after[end + 1..];
     }
+    result.push_str(rest);
     result
 }
 
@@ -468,8 +493,17 @@ mod tests {
     fn replace_template_tags_replaces_known_keys() {
         let rendered = replace_template_tags(
             "Hello {recipientName}, welcome to {albumName}",
-            &[("recipientName", "Jane"), ("albumName", "Trip")],
+            &[("recipientName", Some("Jane")), ("albumName", Some("Trip"))],
         );
         assert_eq!(rendered, "Hello Jane, welcome to Trip");
+    }
+
+    #[test]
+    fn replace_template_tags_keeps_empty_and_missing_keys() {
+        let rendered = replace_template_tags(
+            "Hey {recipientName}! {password}",
+            &[("recipientName", Some("Jane")), ("password", None)],
+        );
+        assert_eq!(rendered, "Hey Jane! {password}");
     }
 }

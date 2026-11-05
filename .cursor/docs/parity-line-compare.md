@@ -65,35 +65,35 @@
 | `repositories/person.repository.ts` | 人物列表按主键分组。找相似脸先未隐藏、再收藏、再距离，空距离在最后。统计是查看者自己的时间线照片，或查看者所在未删除共享相册里的照片，脸未删且可见。 |
 | `repositories/search.repository.ts` | 建议查询的列名加引号。旧版元数据结果在拍摄时间之后用资源 id 打破平局。智能搜索在向量距离之后用资源 id 升序。标签搜索用闭包，父标签能命中子标签，条件是数量大于等于。 |
 | `repositories/session.repository.ts` | 和用户表联查时，会话列都带表别名，避免 `id` 歧义。过期条件是空过期时间或晚于现在。 |
-| `repositories/sync.repository.ts` | 相册、人物、回忆、资源、EXIF 的选出列和同步服务里写的一致。其余实体的选出列还没读。 |
+| `repositories/sync.repository.ts` | 相册、人物、回忆、资源、EXIF、用户元数据、资源编辑的选出列和同步服务里写的一致。OCR upsert 坐标/分数是 `real`，按文本再解析成浮点以贴近 node-pg；人脸 v2 边界框是整数，`sourceType` 转 text；`deletedAt` 用毫秒和 `Z`。 |
 | `services/activity.service.ts` | 点赞会先按相册、用户、资源查找已有点赞，有则 duplicate。评论直接插入。搜索把相册级评论留下来。统计 SQL 和删除 SQL 还没读。 |
 | `services/album.service.ts` | 批量加入时，封面取请求顺序里第一张还不在相册中的照片。不能把别人加成 owner。最后一个 owner 不能被移出。封面资源必须已经在这个相册里。移除资源后重选封面的 SQL 还没读。 |
-| `services/asset-media.service.ts` | 缩略图 `size=original` 返回 400。网页能直接显示的全尺寸图仍跳到原图。共享链接取原图和缩略图时强制走编辑后的文件。播放和上传校验还没读。 |
+| `services/asset-media.service.ts` | 缩略图 `size=original` 返回 400。网页能直接显示的全尺寸图仍跳到原图。共享链接取原图和缩略图时强制走编辑后的文件。上传拒绝空文件与非资源扩展名；sidecar 存 `{uuid}.xmp`；`edited=false` 不接非编辑 fullsize；播放/下载支持 Range 206；缺失媒体统一 404 `Not Found`。`x-immich-checksum` 用 `fromChecksum`（28→base64 否则 hex）短路查重返回 duplicate；multipart 校验必填时间戳、visibility、UUID v4、duration。 |
 | `services/asset.service.ts` | 没有任何列变化时不执行 UPDATE。可见性改成 locked 会从所有相册拿掉。单条更新只在 EXIF 变了才排队写边车，批量更新总是排队。删堆栈时，主照片只要没被删就算剩余；新封面是最早的时间线成员。编辑拒绝顺序是：非图片、实况、全景、gif、svg、没有尺寸、裁剪不是第一步、裁剪越界。方向 5/6/7/8 会交换宽高。`run` 和自定义元数据键还没读。 |
 | `services/auth.service.ts` | 改密码不看 `invalidateSessions`，其他会话都会失效。OAuth 在用户还没有 oauthId 时按邮箱绑定；邮箱已经绑了别的 subject 则失败；没开自动注册或资料没有邮箱都有固定文案。角色声明出现时才改管理员。配额按 GiB 乘 1024 的三次方，0 是合法值。token 交换失败的分支还没读。 |
 | `services/database-backup.service.ts` | 恢复 SQL 之后如果迁移、没有管理员或结构检查失败，用恢复点重放并重建 public schema。集群转储只在正向恢复时切到 postgres 库。备份文件名和上传前缀读过。列表怎么排序还没逐行对比较器。 |
 | `services/download.service.ts` | 拆包在加入当前文件后再判断是否超过 4GiB。安卓动态照片在偏好关闭时不打进包。压缩包条目用原始文件名，第二个同名是 `名+1.扩展名`。 |
 | `services/duplicate.service.ts` | 还没有组 id 时，用搜索结果里第一次出现的那个。纬度和经度必须都只有一个值才写入。描述按换行和回车拆开再去重。可见性按锁定、归档、时间线、否则隐藏。机器学习关闭、没有嵌入、已堆叠或隐藏或锁定时的任务状态读过。列表 SQL 还没读。 |
-| `services/hls.service.ts` | 主播放列表带宽是码率乘 1.35 后取整，编码串包含 `mp4a.40.2`，帧率三位小数。高于源分辨率或不在配置里的变体丢掉。一个变体都没有则 404。ffmpeg 命令行还没读。 |
-| `services/library.service.ts` | 文件不在磁盘且已经离线则不动；已经离线且状态不是 deleted 才检查是否回到导入路径、是否仍被排除。mtime 不同才排队更新。回收站里的离线只改 `isOffline`，不清 `deletedAt`。文件监听的增删改事件还没读。 |
+| `services/hls.service.ts` | 主播放列表带宽是码率乘 1.35 后取整，编码串包含 `mp4a.40.2`，帧率三位小数。高于源分辨率或不在配置里的变体丢掉。一个变体都没有则 404。muxer `-r`=`packetCount*timeBase/totalDuration`；音频 `-ac 2`。HW 编码链其余参数还没逐条对。 |
+| `services/library.service.ts` | 文件不在磁盘且已经离线则不动；已经离线且状态不是 deleted 才检查是否回到导入路径、是否仍被排除。mtime 不同才排队更新。回收站里的离线只改 `isOffline`，不清 `deletedAt`。监听：add/change 走扩展/排除/隐藏过滤后入队 SyncFiles；unlink 不过滤直接 RemoveAsset；创建/改库不重挂 watcher。排除 glob：`*` 不跨 `/`、`**` 可跨、dot 文件可匹配；watch/crawl 大小写不敏感。 |
 | `services/maintenance.service.ts` | API 进程的维护状态固定是未进行。检测旧安装时，API 要管理员，维护进程不要登录。进入维护和维修动作还没读。 |
 | `services/map.service.ts` | 未要求包含归档时，标记查询不给查看者留一个空的参数位。反向地理编码返回几条、字段叫什么还没读。 |
-| `services/memory.service.ts` | 更新只接受是否保存、记忆时间和看过时间。这三个都没传时不发 UPDATE。往年回忆的序列结束在去年。挑哪些照片、空回忆怎么滤掉还没读。 |
-| `services/metadata.service.ts` | 没有 EXIF 日期时，用文件创建时间和 mtime 里更早的，birthtime 小于等于 0 不用，库存的 `fileModifiedAt` 不参与。GPS 正好是 0,0 不算有位置。HEIF 的 Rotation 映射到方向。探测过视频，或文件不可能是动画时，先删掉 Duration 再写探测时长。关键词优先 `TagsList`，空数组也不改用后面的层级主题或 Keywords；层级主题把 `|` 换成 `/`，数字原样转成字符串。没有关键词时清空这张照片上的标签关联，标签被锁定时不动。相机、镜头、评分 0 变空、位深、连拍 id 的取值顺序读过。动态照片怎么拆文件还没读。 |
-| `services/notification.service.ts` | 列表只要未删除的，按创建时间降序。未读是 `readAt` 为空。打开单条也只找未删除的，不跟随官方那条只会命中已删记录的条件。邮件正文还没读。 |
+| `services/memory.service.ts` | 更新只接受是否保存、记忆时间和看过时间。这三个都没传时不发 UPDATE。往年回忆的序列结束在去年。选片：时间线、有预览、未删、每年 20 张；搜索丢掉空回忆且排除隐藏人物；GET 不过滤隐藏人物；`hideAt` 为当天 23:59:59.999；清理先删非时间线关联再删 30 天未保存；某用户失败不跳过同天其他人。 |
+| `services/metadata.service.ts` | 没有 EXIF 日期时，用文件创建时间和 mtime 里更早的，birthtime 小于等于 0 不用，库存的 `fileModifiedAt` 不参与。GPS 正好是 0,0 不算有位置。HEIF 的 Rotation 映射到方向。探测过视频，或文件不可能是动画时，先删掉 Duration 再写探测时长。关键词优先 `TagsList`，空数组也不改用后面的层级主题或 Keywords；层级主题把 `|` 换成 `/`，数字原样转成字符串。没有关键词时清空这张照片上的标签关联，标签被锁定时不动。相机、镜头、评分 0 变空、位深、连拍 id 的取值顺序读过。动态照片：`MotionPhoto`/`MicroVideo` 按 JS 真值（数字 0 不算）；目录取 `ContainerDirectory` 或 `Directory`；尾部切片 position 为负则失败；短读零填充到 length；新建运动视频用调用方 UUID 当主键和路径；写盘后内联跑元数据再入队转码；提取失败只打日志不拖垮元数据任务；隐藏已有 timeline 运动视频不发 websocket；CID 配对不按 libraryId / deletedAt 过滤。 |
+| `services/notification.service.ts` | 列表只要未删除的，按创建时间降序。未读是 `readAt` 为空。打开单条也只找未删除的，不跟随官方那条只会命中已删记录的条件。邮件：空 externalDomain 回退 `https://my.immich.app`；自定义模板空值保留 `{key}`；相册缩略图恰好 1 个文件才附件；CID 为 `album-thumbnail`；欢迎信空密码不写 Password 行。 |
 | `services/ocr.service.ts` | 机器学习里 OCR 关闭则整批和单张都跳过。单张先看有没有预览文件，没有则失败，然后再看是不是隐藏。文字按顺序每 8 个数一组画框，搜索词用同一套分词。 |
 | `services/partner.service.ts` | 创建、更新、移除的错误文案读过。搜索会去掉已删除用户。时间线开关写哪一列还没读。 |
 | `services/person.service.ts` | 重分配会挪走这张照片上该人物的每一张未删脸；一张都没挪到就不换封面。合并时对方名字或生日和主人物不同就整个人跳过，主人物名字为空也算冲突。检测旧框宽或高为 0 时分母按 1。识别任务在关闭、找不到、非机器学习来源、没嵌入、已有人物时跳过或失败。非核心且未延期会再排队并跳过。已有人物组只改挂脸；没有组且是核心脸时新建组和个人、把这张脸设成封面并排队缩略图，然后再改挂。 |
 | `services/search.service.ts` | 建议接口读 `lensModel`、`includeNull`。城市建议不套相机条件，镜头列名带引号。探索城市按城市名排序取 12 个。锁定搜索只含本人并要提升权限。共享链接做旧版元数据搜索时必须带相册。旧版排序是拍摄时间再加资源 id，智能搜索是距离再加 id 升序。v3 每种运算符还没读。 |
 | `services/session.service.ts` | 创建接口没有会话令牌就拒绝。没有任何字段时更新返回 400。列表丢掉已过期会话，按更新时间再按创建时间降序。90 天清理和锁定的 SQL 还没读。 |
 | `services/system-config.service.ts` | 只有 `IMMICH_CONFIG_FILE` 非空才拒绝在网页里改配置。空字符串不当成配置文件，设置页里的开关可以点。返回给页面的配置会补上实时转码的编码和分辨率、OAuth 账号管理地址、任务并发里的 `notifications`。库存把某一段写成 null 时，用默认值补回，避免展开那一段时页面读不到字段。保存校验和日志环境变量那几条还没逐项读完。 |
-| `services/shared-link.service.ts` | 创建时 `showMetadata` 为 false 会强制关掉下载和 EXIF。更新不会因为这个字段再改下载开关。登录用库存明文和提交的密码比较。请求里没带 slug 时不清空已有短链。加入和移出资源的逐条结果还没读。 |
+| `services/shared-link.service.ts` | 创建时 `showMetadata` 为 false 会强制关掉下载和 EXIF。更新不会因为这个字段再改下载开关。登录用库存明文和提交的密码比较。请求里没带 slug 时不清空已有短链。加入：先 duplicate（含仍挂在链上的已删资源、同请求重复 id），再 no_permission（含本人 locked），再 success；移出只有 success / not_found。相册链一律 400。 |
 | `services/stack.service.ts` | 新封面必须已经在这个堆里。不能把主照片移出堆。详情上的张数在资源查询里算。搜索和批量删除还没读。 |
-| `services/sync.service.ts` | 相册 v1 从成员里找 owner 填 `ownerId`，描述空值变成空字符串。资源和 EXIF 的同步列、相册资源的收藏 CASE、伙伴资源收藏恒为 false、人物列、回忆列、回忆关联的 `memoriesId` 读过。用户元数据、OCR、编辑、人脸 v2 每一列还没读。 |
+| `services/sync.service.ts` | 相册 v1 从成员里找 owner 填 `ownerId`，描述空值变成空字符串。资源和 EXIF 的同步列、相册资源的收藏 CASE、伙伴资源收藏恒为 false、人物列、回忆列、回忆关联的 `memoriesId` 读过。用户元数据、OCR、编辑、人脸 v2 的选出列与删除载荷读过。 |
 | `services/tag.service.ts` | 创建前检查同名。重命名只换路径最后一段，空名字保留原值。请求里 `color` 为 null 才清空颜色，不传则保留。批量打标签的逐条结果还没读。 |
 | `services/timeline.service.ts` | 带人物时，照片可以是查看者自己的，也可以在查看者所属、未删除的共享相册里。堆叠格子上的数量是该堆里全部未删时间线照片，含封面。其他筛选还没读。 |
 | `services/transcoding.service.ts` | 策略 disabled、all、required、optimal、bitrate 和 remux 的选择读过。不带单位的码率按比特每秒，不乘 1000。编码参数还没读。 |
-| `services/trash.service.ts` | 空 id 列表恢复数量是 0。按 id 恢复要求删除权限。清空时数量大于 0 才排队彻底删除。恢复和清空的 SQL 条件还没读。 |
+| `services/trash.service.ts` | 空 id 列表恢复数量是 0。按 id 恢复、整库恢复、清空都要求 `asset.delete`（API Key）。清空时数量大于 0 才排队彻底删除。整库恢复/清空 WHERE 是 owner + status=trashed；按 id 恢复 WHERE 是 status=trashed + id 列表，返回 count 是请求长度。 |
 | `services/user.service.ts` | 保存偏好时只写入和默认值不同的字段，读出来再合并成完整对象。用户列表按创建时间降序。当前用户找不到是 400。改邮箱和头像上传还没读。 |
 | `services/view.service.ts` | 文件夹是原路径的目录段，只要时间线、未删除、创建时间不为空的照片。某一层的文件是该目录前缀且不是更深一层。 |
 | `services/workflow.service.ts` | 创建时步骤列表是空的。分享出去时，没写 `enabled` 表示开启，写了 false 表示关闭。未知插件方法和触发器对不上的错误文案读过。步骤真正怎么执行还没读。 |
@@ -461,10 +461,8 @@
 
 按文件读函数体，不要只核对有没有这个函数。建议顺序：
 
-1. `services/metadata.service.ts` 里动态照片怎么拆出内嵌视频
-2. `repositories/sync.repository.ts` 里用户元数据、OCR、编辑、人脸的选出列
-3. `services/shared-link.service.ts` 的加入资源和移出资源，每条成功、重复、无权限怎么返回
-4. `repositories/trash.repository.ts` 的恢复和清空条件
-5. `emails/` 里邀请、更新、欢迎信的变量
-6. 服务逻辑对过之后，再读对应的 `controllers/` 状态码
+1. `services/hls.service.ts` / `transcoding.service.ts` 的 HW 编码链（nvenc/vaapi/qsv）其余 ffmpeg 参数
+2. `emails/` Immich footer / preheader / plain-text 排版
+3. 服务逻辑对过之后，再读对应的 `controllers/` 状态码
+4. `utils/` 剩余纯逻辑（request/database helpers）与 middleware 未读分支
 

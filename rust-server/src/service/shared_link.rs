@@ -295,8 +295,16 @@ impl SharedLinkService {
             ));
         }
 
-        let existing = shared_links::list_asset_ids(&self.pool, &row.id, None).await?;
-        let existing_set: std::collections::HashSet<_> = existing.into_iter().collect();
+        // Live non-deleted assets (TS sharedLink.assets) plus junction rows for trashed
+        // assets that are still attached, so a re-add is duplicate instead of a PK conflict.
+        let mut existing_set: std::collections::HashSet<_> =
+            shared_links::list_asset_ids(&self.pool, &row.id, None)
+                .await?
+                .into_iter()
+                .collect();
+        for id in shared_links::list_linked_asset_ids(&self.pool, &row.id).await? {
+            existing_set.insert(id);
+        }
 
         let new_ids: Vec<Uuid> = dto
             .asset_ids
@@ -327,6 +335,8 @@ impl SharedLinkService {
                 });
                 continue;
             }
+            // Later copies of the same new id in one request are duplicates.
+            existing_set.insert(*asset_id);
             to_add.push(*asset_id);
             results.push(AssetIdsResponse {
                 asset_id: *asset_id,

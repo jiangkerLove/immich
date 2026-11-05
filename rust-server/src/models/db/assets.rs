@@ -100,22 +100,58 @@ pub async fn get_for_originals(
         return Ok(vec![]);
     }
 
-    sqlx::query_as::<_, AssetOriginalRow>(
+    // Match TS: only join edited fullsize when edited=true. Otherwise prefer originalPath
+    // over a non-edited RAW extract fullsize row.
+    if edited {
+        sqlx::query_as::<_, AssetOriginalRow>(
+            r#"
+                SELECT
+                    asset.id,
+                    asset."originalFileName" as original_file_name,
+                    asset."originalPath" as original_path,
+                    af.path as edited_path
+                FROM asset
+                LEFT JOIN asset_file af ON asset.id = af."assetId"
+                    AND af."isEdited" = true
+                    AND af.type = 'fullsize'
+                WHERE asset.id = ANY($1)
+            "#,
+        )
+        .bind(asset_ids)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, AssetOriginalRow>(
+            r#"
+                SELECT
+                    asset.id,
+                    asset."originalFileName" as original_file_name,
+                    asset."originalPath" as original_path,
+                    NULL::text as edited_path
+                FROM asset
+                WHERE asset.id = ANY($1)
+            "#,
+        )
+        .bind(asset_ids)
+        .fetch_all(pool)
+        .await
+    }
+}
+
+pub async fn list_asset_file_paths(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+    file_type: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
         r#"
-            SELECT
-                asset.id,
-                asset."originalFileName" as original_file_name,
-                asset."originalPath" as original_path,
-                af.path as edited_path
-            FROM asset
-            LEFT JOIN asset_file af ON asset.id = af."assetId"
-                AND af."isEdited" = $1
-                AND af.type = 'fullsize'
-            WHERE asset.id = ANY($2)
+            SELECT path
+            FROM asset_file
+            WHERE "assetId" = $1 AND type = $2
         "#,
     )
-    .bind(edited)
-    .bind(asset_ids)
+    .bind(asset_id)
+    .bind(file_type)
     .fetch_all(pool)
     .await
 }
@@ -245,6 +281,7 @@ pub async fn get_by_checksums(
 
 #[derive(Debug)]
 pub struct NewAsset<'a> {
+    pub id: Option<Uuid>,
     pub owner_id: Uuid,
     pub library_id: Option<Uuid>,
     pub asset_type: &'a str,
@@ -252,6 +289,7 @@ pub struct NewAsset<'a> {
     pub checksum: &'a [u8],
     pub file_created_at: DateTime<Utc>,
     pub file_modified_at: DateTime<Utc>,
+    pub local_date_time: Option<DateTime<Utc>>,
     pub is_favorite: bool,
     pub duration: Option<i32>,
     pub original_file_name: &'a str,
@@ -260,17 +298,22 @@ pub struct NewAsset<'a> {
 }
 
 pub async fn create_asset(pool: &Pool<Postgres>, asset: NewAsset<'_>) -> Result<Uuid, sqlx::Error> {
+    let local_date_time = asset.local_date_time.unwrap_or(asset.file_created_at);
     let id: Uuid = sqlx::query_scalar(
         r#"
             INSERT INTO asset (
-                "ownerId", "libraryId", type, "originalPath", checksum, "checksumAlgorithm",
+                id, "ownerId", "libraryId", type, "originalPath", checksum, "checksumAlgorithm",
                 "fileCreatedAt", "fileModifiedAt", "localDateTime",
                 "isFavorite", duration, "originalFileName", "livePhotoVideoId", visibility
             )
-            VALUES ($1, $2, $3, $4, $5, 'sha1', $6, $7, $6, $8, $9, $10, $11, $12::asset_visibility_enum)
+            VALUES (
+                COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, 'sha1', $7, $8, $9,
+                $10, $11, $12, $13, $14::asset_visibility_enum
+            )
             RETURNING id
         "#,
     )
+    .bind(asset.id)
     .bind(asset.owner_id)
     .bind(asset.library_id)
     .bind(asset.asset_type)
@@ -278,6 +321,7 @@ pub async fn create_asset(pool: &Pool<Postgres>, asset: NewAsset<'_>) -> Result<
     .bind(asset.checksum)
     .bind(asset.file_created_at)
     .bind(asset.file_modified_at)
+    .bind(local_date_time)
     .bind(asset.is_favorite)
     .bind(asset.duration)
     .bind(asset.original_file_name)
@@ -383,7 +427,12 @@ pub async fn update_quota_usage(
     delta: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        r#"UPDATE "user" SET "quotaUsageInBytes" = "quotaUsageInBytes" + $1 WHERE id = $2"#,
+        r#"
+            UPDATE "user"
+            SET "quotaUsageInBytes" = "quotaUsageInBytes" + $1,
+                "updatedAt" = NOW()
+            WHERE id = $2 AND "deletedAt" IS NULL
+        "#,
     )
     .bind(delta)
     .bind(owner_id)
@@ -588,6 +637,8 @@ pub async fn filter_asset_share_ids(
         return Ok(vec![]);
     }
 
+    // Owner branch matches TS checkOwnerAccess(..., hasElevatedPermission=false):
+    // locked owned assets are not shareable. deletedAt is not filtered for owners.
     sqlx::query_scalar(
         r#"
             SELECT DISTINCT id FROM (
@@ -595,6 +646,7 @@ pub async fn filter_asset_share_ids(
                 FROM asset
                 WHERE asset.id = ANY($1)
                   AND asset."ownerId" = $2
+                  AND asset.visibility <> 'locked'
                 UNION
                 SELECT asset.id
                 FROM partner
@@ -1048,6 +1100,21 @@ pub async fn get_basic_by_id(
     pool: &Pool<Postgres>,
     asset_id: &Uuid,
 ) -> Result<Option<AssetBasicRow>, sqlx::Error> {
+    get_basic_by_id_with_deleted(pool, asset_id, false).await
+}
+
+pub async fn get_basic_by_id_including_deleted(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+) -> Result<Option<AssetBasicRow>, sqlx::Error> {
+    get_basic_by_id_with_deleted(pool, asset_id, true).await
+}
+
+async fn get_basic_by_id_with_deleted(
+    pool: &Pool<Postgres>,
+    asset_id: &Uuid,
+    include_deleted: bool,
+) -> Result<Option<AssetBasicRow>, sqlx::Error> {
     sqlx::query_as::<_, AssetBasicRow>(
         r#"
             SELECT
@@ -1058,10 +1125,11 @@ pub async fn get_basic_by_id(
                 "originalPath" as original_path,
                 "livePhotoVideoId" as live_photo_video_id
             FROM asset
-            WHERE id = $1 AND "deletedAt" IS NULL
+            WHERE id = $1 AND ($2 OR "deletedAt" IS NULL)
         "#,
     )
     .bind(asset_id)
+    .bind(include_deleted)
     .fetch_optional(pool)
     .await
 }

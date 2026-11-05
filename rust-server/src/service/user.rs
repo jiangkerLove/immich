@@ -310,6 +310,7 @@ impl UserService {
             content_type,
             file_name: None,
             cache_control: Some("no-store".to_string()),
+            range: None,
         })
         .await
     }

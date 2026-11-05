@@ -1416,10 +1416,12 @@ impl SyncService {
         )
         .await?;
         for delete in deletes {
-            let mut data = delete.data.clone();
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("id".to_string(), json!(delete.audit_id));
-            }
+            // Match TS row order: id, assetId, deletedAt.
+            let data = json!({
+                "id": delete.audit_id,
+                "assetId": delete.data.get("assetId").cloned().unwrap_or(Value::Null),
+                "deletedAt": delete.data.get("deletedAt").cloned().unwrap_or(Value::Null),
+            });
             push_line(lines, delete_type, &data, &[&delete.audit_id], None);
         }
 

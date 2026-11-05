@@ -62,6 +62,26 @@ pub fn is_supported_media_path(path: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
+pub fn is_asset_path(path: &str) -> bool {
+    is_supported_media_path(path)
+}
+
+pub fn is_sidecar_path(path: &str) -> bool {
+    has_extension(path, SIDECAR_EXTENSIONS)
+}
+
+/// Match TS mimeTypes.assetType: image → IMAGE, video/mxf → VIDEO, else OTHER.
+pub fn asset_type_from_path(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    if IMAGE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        "IMAGE"
+    } else if VIDEO_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        "VIDEO"
+    } else {
+        "OTHER"
+    }
+}
+
 fn has_extension(path: &str, extensions: &[&str]) -> bool {
     let lower = path.to_ascii_lowercase();
     extensions

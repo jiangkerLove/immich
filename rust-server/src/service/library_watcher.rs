@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::models::db::library::{self, LibraryRow};
 use crate::service::job::JobService;
 use crate::utils::file_walk::is_hidden_path;
-use crate::utils::glob::path_matches_exclusion;
+use crate::utils::glob::{GlobMatchOptions, path_matches_exclusion_with};
 use crate::utils::mime_types::is_supported_media_path;
 use crate::utils::system_config::{get_merged, json_bool};
 
@@ -184,7 +184,8 @@ impl LibraryWatcherManager {
 
         tracing::info!(
             "Starting to watch library {} with import path(s) {:?}",
-            library.id, library.import_paths
+            library.id,
+            library.import_paths
         );
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -272,19 +273,11 @@ async fn handle_watch_event(context: &WatchContext, event: Event) {
             continue;
         };
 
-        if !is_supported_media_path(&path_str) {
-            continue;
-        }
-
-        if path_matches_exclusion(&path_str, &context.exclusion_patterns) {
-            continue;
-        }
-
-        if is_hidden_path(Path::new(&path_str)) {
-            continue;
-        }
-
+        // Match TS deletionHandler: every unlink is queued, with no extension /
+        // exclusion / hidden filter. Cancel a pending sync so remove cannot race
+        // with a deferred LibrarySyncFiles that would recreate the row.
         if is_remove {
+            cancel_pending_sync(context, &path_str).await;
             if let Err(err) = context
                 .jobs
                 .queue_library_remove_asset(&context.library_id, &[path_str])
@@ -299,7 +292,30 @@ async fn handle_watch_event(context: &WatchContext, event: Event) {
             continue;
         }
 
+        if !is_supported_media_path(&path_str) {
+            continue;
+        }
+
+        if path_matches_exclusion_with(
+            &path_str,
+            &context.exclusion_patterns,
+            GlobMatchOptions::WATCH,
+        ) {
+            continue;
+        }
+
+        if is_hidden_path(Path::new(&path_str)) {
+            continue;
+        }
+
         schedule_sync(context, path_str).await;
+    }
+}
+
+async fn cancel_pending_sync(context: &WatchContext, path: &str) {
+    let mut pending = context.debounce.lock().await;
+    if let Some(handle) = pending.remove(path) {
+        handle.abort();
     }
 }
 

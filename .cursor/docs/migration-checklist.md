@@ -370,3 +370,16 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 元数据关键词 | `TagsList` 即使是空数组也不回退到层级主题；没有关键词时清空照片上的标签 | 一张照片后来去掉关键词，相册标签页不再留着旧标签。空的 `TagsList` 不会再误用层级主题 |
 | 已改 | 系统设置可点 | 空的 `IMMICH_CONFIG_FILE` 不锁设置页；配置补上实时转码列表、账号管理地址和 `notifications` 并发 | 设置里的开关不再因为空环境变量整页禁掉。展开实时转码时不再因为缺编码和分辨率而报错 |
 | 已改 | 资产统计、边车、回收站原图、搜索范围、改密码、堆栈/标签权限、批量打标签、存储标签、OAuth 资料、API Key、反向地理编码、相册分享、认证状态 | 统计权限是 `asset.statistics`；边车任务只带资源 id；回收站仍可取原图/缩略图/视频；旧版统计按可见性收用户；智能搜索保留空白查询；改密码只更新密码；堆栈和标签错误带权限名；批量打标签只处理有权限的子集；创建用户时清洗存储标签；ID Token 无邮箱时用 userinfo；创建/轮换 API Key 带嵌套 `apiKey`；国家名用英文官方名；相册分享可带 assetIds；PIN 用户缺失时 401 文案为 `Unauthorized` | 已按官方对齐 |
+| 已改 | 动态照片拆视频 | 调用方 UUID 作主键和 `{id}-MP.mp4`；写盘后内联元数据再入队转码；提取失败只记日志；尾部切片 position 为负则失败；短读零填充；`MotionPhoto: 0` 不算；CID 配对忽略 libraryId/deletedAt；隐藏已有 timeline 运动视频不发 websocket；配额更新带 `updatedAt` | 路径 id 与行 id 一致；转码在 `asset_video` 写好之后；元数据任务不再因拆视频失败而 Failed |
+| 已改 | 同步 OCR / 人脸 v2 | OCR `real` 列按文本解析；人脸边界框 `i32`；`sourceType::text`；`deletedAt` 毫秒 + `Z`；OCR 删除字段顺序 id/assetId/deletedAt | 同步流不再因类型解码失败；时间戳贴近 `toISOString()` |
+| 已改 | 共享链接加入资源 | 本人 locked → `no_permission`；同请求重复 id / 仍挂在链上的已删资源 → `duplicate` | 与官方逐条结果一致 |
+| 已改 | 回收站清空 / 整库恢复 | API Key 需要 `asset.delete` | 与控制器权限一致 |
+| 已改 | MemoryCleanup SQL | `ma."assetId"` 不要二次加引号 | 清理任务不再因语法错误 Failed |
+| 已改 | 回忆 hideAt / 生成 | `23:59:59.999`；单用户失败继续其他人；GET 不过滤隐藏人物 | 与 Luxon / 官方 GET 一致 |
+| 已改 | 邮件链接与模板 | 空域名回退 `https://my.immich.app`；空标签保留 `{key}`；CID=`album-thumbnail`；恰好一个缩略图才附件 | 邀请/更新/欢迎/测试邮件链接可用 |
+| 已改 | 库文件监听 unlink | 不过滤扩展/排除/隐藏；取消待同步防重入；创建/改库不重挂 watcher | 删除被排除的文件也会硬删行 |
+| 已改 | 上传 / 播放 | 扩展名校验、空文件拒绝、sidecar `{uuid}.xmp`；`edited=false` 用原图；Range 206；缺失 404 `Not Found` | RAW 不再误成 OTHER；视频可 seek |
+| 已改 | `x-immich-checksum` 短路 | 头存在则 `fromChecksum` 查重，命中 200 duplicate，不读 body | 与 AssetUploadInterceptor 一致 |
+| 已改 | 上传 multipart 校验 | 必填时间戳；asset/sidecar 类型与空文件；visibility/UUID/duration | 非法字段返回 400 |
+| 已改 | library exclusion glob | picomatch：`*` 不跨 `/`、`**` 可跨、`dot:true` 匹配点文件；watch/crawl `nobrace` | watcher/crawl 排除与官方一致 |
+| 已改 | HLS muxer `-r` / 音频 | `packetCount*timeBase/totalDuration`；`-ac 2` | 与官方 ffmpeg 参数一致 |
