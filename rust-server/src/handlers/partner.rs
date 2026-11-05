@@ -23,17 +23,21 @@ pub async fn create_partner_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<PartnerCreateReq>,
-) -> Result<Json<PartnerResponse>, ErrorResp> {
-    Ok(Json(state.services.partner.create(&auth, &dto).await?))
+) -> Result<(axum::http::StatusCode, Json<PartnerResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.partner.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn create_partner_deprecated_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Path(id): Path<Uuid>,
-) -> Result<Json<PartnerResponse>, ErrorResp> {
-    Ok(Json(
-        state.services.partner.create_deprecated(&auth, &id).await?,
+) -> Result<(axum::http::StatusCode, Json<PartnerResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.partner.create_deprecated(&auth, &id).await?),
     ))
 }
 

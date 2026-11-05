@@ -1,4 +1,5 @@
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
 
@@ -14,9 +15,10 @@ pub async fn create_session_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<SessionCreateReq>,
-) -> Result<Json<SessionCreateResp>, ErrorResp> {
-    Ok(Json(
-        state.services.session.create(&auth, &dto).await?,
+) -> Result<(StatusCode, Json<SessionCreateResp>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.services.session.create(&auth, &dto).await?),
     ))
 }
 
@@ -42,21 +44,24 @@ pub async fn delete_session_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Path(id): Path<Uuid>,
-) -> Result<(), ErrorResp> {
-    state.services.session.delete(&auth, &id).await
+) -> Result<StatusCode, ErrorResp> {
+    state.services.session.delete(&auth, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn delete_all_sessions_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
-) -> Result<(), ErrorResp> {
-    state.services.session.delete_all(&auth).await
+) -> Result<StatusCode, ErrorResp> {
+    state.services.session.delete_all(&auth).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn lock_session_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Path(id): Path<Uuid>,
-) -> Result<(), ErrorResp> {
-    state.services.session.lock(&auth, &id).await
+) -> Result<StatusCode, ErrorResp> {
+    state.services.session.lock(&auth, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

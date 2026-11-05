@@ -78,13 +78,15 @@ impl ApiKeyService {
     }
 
     pub async fn get_me(&self, auth: &AuthDto) -> Result<ApiKeyResponse, ErrorResp> {
-        if let Some(api_key) = &auth.api_key {
-            self.get(auth, &Uuid::parse_str(&api_key.id).unwrap()).await
-        } else {
-            Err(ErrorResp::Forbidden(
+        // Match `@Authenticated({ permission: false })`: no apiKey.read required.
+        let Some(api_key) = &auth.api_key else {
+            return Err(ErrorResp::Forbidden(
                 "Not authenticated with an API Key".to_string(),
-            ))
-        }
+            ));
+        };
+        let id = Uuid::parse_str(&api_key.id)
+            .map_err(|_| ErrorResp::BadRequest("API Key not found".to_string()))?;
+        self.get_owned(auth, &id).await
     }
 
     pub async fn create(

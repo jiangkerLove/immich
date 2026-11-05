@@ -23,8 +23,11 @@ pub async fn create_stack_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<StackCreateReq>,
-) -> Result<Json<StackResponse>, ErrorResp> {
-    Ok(Json(state.services.stack.create(&auth, &dto).await?))
+) -> Result<(axum::http::StatusCode, Json<StackResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.stack.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn delete_stacks_handler(

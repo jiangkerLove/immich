@@ -32,8 +32,11 @@ pub async fn create_album_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<CreateAlbumReq>,
-) -> Result<Json<AlbumResponse>, ErrorResp> {
-    Ok(Json(state.services.album.create(&auth, &dto).await?))
+) -> Result<(StatusCode, Json<AlbumResponse>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.services.album.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn get_album_handler(

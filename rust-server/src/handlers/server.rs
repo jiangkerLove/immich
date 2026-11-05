@@ -41,8 +41,9 @@ pub async fn config_handler(
 
 pub async fn about_handler(
     State(state): State<AppState>,
+    Extension(auth): Extension<AuthDto>,
 ) -> Result<ServerAboutResponse, ErrorResp> {
-    state.services.server.get_about().await
+    state.services.server.get_about(&auth).await
 }
 
 pub async fn storage_handler(
@@ -83,8 +84,9 @@ pub async fn custom_css_handler(
 
 pub async fn apk_links_handler(
     State(state): State<AppState>,
-) -> Json<crate::service::server::ServerApkLinksResponse> {
-    Json(state.services.server.get_apk_links())
+    Extension(auth): Extension<AuthDto>,
+) -> Result<Json<crate::service::server::ServerApkLinksResponse>, ErrorResp> {
+    Ok(Json(state.services.server.get_apk_links(&auth)?))
 }
 
 pub async fn get_server_license_handler(

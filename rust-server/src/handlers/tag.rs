@@ -1,4 +1,5 @@
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
@@ -30,8 +31,11 @@ pub async fn create_tag_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<TagCreateReq>,
-) -> Result<Json<TagResponse>, ErrorResp> {
-    Ok(Json(state.services.tag.create(&auth, &dto).await?))
+) -> Result<(StatusCode, Json<TagResponse>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.services.tag.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn update_tag_handler(
@@ -47,8 +51,9 @@ pub async fn delete_tag_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Path(id): Path<Uuid>,
-) -> Result<(), ErrorResp> {
-    state.services.tag.delete(&auth, &id).await
+) -> Result<StatusCode, ErrorResp> {
+    state.services.tag.delete(&auth, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn upsert_tags_handler(

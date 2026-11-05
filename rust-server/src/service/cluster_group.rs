@@ -123,7 +123,7 @@ impl ClusterGroupService {
             .await
             .map_err(ErrorResp::from)?
         {
-            return Err(ErrorResp::NotFound("User not found".to_string()));
+            return Err(ErrorResp::BadRequest("User not found".to_string()));
         }
 
         let result = cluster_group::create_request(&self.pool, cluster_group_id, user_id)
@@ -173,7 +173,7 @@ impl ClusterGroupService {
         let request = cluster_group::get_request(&self.pool, request_id)
             .await
             .map_err(ErrorResp::from)?
-            .ok_or_else(|| ErrorResp::NotFound("Request not found".to_string()))?;
+            .ok_or_else(|| ErrorResp::BadRequest("Request not found".to_string()))?;
 
         person::reassign_cluster(&self.pool, &auth.user.id, &request.cluster_group_id)
             .await

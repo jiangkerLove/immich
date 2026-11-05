@@ -43,8 +43,11 @@ pub async fn create_shared_link_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<SharedLinkCreateReq>,
-) -> Result<Json<SharedLinkResponse>, ErrorResp> {
-    Ok(Json(state.services.shared_link.create(&auth, &dto).await?))
+) -> Result<(axum::http::StatusCode, Json<SharedLinkResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.shared_link.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn update_shared_link_handler(

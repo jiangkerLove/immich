@@ -248,6 +248,7 @@ impl SessionService {
     }
 
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
+        require_permission(auth, Permission::SessionDelete)?;
         require_permission(auth, Permission::AuthDeviceDelete)?;
         self.ensure_session_owner(auth, id).await?;
         sqlx::query(r#"DELETE FROM session WHERE id = $1"#)

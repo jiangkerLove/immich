@@ -217,6 +217,7 @@ impl PersonService {
         id: &Uuid,
     ) -> Result<PersonStatisticsResponse, ErrorResp> {
         require_permission(auth, Permission::PersonStatistics)?;
+        require_permission(auth, Permission::PersonRead)?;
         self.require_person_owner(auth, &[*id]).await?;
         let stats = person::get_statistics(&self.pool, &auth.user.id, id).await?;
         Ok(PersonStatisticsResponse {
@@ -373,6 +374,7 @@ impl PersonService {
     ) -> Result<Vec<PersonResponse>, ErrorResp> {
         require_permission(auth, Permission::PersonUpdate)?;
         require_permission(auth, Permission::PersonReassign)?;
+        require_permission(auth, Permission::PersonCreate)?;
         self.require_person_owner(auth, &[*target_id]).await?;
 
         let target_needs_feature = person::get_face_asset_id(&self.pool, &auth.user.id, target_id)
@@ -629,6 +631,7 @@ impl PersonService {
     ) -> Result<PersonResponse, ErrorResp> {
         require_permission(auth, Permission::FaceUpdate)?;
         require_permission(auth, Permission::PersonUpdate)?;
+        require_permission(auth, Permission::PersonCreate)?;
         self.require_person_owner(auth, &[*person_id]).await?;
         if !face::owner_owns_face(&self.pool, &auth.user.id, face_id).await? {
             return Err(ErrorResp::BadRequest(

@@ -17,8 +17,11 @@ pub async fn create_workflow_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<WorkflowCreateReq>,
-) -> Result<Json<WorkflowResponse>, ErrorResp> {
-    Ok(Json(state.services.workflow.create(&auth, &dto).await?))
+) -> Result<(axum::http::StatusCode, Json<WorkflowResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.workflow.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn search_workflows_handler(

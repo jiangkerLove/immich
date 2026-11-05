@@ -461,8 +461,8 @@
 
 按文件读函数体，不要只核对有没有这个函数。建议顺序：
 
-1. `utils/media.ts` 剩余配置分支：`twoPass` / `temporalAQ` / `cqMode=icq` / VP9 HW flags；离线转码 `gopSize=0→256`、QSV 默认 bf/refs
-2. 服务逻辑对过之后，再读对应的 `controllers/` 状态码与权限注解
-3. `utils/` 剩余纯逻辑（request/database helpers）与 middleware 未读分支
+1. 软件 `twoPass` 真正跑 ffmpeg `-pass 1/2`（码率参数已对齐，双进程与 logfile 清理未做）；HLS 路径读入 `cqMode`/`temporalAQ`/`twoPass`/`bframes`/`refs`
+2. 其余 admin 路由具名权限（queue / job / backup / integrity / admin notifications）与更多 POST 201（user-admin、profile-image、download/info、auth login/sign-up）
+3. `utils/` 剩余纯逻辑与 middleware 未读分支
 4. `emails/license.email.tsx`（FutoLayout，若启用许可证邮件再对）
 

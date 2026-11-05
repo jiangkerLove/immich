@@ -10,7 +10,8 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::job::JobService;
 use crate::utils::fs_access::has_read_access;
-use crate::utils::permission::require_admin;
+use crate::models::db::auth_permission::Permission;
+use crate::utils::permission::{require_admin, require_admin_all, require_permission};
 
 const DEFAULT_EXCLUSIONS: &[&str] = &[
     "**/@eaDir/**",
@@ -101,12 +102,14 @@ impl LibraryService {
 
     pub async fn get_all(&self, auth: &AuthDto) -> Result<Vec<LibraryResponse>, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryRead)?;
         let rows = library::list_all(&self.pool).await?;
         Ok(rows.into_iter().map(map_library).collect())
     }
 
     pub async fn get(&self, auth: &AuthDto, id: &Uuid) -> Result<LibraryResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryRead)?;
         self.find_or_fail(id).await.map(map_library)
     }
 
@@ -116,6 +119,7 @@ impl LibraryService {
         dto: &CreateLibraryReq,
     ) -> Result<LibraryResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryCreate)?;
         let name = dto.name.as_deref().unwrap_or("New External Library");
         let import_paths = dto.import_paths.clone().unwrap_or_default();
         let exclusion_patterns = dto
@@ -143,6 +147,7 @@ impl LibraryService {
         dto: &UpdateLibraryReq,
     ) -> Result<LibraryResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryUpdate)?;
         self.find_or_fail(id).await?;
 
         if let Some(import_paths) = &dto.import_paths {
@@ -171,6 +176,7 @@ impl LibraryService {
 
     pub async fn delete(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryDelete)?;
         self.find_or_fail(id).await?;
         crate::service::library_watcher::request_unwatch(*id);
         library::soft_delete(&self.pool, id).await?;
@@ -182,7 +188,8 @@ impl LibraryService {
         auth: &AuthDto,
         dto: &ValidateLibraryReq,
     ) -> Result<ValidateLibraryResponse, ErrorResp> {
-        require_admin(auth)?;
+        // Match `@Authenticated({ admin: true })` → Permission.All for API keys.
+        require_admin_all(auth)?;
         let import_paths = self
             .validate_paths(dto.import_paths.as_deref().unwrap_or(&[]))
             .await?;
@@ -195,6 +202,7 @@ impl LibraryService {
         id: &Uuid,
     ) -> Result<LibraryStatsResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryStatistics)?;
         self.find_or_fail(id).await?;
 
         let stats =
@@ -216,6 +224,7 @@ impl LibraryService {
 
     pub async fn queue_scan(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::LibraryUpdate)?;
         self.find_or_fail(id).await?;
         self.jobs.queue_library_scan(id).await
     }

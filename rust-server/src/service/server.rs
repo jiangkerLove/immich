@@ -380,7 +380,14 @@ impl ServerService {
         })
     }
 
-    pub async fn get_about(&self) -> Result<ServerAboutResponse, ErrorResp> {
+    pub async fn get_about(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<ServerAboutResponse, ErrorResp> {
+        crate::utils::permission::require_permission(
+            auth,
+            crate::models::db::auth_permission::Permission::ServerAbout,
+        )?;
         let version = format!("v{SERVER_VERSION}");
         let version_url = format!("https://github.com/immich-app/immich/releases/tag/{version}");
 
@@ -461,9 +468,11 @@ impl ServerService {
         &self,
         auth: &crate::models::dto::auth::AuthDto,
     ) -> Result<ServerStatsResponse, ErrorResp> {
-        if !auth.user.is_admin {
-            return Err(ErrorResp::Forbidden("Forbidden".to_string()));
-        }
+        crate::utils::permission::require_admin(auth)?;
+        crate::utils::permission::require_permission(
+            auth,
+            crate::models::db::auth_permission::Permission::ServerStatistics,
+        )?;
 
         let rows = crate::models::db::users::get_user_stats(&self.pool).await?;
         let mut stats = ServerStatsResponse {
@@ -496,15 +505,22 @@ impl ServerService {
         Ok(stats)
     }
 
-    pub fn get_apk_links(&self) -> ServerApkLinksResponse {
+    pub fn get_apk_links(
+        &self,
+        auth: &crate::models::dto::auth::AuthDto,
+    ) -> Result<ServerApkLinksResponse, ErrorResp> {
+        crate::utils::permission::require_permission(
+            auth,
+            crate::models::db::auth_permission::Permission::ServerApkLinks,
+        )?;
         let base_url =
             format!("https://github.com/immich-app/immich/releases/download/v{SERVER_VERSION}");
-        ServerApkLinksResponse {
+        Ok(ServerApkLinksResponse {
             arm64v8a: format!("{base_url}/app-arm64-v8a-release.apk"),
             armeabiv7a: format!("{base_url}/app-armeabi-v7a-release.apk"),
             universal: format!("{base_url}/app-release.apk"),
             x86_64: format!("{base_url}/app-x86_64-release.apk"),
-        }
+        })
     }
 
     pub async fn get_license(

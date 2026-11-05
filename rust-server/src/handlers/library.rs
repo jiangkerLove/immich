@@ -23,8 +23,11 @@ pub async fn create_library_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<CreateLibraryReq>,
-) -> Result<Json<LibraryResponse>, ErrorResp> {
-    Ok(Json(state.services.library.create(&auth, &dto).await?))
+) -> Result<(axum::http::StatusCode, Json<LibraryResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.library.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn get_library_handler(

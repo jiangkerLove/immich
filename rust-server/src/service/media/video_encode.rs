@@ -58,6 +58,8 @@ struct FfmpegConfig {
     accel_decode: bool,
     preferred_hw_device: String,
     two_pass: bool,
+    cq_mode: String,
+    temporal_aq: bool,
 }
 
 impl Default for FfmpegConfig {
@@ -82,6 +84,8 @@ impl Default for FfmpegConfig {
             accel_decode: true,
             preferred_hw_device: "auto".into(),
             two_pass: false,
+            cq_mode: "auto".into(),
+            temporal_aq: false,
         }
     }
 }
@@ -329,6 +333,11 @@ impl VideoEncodeService {
             .get("twoPass")
             .and_then(|v| v.as_bool())
             .unwrap_or(config.two_pass);
+        config.cq_mode = read_string(&ffmpeg, "cqMode", &config.cq_mode);
+        config.temporal_aq = ffmpeg
+            .get("temporalAQ")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(config.temporal_aq);
 
         Ok(config)
     }
@@ -500,17 +509,22 @@ fn build_ffmpeg_args(
         "-y".into(),
     ];
 
+    let hw_config = VideoHwConfig {
+        accel: &config.accel,
+        accel_decode: config.accel_decode,
+        preferred_hw_device: &config.preferred_hw_device,
+        tonemap: &config.tonemap,
+        target_video_codec: &config.target_video_codec,
+        preset: &config.preset,
+        crf: config.crf,
+        max_bitrate: &config.max_bitrate,
+        cq_mode: &config.cq_mode,
+        two_pass: config.two_pass,
+        temporal_aq: config.temporal_aq,
+        bframes: config.bframes,
+    };
+
     if use_hw {
-        let hw_config = VideoHwConfig {
-            accel: &config.accel,
-            accel_decode: config.accel_decode,
-            preferred_hw_device: &config.preferred_hw_device,
-            tonemap: &config.tonemap,
-            target_video_codec: &config.target_video_codec,
-            preset: &config.preset,
-            crf: config.crf,
-            max_bitrate: &config.max_bitrate,
-        };
         append_hw_input_options(&mut args, &hw_config, interfaces)?;
     }
 
@@ -531,17 +545,49 @@ fn build_ffmpeg_args(
         args.push(format!("0:{audio_index}"));
     }
 
-    if config.bframes > -1 {
+    // QSV defaults: bframes < 0 → 7, refs <= 0 → 5.
+    let mut bframes = config.bframes;
+    let mut refs = config.refs as i32;
+    if use_hw && config.accel == "qsv" {
+        if bframes < 0 {
+            bframes = 7;
+        }
+        if refs <= 0 {
+            refs = 5;
+        }
+    }
+    // NVENC: suppress -refs when 0 < bframes < 3 and refs < 3.
+    if use_hw
+        && config.accel == "nvenc"
+        && bframes > 0
+        && bframes < 3
+        && refs < 3
+    {
+        refs = 0;
+    }
+
+    if bframes > -1 {
         args.push("-bf".into());
-        args.push(config.bframes.to_string());
+        args.push(bframes.to_string());
     }
-    if config.refs > 0 {
+    if refs > 0 {
         args.push("-refs".into());
-        args.push(config.refs.to_string());
+        args.push(refs.to_string());
     }
-    if config.gop_size > 0 {
+    // BaseHWConfig.getGopSize: gopSize <= 0 → 256. Software keeps 0 (omit -g).
+    let gop = if use_hw && config.gop_size == 0 {
+        256
+    } else {
+        config.gop_size
+    };
+    if gop > 0 {
         args.push("-g".into());
-        args.push(config.gop_size.to_string());
+        args.push(gop.to_string());
+    }
+
+    if use_hw && config.accel == "qsv" && config.target_video_codec.eq_ignore_ascii_case("vp9")
+    {
+        args.extend(["-low_power".into(), "1".into()]);
     }
 
     if matches!(
@@ -549,20 +595,8 @@ fn build_ffmpeg_args(
         TranscodeTarget::All | TranscodeTarget::Video
     ) {
         if use_hw {
-            let hw_config = VideoHwConfig {
-                accel: &config.accel,
-                accel_decode: config.accel_decode,
-                preferred_hw_device: &config.preferred_hw_device,
-                tonemap: &config.tonemap,
-                target_video_codec: &config.target_video_codec,
-                preset: &config.preset,
-                crf: config.crf,
-                max_bitrate: &config.max_bitrate,
-            };
             append_hw_rate_options(&mut args, &hw_config);
-            if config.accel == "rkmpp" || config.accel == "nvenc" {
-                args.extend(["-forced-idr".into(), "1".into()]);
-            }
+            // Offline tune does not set strictGop — do not emit -forced-idr.
             if let Some(filter) = build_hw_video_filter(
                 &hw_config,
                 interfaces,
@@ -581,17 +615,50 @@ fn build_ffmpeg_args(
             args.push(config.preset.clone());
 
             let max_bitrate = parse_bitrate_to_bps(&config.max_bitrate);
-            if max_bitrate > 0 {
+            let quality_flag = if config.cq_mode.eq_ignore_ascii_case("cqp")
+                && !config.target_video_codec.eq_ignore_ascii_case("av1")
+            {
+                "-q:v"
+            } else {
+                "-crf"
+            };
+            let two_pass_sw = config.two_pass
+                && (max_bitrate > 0
+                    || config.target_video_codec.eq_ignore_ascii_case("vp9")
+                    || config.target_video_codec.eq_ignore_ascii_case("av1"));
+            if two_pass_sw
+                && max_bitrate > 0
+                && !config.target_video_codec.eq_ignore_ascii_case("av1")
+            {
+                // Software two-pass bitrate distribution (actual -pass 1/2 still TODO).
+                let unit = bitrate_unit(&config.max_bitrate);
+                let max_v = max_bitrate / if unit == "M" { 1_000_000 } else { 1_000 };
+                let target = ((max_v as f64) / 1.45).ceil() as i64;
+                let min = target as f64 / 2.0;
+                let min = if min.fract() == 0.0 {
+                    format!("{}", min as i64)
+                } else {
+                    format!("{min}")
+                };
+                args.extend([
+                    "-b:v".into(),
+                    format!("{target}{unit}"),
+                    "-minrate".into(),
+                    format!("{min}{unit}"),
+                    "-maxrate".into(),
+                    format!("{max_v}{unit}"),
+                ]);
+            } else if max_bitrate > 0 {
                 let unit = bitrate_unit(&config.max_bitrate);
                 let max_k = max_bitrate / if unit == "M" { 1_000_000 } else { 1_000 };
-                args.push("-crf".into());
+                args.push(quality_flag.into());
                 args.push(config.crf.to_string());
                 args.push("-maxrate".into());
                 args.push(format!("{max_k}{unit}"));
                 args.push("-bufsize".into());
                 args.push(format!("{}{}", max_k * 2, unit));
             } else {
-                args.push("-crf".into());
+                args.push(quality_flag.into());
                 args.push(config.crf.to_string());
             }
 

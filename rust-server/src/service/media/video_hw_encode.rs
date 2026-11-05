@@ -16,6 +16,10 @@ pub struct VideoHwConfig<'a> {
     pub preset: &'a str,
     pub crf: u32,
     pub max_bitrate: &'a str,
+    pub cq_mode: &'a str,
+    pub two_pass: bool,
+    pub temporal_aq: bool,
+    pub bframes: i32,
 }
 
 pub fn hw_video_encoder(accel: &str, codec: &str) -> Option<&'static str> {
@@ -175,6 +179,7 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
     let max_bps = parse_bitrate_to_bps(config.max_bitrate);
     let max_k = max_bps / 1_000;
     let target_k = ((max_k as f64) / 1.45).ceil() as i64;
+    let is_vp9 = config.target_video_codec.eq_ignore_ascii_case("vp9");
 
     match config.accel {
         "nvenc" => {
@@ -188,7 +193,29 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
                 "-i_qfactor".into(),
                 "0.75".into(),
             ]);
-            if max_k > 0 {
+            if config.bframes > 0 {
+                args.extend([
+                    "-b_ref_mode".into(),
+                    "middle".into(),
+                    "-b_qfactor".into(),
+                    "1.1".into(),
+                ]);
+            }
+            if config.temporal_aq {
+                args.extend(["-temporal-aq".into(), "1".into()]);
+            }
+            if max_k > 0 && config.two_pass {
+                args.extend([
+                    "-b:v".into(),
+                    format!("{target_k}k"),
+                    "-maxrate".into(),
+                    format!("{max_k}k"),
+                    "-bufsize".into(),
+                    format!("{target_k}k"),
+                    "-multipass".into(),
+                    "2".into(),
+                ]);
+            } else if max_k > 0 {
                 args.extend([
                     "-cq:v".into(),
                     config.crf.to_string(),
@@ -233,6 +260,12 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
             ]);
         }
         "vaapi" => {
+            if is_vp9 {
+                args.extend([
+                    "-bsf:v".into(),
+                    "vp9_raw_reorder,vp9_superframe".into(),
+                ]);
+            }
             if let Some(level) = qsv_vaapi_preset(config.preset) {
                 args.extend(["-compression_level".into(), level]);
             }
@@ -253,7 +286,7 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
                     "-rc_mode".into(),
                     "3".into(),
                 ]);
-            } else {
+            } else if vaapi_use_cqp(config.cq_mode, is_vp9) {
                 args.extend([
                     "-qp:v".into(),
                     config.crf.to_string(),
@@ -262,17 +295,31 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
                     "-rc_mode".into(),
                     "1".into(),
                 ]);
+            } else {
+                // cqMode=icq
+                args.extend([
+                    "-global_quality:v".into(),
+                    config.crf.to_string(),
+                    "-rc_mode".into(),
+                    "4".into(),
+                ]);
             }
         }
         "qsv" => {
             if let Some(level) = qsv_vaapi_preset(config.preset) {
                 args.extend(["-preset".into(), level]);
             }
-            args.extend(["-global_quality:v".into(), config.crf.to_string()]);
+            let use_cqp = qsv_use_cqp(config.cq_mode, is_vp9);
+            if use_cqp {
+                args.extend(["-q:v".into(), config.crf.to_string()]);
+            } else {
+                args.extend(["-global_quality:v".into(), config.crf.to_string()]);
+            }
             if max_k > 0 {
+                if !use_cqp {
+                    args.extend(["-b:v".into(), format!("{target_k}k")]);
+                }
                 args.extend([
-                    "-b:v".into(),
-                    format!("{target_k}k"),
                     "-maxrate".into(),
                     format!("{max_k}k"),
                     "-bufsize".into(),
@@ -282,6 +329,14 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
         }
         _ => {}
     }
+}
+
+fn qsv_use_cqp(cq_mode: &str, is_vp9: bool) -> bool {
+    cq_mode.eq_ignore_ascii_case("cqp") || is_vp9
+}
+
+fn vaapi_use_cqp(cq_mode: &str, is_vp9: bool) -> bool {
+    !cq_mode.eq_ignore_ascii_case("icq") || is_vp9
 }
 
 fn build_nvenc_vf(
@@ -563,6 +618,10 @@ mod tests {
             preset: "fast",
             crf: 23,
             max_bitrate: "5000k",
+            cq_mode: "auto",
+            two_pass: false,
+            temporal_aq: false,
+            bframes: -1,
         }
     }
 

@@ -26,8 +26,11 @@ pub async fn create_person_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<PersonCreateReq>,
-) -> Result<Json<PersonResponse>, ErrorResp> {
-    Ok(Json(state.services.person.create(&auth, &dto).await?))
+) -> Result<(axum::http::StatusCode, Json<PersonResponse>), ErrorResp> {
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(state.services.person.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn update_people_handler(

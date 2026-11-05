@@ -385,3 +385,7 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | HLS muxer `-r` / 音频 | `packetCount*timeBase/totalDuration`；`-ac 2` | 与官方 ffmpeg 参数一致 |
 | 已改 | HLS / 离线 HW 编码 | 输入选项在 `-i` 前；NVENC `-cq/-bufsize=target/p1-p7/-qmin/-rc-lookahead`；VAAPI `-b:v/-rc_mode 3/-compression_level/-idr_interval`；QSV `-global_quality/-b:v/-bf 7/-refs 5`；SW tonemap→upload；scale `-2`/`-1` | 与 `utils/media.ts` HW 类一致 |
 | 已改 | 邮件 footer / preheader / 纯文本 | 商店徽章 + AGPL；隐藏 Preview；自定义模板作 preview；纯文本从整页 HTML 生成 | 与 ImmichLayout / react-email 一致 |
+| 已改 | API Key 权限 | 管理员 API Key 也要具名权限；session 不查具名权限 | 与 AuthService.authenticate 一致 |
+| 已改 | 离线 HW 转码默认 | GOP 0→256；QSV bf/refs 7/5；NVENC refs 抑制；cqMode/temporalAQ/twoPass multipass；VP9 low_power/bsf | 与 media.ts HW 类一致 |
+| 已改 | HTTP 状态码 | 多类 POST→201；tag/apiKey/session DELETE/lock→204 | 对齐 Nest 默认 |
+| 已改 | server about/apk/statistics、library、person reassign、apiKey/me、cluster 400 | 具名权限与 findOrFail→400 | 对齐控制器/服务 |
