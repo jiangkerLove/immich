@@ -81,7 +81,8 @@ pub async fn upload_database_backup_handler(
         .upload_backup(&auth, &original_name, file_bytes)
         .await?;
 
-    Ok(StatusCode::NO_CONTENT)
+    // Nest @Post() without @HttpCode → 201.
+    Ok(StatusCode::CREATED)
 }
 
 pub async fn start_database_restore_handler(

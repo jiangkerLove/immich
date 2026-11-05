@@ -13,7 +13,8 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::file_response::{FileResponse, file_response};
-use crate::utils::permission::require_admin;
+use crate::models::db::auth_permission::Permission;
+use crate::utils::permission::{require_admin, require_permission};
 
 pub const INTEGRITY_TYPE_UNTRACKED: &str = "untracked_file";
 pub const INTEGRITY_TYPE_MISSING: &str = "missing_file";
@@ -71,6 +72,7 @@ impl IntegrityService {
         auth: &AuthDto,
     ) -> Result<IntegrityReportSummaryResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::Maintenance)?;
         let rows = integrity::get_summary(&self.pool)
             .await
             .map_err(ErrorResp::from)?;
@@ -95,6 +97,7 @@ impl IntegrityService {
         limit: Option<i64>,
     ) -> Result<IntegrityReportResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::Maintenance)?;
         let report_type = parse_report_type(report_type)?;
         let limit = limit.unwrap_or(100).clamp(1, 1000);
 
@@ -128,6 +131,7 @@ impl IntegrityService {
         id: &Uuid,
     ) -> Result<Response<Body>, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::Maintenance)?;
         let row = integrity::get_by_id(&self.pool, id)
             .await
             .map_err(|_| ErrorResp::BadRequest("Integrity report not found".to_string()))?;
@@ -150,6 +154,7 @@ impl IntegrityService {
 
     pub async fn delete_report(&self, auth: &AuthDto, id: &Uuid) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::Maintenance)?;
         let row = integrity::get_by_id(&self.pool, id)
             .await
             .map_err(|_| ErrorResp::BadRequest("Integrity report not found".to_string()))?;
@@ -188,6 +193,7 @@ impl IntegrityService {
         report_type: &str,
     ) -> Result<Response<Body>, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::Maintenance)?;
         let report_type = parse_report_type(report_type)?;
         let rows = integrity::stream_report_rows(&self.pool, report_type)
             .await

@@ -143,7 +143,7 @@ pub async fn create_profile_image_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     mut multipart: Multipart,
-) -> Result<Json<CreateProfileImageResponse>, ErrorResp> {
+) -> Result<(StatusCode, Json<CreateProfileImageResponse>), ErrorResp> {
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut original_name = String::from("profile.jpg");
 
@@ -166,12 +166,15 @@ pub async fn create_profile_image_handler(
 
     let file_bytes =
         file_bytes.ok_or_else(|| ErrorResp::BadRequest("file is required".to_string()))?;
-    Ok(Json(
-        state
-            .services
-            .user
-            .create_profile_image(&auth, file_bytes, &original_name)
-            .await?,
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .services
+                .user
+                .create_profile_image(&auth, file_bytes, &original_name)
+                .await?,
+        ),
     ))
 }
 

@@ -85,13 +85,16 @@ pub async fn admin_create_notification_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<NotificationCreateReq>,
-) -> Result<Json<NotificationResponse>, ErrorResp> {
-    Ok(Json(
-        state
-            .services
-            .notification
-            .admin_create(&auth, &dto)
-            .await?,
+) -> Result<(StatusCode, Json<NotificationResponse>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .services
+                .notification
+                .admin_create(&auth, &dto)
+                .await?,
+        ),
     ))
 }
 

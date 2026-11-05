@@ -24,7 +24,7 @@ use crate::service::email::{
 use crate::service::job::{JobService, SendMailAttachmentJob, SendMailJob};
 use crate::service::websocket::WebSocketHub;
 use crate::utils::file_response::file_extension;
-use crate::utils::permission::{require_admin, require_permission};
+use crate::utils::permission::{require_admin_all, require_permission};
 use crate::utils::preferences::resolve_preferences;
 use crate::utils::system_config::get_merged;
 
@@ -167,8 +167,8 @@ impl NotificationService {
         auth: &AuthDto,
         dto: &NotificationCreateReq,
     ) -> Result<NotificationResponse, ErrorResp> {
-        require_admin(auth)?;
-        require_permission(auth, Permission::NotificationCreate)?;
+        // Match `@Authenticated({ admin: true })` → Permission.All for API keys.
+        require_admin_all(auth)?;
 
         let row = create_notification(
             &self.pool,
@@ -191,7 +191,7 @@ impl NotificationService {
         auth: &AuthDto,
         dto: &SmtpConfig,
     ) -> Result<TestEmailResponse, ErrorResp> {
-        require_admin(auth)?;
+        require_admin_all(auth)?;
 
         let user = UserDb::select_full_by_id(&self.pool, &auth.user.id)
             .await?
@@ -235,7 +235,7 @@ impl NotificationService {
         name: &str,
         dto: &TemplatePreviewReq,
     ) -> Result<TemplatePreviewResponse, ErrorResp> {
-        require_admin(auth)?;
+        require_admin_all(auth)?;
 
         let template = EmailTemplate::parse(name)
             .ok_or_else(|| ErrorResp::BadRequest(format!("Unknown template: {name}")))?;

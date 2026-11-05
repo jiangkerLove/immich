@@ -26,19 +26,31 @@ pub async fn login_handler(
         .auth
         .login(&login_credential, &login_details)
         .await?;
-    Ok(respond_with_auth_cookies(
+    // Nest @Post() without @HttpCode → 201.
+    let mut response = crate::utils::response::json_response_with_status(StatusCode::CREATED, &body);
+    let headers = response.headers_mut();
+    for cookie in respond_with_auth_cookies(
         &body,
         login_details.is_secure,
         &body.access_token,
         "password",
-    ))
+    )
+    .headers()
+    .get_all(axum::http::header::SET_COOKIE)
+    {
+        headers.append(axum::http::header::SET_COOKIE, cookie.clone());
+    }
+    Ok(response)
 }
 
 pub async fn admin_sign_up_handler(
     State(state): State<AppState>,
     Json(dto): Json<SignUpReq>,
-) -> Result<UserAdminResponse, ErrorResp> {
-    state.services.auth.admin_sign_up(&dto).await
+) -> Result<(StatusCode, Json<UserAdminResponse>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.services.auth.admin_sign_up(&dto).await?),
+    ))
 }
 
 pub async fn logout_handler(

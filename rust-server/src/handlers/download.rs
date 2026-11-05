@@ -1,4 +1,5 @@
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
 
@@ -11,9 +12,10 @@ pub async fn get_download_info_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<DownloadInfoReq>,
-) -> Result<Json<DownloadResponse>, ErrorResp> {
-    Ok(Json(
-        state.services.download.get_download_info(&auth, &dto).await?,
+) -> Result<(StatusCode, Json<DownloadResponse>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.services.download.get_download_info(&auth, &dto).await?),
     ))
 }
 

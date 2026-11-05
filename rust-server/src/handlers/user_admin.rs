@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
@@ -30,8 +31,11 @@ pub async fn create_user_admin_handler(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthDto>,
     Json(dto): Json<UserAdminCreateReq>,
-) -> Result<UserAdminResponse, ErrorResp> {
-    state.services.user_admin.create(&auth, &dto).await
+) -> Result<(StatusCode, Json<UserAdminResponse>), ErrorResp> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.services.user_admin.create(&auth, &dto).await?),
+    ))
 }
 
 pub async fn get_user_admin_handler(

@@ -389,3 +389,7 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 离线 HW 转码默认 | GOP 0→256；QSV bf/refs 7/5；NVENC refs 抑制；cqMode/temporalAQ/twoPass multipass；VP9 low_power/bsf | 与 media.ts HW 类一致 |
 | 已改 | HTTP 状态码 | 多类 POST→201；tag/apiKey/session DELETE/lock→204 | 对齐 Nest 默认 |
 | 已改 | server about/apk/statistics、library、person reassign、apiKey/me、cluster 400 | 具名权限与 findOrFail→400 | 对齐控制器/服务 |
+| 已改 | 软件 twoPass | 合格时 ffmpeg `-pass 1`→null + `-pass 2`，清理 logfile | 与 media.repository.transcode 一致 |
+| 已改 | HLS 配置字段 | cqMode/temporalAQ/twoPass/bframes/refs 进入编码参数 | 与系统 ffmpeg 设置一致 |
+| 已改 | queue/job/backup/integrity/admin 通知权限 | 具名权限或 admin+All | 对齐控制器注解 |
+| 已改 | 更多 POST 201 | login/sign-up/user-admin/profile/download-info/admin-notification/backup-upload | Nest 默认 |

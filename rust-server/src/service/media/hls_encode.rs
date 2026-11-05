@@ -20,6 +20,11 @@ pub struct HlsFfmpegSettings {
     pub tonemap: String,
     pub threads: i32,
     pub accel_decode: bool,
+    pub cq_mode: String,
+    pub two_pass: bool,
+    pub temporal_aq: bool,
+    pub bframes: i32,
+    pub refs: i32,
 }
 
 impl HlsFfmpegSettings {
@@ -33,6 +38,11 @@ impl HlsFfmpegSettings {
             tonemap: json_str(&ffmpeg, &["tonemap"], "hable"),
             threads: json_i32(&ffmpeg, &["threads"], 0),
             accel_decode: json_bool(&ffmpeg, &["accelDecode"], true),
+            cq_mode: json_str(&ffmpeg, &["cqMode"], "auto"),
+            two_pass: json_bool(&ffmpeg, &["twoPass"], false),
+            temporal_aq: json_bool(&ffmpeg, &["temporalAQ"], false),
+            bframes: json_i32(&ffmpeg, &["bframes"], -1),
+            refs: json_i32(&ffmpeg, &["refs"], 0),
         }
     }
 }
@@ -146,32 +156,15 @@ fn build_software_hls_args(
             ]);
         }
         "hevc" => {
+            append_software_hls_rate(&mut args, settings, variant, true);
             args.extend([
-                "-preset".into(),
-                settings.preset.clone(),
-                "-crf".into(),
-                hls_crf(variant.codec).to_string(),
-                "-maxrate".into(),
-                format!("{}k", variant.bitrate / 1000),
-                "-bufsize".into(),
-                format!("{}k", variant.bitrate / 500),
                 "-x265-params".into(),
                 "no-scenecut=1:no-open-gop=1".into(),
             ]);
         }
         _ => {
-            args.extend([
-                "-preset".into(),
-                settings.preset.clone(),
-                "-crf".into(),
-                hls_crf(variant.codec).to_string(),
-                "-maxrate".into(),
-                format!("{}k", variant.bitrate / 1000),
-                "-bufsize".into(),
-                format!("{}k", variant.bitrate / 500),
-                "-sc_threshold:v".into(),
-                "0".into(),
-            ]);
+            append_software_hls_rate(&mut args, settings, variant, false);
+            args.extend(["-sc_threshold:v".into(), "0".into()]);
         }
     }
     append_vf(&mut args, build_cpu_vf(settings, asset, variant.resolution));
@@ -210,9 +203,32 @@ fn build_nvenc_hls_args(
         "-i_qfactor".into(),
         "0.75".into(),
     ]);
+    if settings.bframes > 0 {
+        args.extend([
+            "-b_ref_mode".into(),
+            "middle".into(),
+            "-b_qfactor".into(),
+            "1.1".into(),
+        ]);
+    }
+    if settings.temporal_aq {
+        args.extend(["-temporal-aq".into(), "1".into()]);
+    }
     append_output_maps(&mut args, asset, encoder, "aac");
+    append_bf_refs(
+        &mut args,
+        settings.bframes,
+        settings.refs,
+        false,
+        true,
+    );
     append_gop(&mut args, gop);
-    append_nvenc_rate(&mut args, variant, hls_crf(variant.codec));
+    append_nvenc_rate(
+        &mut args,
+        variant,
+        hls_crf(variant.codec),
+        settings.two_pass,
+    );
     if let Some(preset) = nvenc_preset_flag(&settings.preset) {
         args.extend(["-preset".into(), preset]);
     }
@@ -255,6 +271,7 @@ fn build_vaapi_hls_args(
     let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
     append_output_maps(&mut args, asset, encoder, "aac");
+    append_bf_refs(&mut args, settings.bframes, settings.refs, false, false);
     append_gop(&mut args, gop);
     if let Some(level) = qsv_vaapi_preset_index(&settings.preset) {
         args.extend(["-compression_level".into(), level.to_string()]);
@@ -299,13 +316,17 @@ fn build_qsv_hls_args(
     let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
     append_output_maps(&mut args, asset, encoder, "aac");
-    // QSV defaults when bframes/refs are unset: 7 / 5.
-    args.extend(["-bf".into(), "7".into(), "-refs".into(), "5".into()]);
+    append_bf_refs(&mut args, settings.bframes, settings.refs, true, false);
     append_gop(&mut args, gop);
     if let Some(level) = qsv_vaapi_preset_index(&settings.preset) {
         args.extend(["-preset".into(), level.to_string()]);
     }
-    append_qsv_rate(&mut args, variant, hls_crf(variant.codec));
+    append_qsv_rate(
+        &mut args,
+        variant,
+        hls_crf(variant.codec),
+        &settings.cq_mode,
+    );
     args.extend(["-idr_interval".into(), "0".into()]);
 
     append_vf(
@@ -736,18 +757,31 @@ fn append_gop(args: &mut Vec<String>, gop: i32) {
     }
 }
 
-fn append_nvenc_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
+fn append_nvenc_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32, two_pass: bool) {
     let max_k = variant.bitrate / 1000;
     let target_k = ((max_k as f64) / 1.45).ceil() as u64;
-    args.extend([
-        "-cq:v".into(),
-        crf.to_string(),
-        "-maxrate".into(),
-        format!("{max_k}k"),
-        // Nvenc: bufsize is the target (ceil(max/1.45)), not 2*max.
-        "-bufsize".into(),
-        format!("{target_k}k"),
-    ]);
+    if two_pass && max_k > 0 {
+        args.extend([
+            "-b:v".into(),
+            format!("{target_k}k"),
+            "-maxrate".into(),
+            format!("{max_k}k"),
+            "-bufsize".into(),
+            format!("{target_k}k"),
+            "-multipass".into(),
+            "2".into(),
+        ]);
+    } else {
+        args.extend([
+            "-cq:v".into(),
+            crf.to_string(),
+            "-maxrate".into(),
+            format!("{max_k}k"),
+            // Nvenc: bufsize is the target (ceil(max/1.45)), not 2*max.
+            "-bufsize".into(),
+            format!("{target_k}k"),
+        ]);
+    }
 }
 
 fn append_vaapi_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
@@ -783,20 +817,93 @@ fn append_vaapi_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
     }
 }
 
-fn append_qsv_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
+fn append_qsv_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32, cq_mode: &str) {
     let max_k = variant.bitrate / 1000;
-    // Default cqMode=auto is not CQP → global_quality + -b:v when max > 0.
-    args.extend(["-global_quality:v".into(), crf.to_string()]);
+    let use_cqp = cq_mode.eq_ignore_ascii_case("cqp");
+    if use_cqp {
+        args.extend(["-q:v".into(), crf.to_string()]);
+    } else {
+        args.extend(["-global_quality:v".into(), crf.to_string()]);
+    }
     if max_k > 0 {
         let target_k = ((max_k as f64) / 1.45).ceil() as u64;
+        if !use_cqp {
+            args.extend(["-b:v".into(), format!("{target_k}k")]);
+        }
         args.extend([
-            "-b:v".into(),
-            format!("{target_k}k"),
             "-maxrate".into(),
             format!("{max_k}k"),
             "-bufsize".into(),
             format!("{}k", max_k * 2),
         ]);
+    }
+}
+
+fn append_software_hls_rate(
+    args: &mut Vec<String>,
+    settings: &HlsFfmpegSettings,
+    variant: &HlsVariant,
+    hevc: bool,
+) {
+    let max_k = variant.bitrate / 1000;
+    let quality = if settings.cq_mode.eq_ignore_ascii_case("cqp") {
+        "-q:v"
+    } else {
+        "-crf"
+    };
+    args.extend(["-preset".into(), settings.preset.clone()]);
+    // HLS always has variant bitrate > 0. twoPass swaps CRF for -b:v/-minrate/-maxrate.
+    if settings.two_pass {
+        let target = ((max_k as f64) / 1.45).ceil() as u64;
+        let min = target as f64 / 2.0;
+        let min = if min.fract() == 0.0 {
+            format!("{}", min as u64)
+        } else {
+            format!("{min}")
+        };
+        args.extend([
+            "-b:v".into(),
+            format!("{target}k"),
+            "-minrate".into(),
+            format!("{min}k"),
+            "-maxrate".into(),
+            format!("{max_k}k"),
+        ]);
+    } else {
+        args.extend([
+            quality.into(),
+            hls_crf(if hevc { "hevc" } else { "h264" }).to_string(),
+            "-maxrate".into(),
+            format!("{max_k}k"),
+            "-bufsize".into(),
+            format!("{}k", max_k * 2),
+        ]);
+    }
+}
+
+fn append_bf_refs(
+    args: &mut Vec<String>,
+    mut bframes: i32,
+    mut refs: i32,
+    qsv_defaults: bool,
+    nvenc_refs_rule: bool,
+) {
+    if qsv_defaults {
+        if bframes < 0 {
+            bframes = 7;
+        }
+        if refs <= 0 {
+            refs = 5;
+        }
+    }
+    if nvenc_refs_rule && bframes > 0 && bframes < 3 && refs < 3 {
+        refs = 0;
+    }
+    if bframes > -1 {
+        args.extend(["-bf".into(), bframes.to_string()]);
+    }
+    if refs > 0 {
+        args.extend(["-refs".into(), refs.to_string()]);
     }
 }
 
@@ -1013,6 +1120,11 @@ mod tests {
             tonemap: tonemap.into(),
             threads: 0,
             accel_decode: true,
+            cq_mode: "auto".into(),
+            two_pass: false,
+            temporal_aq: false,
+            bframes: -1,
+            refs: 0,
         }
     }
 

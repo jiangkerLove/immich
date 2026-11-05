@@ -200,7 +200,13 @@ impl VideoEncodeService {
                 );
             }
 
-            match run_ffmpeg(&args).await {
+            let run = if software_two_pass_eligible(&attempt) {
+                run_ffmpeg_two_pass(&args, output).await
+            } else {
+                run_ffmpeg(&args).await
+            };
+
+            match run {
                 Ok(()) => return Ok(()),
                 Err(err) if attempt.accel != "disabled" => {
                     tracing::error!("Error occurred during transcoding for {}: {err}", asset.id);
@@ -770,6 +776,56 @@ fn bitrate_unit(max_bitrate: &str) -> &'static str {
     } else {
         "k"
     }
+}
+
+/// Match BaseConfig / VP9Config / AV1Config.eligibleForTwoPass.
+fn software_two_pass_eligible(config: &FfmpegConfig) -> bool {
+    if !config.two_pass || config.accel != "disabled" {
+        return false;
+    }
+    let codec = config.target_video_codec.to_ascii_lowercase();
+    if codec == "vp9" || codec == "av1" {
+        return true;
+    }
+    parse_bitrate_to_bps(&config.max_bitrate) > 0
+}
+
+async fn run_ffmpeg_two_pass(args: &[String], output: &Path) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("ffmpeg args too short for two-pass".into());
+    }
+    let passlogfile = output.to_string_lossy().into_owned();
+    let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
+    // Pass 1: discard media (`-f null` + NUL), write stats next to the final file.
+    let mut pass1 = args.to_vec();
+    let _ = pass1.pop();
+    pass1.extend([
+        "-pass".into(),
+        "1".into(),
+        "-passlogfile".into(),
+        passlogfile.clone(),
+        "-f".into(),
+        "null".into(),
+        null_out.into(),
+    ]);
+    run_ffmpeg(&pass1).await?;
+
+    let mut pass2 = args.to_vec();
+    let final_out = pass2.pop().unwrap_or_else(|| output.to_string_lossy().into_owned());
+    pass2.extend([
+        "-pass".into(),
+        "2".into(),
+        "-passlogfile".into(),
+        passlogfile.clone(),
+        final_out,
+    ]);
+    let result = run_ffmpeg(&pass2).await;
+
+    let _ = tokio::fs::remove_file(format!("{passlogfile}-0.log")).await;
+    let _ = tokio::fs::remove_file(format!("{passlogfile}-0.log.mbtree")).await;
+
+    result
 }
 
 async fn run_ffmpeg(args: &[String]) -> Result<(), String> {

@@ -8,7 +8,8 @@ use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::database_backups::is_valid_database_backup_name;
 use crate::utils::file_response::{FileResponse, file_response};
-use crate::utils::permission::require_admin;
+use crate::models::db::auth_permission::Permission;
+use crate::utils::permission::{require_admin, require_permission};
 use crate::utils::storage::StoragePaths;
 
 #[derive(Debug, Serialize)]
@@ -62,6 +63,7 @@ impl DatabaseBackupService {
         auth: &AuthDto,
     ) -> Result<DatabaseBackupListResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::Maintenance)?;
         self.list_backups_internal().await
     }
 
@@ -130,6 +132,7 @@ impl DatabaseBackupService {
         filename: &str,
     ) -> Result<Response<Body>, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::BackupDownload)?;
         self.download_backup_internal(filename).await
     }
 
@@ -168,6 +171,7 @@ impl DatabaseBackupService {
         filenames: &[String],
     ) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::BackupDelete)?;
         self.delete_backups_internal(filenames).await
     }
 
@@ -198,6 +202,7 @@ impl DatabaseBackupService {
         bytes: Vec<u8>,
     ) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::BackupUpload)?;
         self.upload_backup_internal(original_name, bytes).await
     }
 

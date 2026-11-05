@@ -5,10 +5,11 @@ use bullmq_rs::JobState;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::job::JobService;
-use crate::utils::permission::require_admin;
+use crate::utils::permission::{require_admin, require_permission};
 
 pub const ALL_QUEUES: &[&str] = &[
     "thumbnailGeneration",
@@ -122,6 +123,7 @@ impl QueueService {
 
     pub async fn get_all(&self, auth: &AuthDto) -> Result<Vec<QueueResponse>, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::QueueRead)?;
         let mut responses = Vec::with_capacity(ALL_QUEUES.len());
         for name in ALL_QUEUES {
             responses.push(self.get_by_name(name).await?);
@@ -130,9 +132,12 @@ impl QueueService {
     }
 
     pub async fn get_all_legacy(&self, auth: &AuthDto) -> Result<QueuesLegacyResponse, ErrorResp> {
-        let responses = self.get_all(auth).await?;
+        // Match JobController.getQueuesLegacy → Permission.JobRead.
+        require_admin(auth)?;
+        require_permission(auth, Permission::JobRead)?;
         let mut queues = HashMap::new();
-        for response in responses {
+        for name in ALL_QUEUES {
+            let response = self.get_by_name(name).await?;
             queues.insert(response.name.clone(), map_queue_legacy(&response));
         }
         Ok(QueuesLegacyResponse { queues })
@@ -140,6 +145,7 @@ impl QueueService {
 
     pub async fn get(&self, auth: &AuthDto, name: &str) -> Result<QueueResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::QueueRead)?;
         validate_queue_name(name)?;
         self.get_by_name(name).await
     }
@@ -151,6 +157,7 @@ impl QueueService {
         dto: &QueueUpdateReq,
     ) -> Result<QueueResponse, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::QueueUpdate)?;
         validate_queue_name(name)?;
 
         let queue = self.jobs.json_queue(name).await?;
@@ -178,6 +185,7 @@ impl QueueService {
         query: &QueueJobSearchQuery,
     ) -> Result<Vec<QueueJobResponse>, ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::QueueJobRead)?;
         validate_queue_name(name)?;
 
         let queue = self.jobs.json_queue(name).await?;
@@ -202,6 +210,7 @@ impl QueueService {
         dto: &QueueDeleteReq,
     ) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::QueueJobDelete)?;
         validate_queue_name(name)?;
 
         let queue = self.jobs.json_queue(name).await?;
@@ -224,6 +233,8 @@ impl QueueService {
         dto: &QueueCommandReq,
     ) -> Result<QueueLegacyResponse, ErrorResp> {
         require_admin(auth)?;
+        // Match JobController.run → Permission.JobCreate.
+        require_permission(auth, Permission::JobCreate)?;
         validate_queue_name(name)?;
 
         match dto.command.as_str() {
@@ -266,6 +277,7 @@ impl QueueService {
         dto: &ManualJobCreateReq,
     ) -> Result<(), ErrorResp> {
         require_admin(auth)?;
+        require_permission(auth, Permission::JobCreate)?;
         self.jobs.create_manual_job(&dto.name).await
     }
 
