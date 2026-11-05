@@ -71,6 +71,8 @@ pub fn append_hw_input_options(
                 "-hwaccel_output_format".into(),
                 "cuda".into(),
                 "-noautorotate".into(),
+                "-threads".into(),
+                "1".into(),
             ]);
         }
         "nvenc" => {
@@ -91,6 +93,8 @@ pub fn append_hw_input_options(
                 "-noautorotate".into(),
                 "-hwaccel_device".into(),
                 device,
+                "-threads".into(),
+                "1".into(),
             ]);
         }
         "vaapi" => {
@@ -114,6 +118,8 @@ pub fn append_hw_input_options(
                 "-noautorotate".into(),
                 "-qsv_device".into(),
                 device,
+                "-threads".into(),
+                "1".into(),
             ]);
         }
         "qsv" => {
@@ -168,9 +174,20 @@ pub fn build_hw_video_filter(
 pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>) {
     let max_bps = parse_bitrate_to_bps(config.max_bitrate);
     let max_k = max_bps / 1_000;
+    let target_k = ((max_k as f64) / 1.45).ceil() as i64;
 
     match config.accel {
         "nvenc" => {
+            args.extend([
+                "-tune".into(),
+                "hq".into(),
+                "-qmin".into(),
+                "0".into(),
+                "-rc-lookahead".into(),
+                "20".into(),
+                "-i_qfactor".into(),
+                "0.75".into(),
+            ]);
             if max_k > 0 {
                 args.extend([
                     "-cq:v".into(),
@@ -178,17 +195,14 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
                     "-maxrate".into(),
                     format!("{max_k}k"),
                     "-bufsize".into(),
-                    format!("{}k", max_k * 2),
+                    format!("{target_k}k"),
                 ]);
             } else {
                 args.extend(["-cq:v".into(), config.crf.to_string()]);
             }
-            args.extend([
-                "-preset".into(),
-                nvenc_preset(config.preset),
-                "-tune".into(),
-                "hq".into(),
-            ]);
+            if let Some(preset) = nvenc_preset(config.preset) {
+                args.extend(["-preset".into(), preset]);
+            }
         }
         "rkmpp" => {
             append_rkmpp_level(args, config.target_video_codec);
@@ -218,25 +232,51 @@ pub fn append_hw_rate_options(args: &mut Vec<String>, config: &VideoHwConfig<'_>
                 format!("{}k", max_k * 2),
             ]);
         }
-        "vaapi" | "qsv" => {
+        "vaapi" => {
+            if let Some(level) = qsv_vaapi_preset(config.preset) {
+                args.extend(["-compression_level".into(), level]);
+            }
+            if max_k > 0 {
+                let min_k = target_k as f64 / 2.0;
+                let min = if min_k.fract() == 0.0 {
+                    format!("{}", min_k as i64)
+                } else {
+                    format!("{min_k}")
+                };
+                args.extend([
+                    "-b:v".into(),
+                    format!("{target_k}k"),
+                    "-maxrate".into(),
+                    format!("{max_k}k"),
+                    "-minrate".into(),
+                    format!("{min}k"),
+                    "-rc_mode".into(),
+                    "3".into(),
+                ]);
+            } else {
+                args.extend([
+                    "-qp:v".into(),
+                    config.crf.to_string(),
+                    "-global_quality:v".into(),
+                    config.crf.to_string(),
+                    "-rc_mode".into(),
+                    "1".into(),
+                ]);
+            }
+        }
+        "qsv" => {
+            if let Some(level) = qsv_vaapi_preset(config.preset) {
+                args.extend(["-preset".into(), level]);
+            }
+            args.extend(["-global_quality:v".into(), config.crf.to_string()]);
             if max_k > 0 {
                 args.extend([
+                    "-b:v".into(),
+                    format!("{target_k}k"),
                     "-maxrate".into(),
                     format!("{max_k}k"),
                     "-bufsize".into(),
                     format!("{}k", max_k * 2),
-                ]);
-            }
-            args.extend([
-                "-global_quality:v".into(),
-                config.crf.to_string(),
-            ]);
-            if config.accel == "qsv" {
-                args.extend(["-preset".into(), qsv_preset(config.preset)]);
-            } else {
-                args.extend([
-                    "-compression_level".into(),
-                    vaapi_compression_level(config.preset),
                 ]);
             }
         }
@@ -268,12 +308,12 @@ fn build_nvenc_vf(
             }
         }
     } else {
+        // NvencSwDecodeConfig: tonemapx → hwupload_cuda → optional scale_cuda.
+        if tone_map {
+            filters.push(tonemapx_filter(config.tonemap));
+        }
         filters.push("hwupload_cuda".into());
         if should_scale(asset, target_res) {
-            filters.push(format!("scale_cuda={scale}:format=nv12"));
-        } else if tone_map {
-            filters.push(tonemap_cuda_filter(config.tonemap));
-        } else {
             filters.push(format!("scale_cuda={scale}:format=nv12"));
         }
     }
@@ -316,7 +356,7 @@ fn build_qsv_vf(
     target_res: i32,
     hw_decode: bool,
 ) -> String {
-    let scale = scale_expression(asset, target_res);
+    let scale = scale_expression_qsv(asset, target_res);
     let tone_map = should_tone_map_i16(config.tonemap, asset.color_transfer);
     let mut filters = Vec::new();
     if hw_decode {
@@ -411,18 +451,22 @@ fn should_scale(asset: &VideoConversionJob, target_res: i32) -> bool {
 }
 
 fn scale_filter(asset: &VideoConversionJob, target_res: i32) -> String {
-    if asset.video_height > asset.video_width {
-        format!("{target_res}:-2")
-    } else {
-        format!("-2:{target_res}")
-    }
+    scale_expression_with_mult(asset, target_res, 2)
 }
 
 fn scale_expression(asset: &VideoConversionJob, target_res: i32) -> String {
+    scale_expression_with_mult(asset, target_res, 2)
+}
+
+fn scale_expression_qsv(asset: &VideoConversionJob, target_res: i32) -> String {
+    scale_expression_with_mult(asset, target_res, 1)
+}
+
+fn scale_expression_with_mult(asset: &VideoConversionJob, target_res: i32, mult: i32) -> String {
     if asset.video_height > asset.video_width {
-        format!("{target_res}:-2")
+        format!("{target_res}:-{mult}")
     } else {
-        format!("-2:{target_res}")
+        format!("-{mult}:{target_res}")
     }
 }
 
@@ -435,31 +479,33 @@ fn append_rkmpp_level(args: &mut Vec<String>, codec: &str) {
     args.extend(["-level".into(), level.into()]);
 }
 
-fn nvenc_preset(preset: &str) -> String {
-    let presets = [
-        "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow",
-    ];
-    let index = presets
-        .iter()
-        .position(|value| value.eq_ignore_ascii_case(preset))
-        .unwrap_or(0);
-    let mapped = 7 - index.min(6);
-    format!("p{mapped}")
+fn nvenc_preset(preset: &str) -> Option<String> {
+    software_preset_index(preset).map(|index| {
+        let mapped = 7 - index.min(6);
+        format!("p{mapped}")
+    })
 }
 
-fn qsv_preset(preset: &str) -> String {
-    let presets = [
-        "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow",
-    ];
-    let index = presets
-        .iter()
-        .position(|value| value.eq_ignore_ascii_case(preset))
-        .unwrap_or(3);
-    (index.min(6) + 1).to_string()
+fn qsv_vaapi_preset(preset: &str) -> Option<String> {
+    software_preset_index(preset).map(|index| (index.min(6) + 1).to_string())
 }
 
-fn vaapi_compression_level(preset: &str) -> String {
-    qsv_preset(preset)
+fn software_preset_index(preset: &str) -> Option<u32> {
+    const PRESETS: [&str; 9] = [
+        "veryslow",
+        "slower",
+        "slow",
+        "medium",
+        "fast",
+        "faster",
+        "veryfast",
+        "superfast",
+        "ultrafast",
+    ];
+    PRESETS
+        .iter()
+        .position(|value| value.eq_ignore_ascii_case(preset))
+        .map(|index| index as u32)
 }
 
 fn parse_bitrate_to_bps(bitrate: &str) -> i64 {

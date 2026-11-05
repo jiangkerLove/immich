@@ -74,13 +74,13 @@
 | `services/database-backup.service.ts` | 恢复 SQL 之后如果迁移、没有管理员或结构检查失败，用恢复点重放并重建 public schema。集群转储只在正向恢复时切到 postgres 库。备份文件名和上传前缀读过。列表怎么排序还没逐行对比较器。 |
 | `services/download.service.ts` | 拆包在加入当前文件后再判断是否超过 4GiB。安卓动态照片在偏好关闭时不打进包。压缩包条目用原始文件名，第二个同名是 `名+1.扩展名`。 |
 | `services/duplicate.service.ts` | 还没有组 id 时，用搜索结果里第一次出现的那个。纬度和经度必须都只有一个值才写入。描述按换行和回车拆开再去重。可见性按锁定、归档、时间线、否则隐藏。机器学习关闭、没有嵌入、已堆叠或隐藏或锁定时的任务状态读过。列表 SQL 还没读。 |
-| `services/hls.service.ts` | 主播放列表带宽是码率乘 1.35 后取整，编码串包含 `mp4a.40.2`，帧率三位小数。高于源分辨率或不在配置里的变体丢掉。一个变体都没有则 404。muxer `-r`=`packetCount*timeBase/totalDuration`；音频 `-ac 2`。HW 编码链其余参数还没逐条对。 |
+| `services/hls.service.ts` | 主播放列表带宽是码率乘 1.35 后取整，编码串包含 `mp4a.40.2`，帧率三位小数。高于源分辨率或不在配置里的变体丢掉。一个变体都没有则 404。muxer `-r`/`-ac 2`；HW 输入选项在 `-i` 前；NVENC/VAAPI/QSV 码率、preset、strictGop、scale `-2`/`-1`、SW decode 滤镜顺序与 `utils/media.ts` 对齐。`twoPass`/`temporalAQ`/cqMode=icq 等配置分支仍可再对。 |
 | `services/library.service.ts` | 文件不在磁盘且已经离线则不动；已经离线且状态不是 deleted 才检查是否回到导入路径、是否仍被排除。mtime 不同才排队更新。回收站里的离线只改 `isOffline`，不清 `deletedAt`。监听：add/change 走扩展/排除/隐藏过滤后入队 SyncFiles；unlink 不过滤直接 RemoveAsset；创建/改库不重挂 watcher。排除 glob：`*` 不跨 `/`、`**` 可跨、dot 文件可匹配；watch/crawl 大小写不敏感。 |
 | `services/maintenance.service.ts` | API 进程的维护状态固定是未进行。检测旧安装时，API 要管理员，维护进程不要登录。进入维护和维修动作还没读。 |
 | `services/map.service.ts` | 未要求包含归档时，标记查询不给查看者留一个空的参数位。反向地理编码返回几条、字段叫什么还没读。 |
 | `services/memory.service.ts` | 更新只接受是否保存、记忆时间和看过时间。这三个都没传时不发 UPDATE。往年回忆的序列结束在去年。选片：时间线、有预览、未删、每年 20 张；搜索丢掉空回忆且排除隐藏人物；GET 不过滤隐藏人物；`hideAt` 为当天 23:59:59.999；清理先删非时间线关联再删 30 天未保存；某用户失败不跳过同天其他人。 |
 | `services/metadata.service.ts` | 没有 EXIF 日期时，用文件创建时间和 mtime 里更早的，birthtime 小于等于 0 不用，库存的 `fileModifiedAt` 不参与。GPS 正好是 0,0 不算有位置。HEIF 的 Rotation 映射到方向。探测过视频，或文件不可能是动画时，先删掉 Duration 再写探测时长。关键词优先 `TagsList`，空数组也不改用后面的层级主题或 Keywords；层级主题把 `|` 换成 `/`，数字原样转成字符串。没有关键词时清空这张照片上的标签关联，标签被锁定时不动。相机、镜头、评分 0 变空、位深、连拍 id 的取值顺序读过。动态照片：`MotionPhoto`/`MicroVideo` 按 JS 真值（数字 0 不算）；目录取 `ContainerDirectory` 或 `Directory`；尾部切片 position 为负则失败；短读零填充到 length；新建运动视频用调用方 UUID 当主键和路径；写盘后内联跑元数据再入队转码；提取失败只打日志不拖垮元数据任务；隐藏已有 timeline 运动视频不发 websocket；CID 配对不按 libraryId / deletedAt 过滤。 |
-| `services/notification.service.ts` | 列表只要未删除的，按创建时间降序。未读是 `readAt` 为空。打开单条也只找未删除的，不跟随官方那条只会命中已删记录的条件。邮件：空 externalDomain 回退 `https://my.immich.app`；自定义模板空值保留 `{key}`；相册缩略图恰好 1 个文件才附件；CID 为 `album-thumbnail`；欢迎信空密码不写 Password 行。 |
+| `services/notification.service.ts` | 列表只要未删除的，按创建时间降序。未读是 `readAt` 为空。打开单条也只找未删除的，不跟随官方那条只会命中已删记录的条件。邮件：空 externalDomain 回退 `https://my.immich.app`；自定义模板空值保留 `{key}`；相册缩略图恰好 1 个文件才附件；CID 为 `album-thumbnail`；欢迎信空密码不写 Password 行。布局：商店徽章 + AGPL footer；隐藏 Preview（自定义模板作 preview）；纯文本从整页 HTML 生成并保留换行/链接。 |
 | `services/ocr.service.ts` | 机器学习里 OCR 关闭则整批和单张都跳过。单张先看有没有预览文件，没有则失败，然后再看是不是隐藏。文字按顺序每 8 个数一组画框，搜索词用同一套分词。 |
 | `services/partner.service.ts` | 创建、更新、移除的错误文案读过。搜索会去掉已删除用户。时间线开关写哪一列还没读。 |
 | `services/person.service.ts` | 重分配会挪走这张照片上该人物的每一张未删脸；一张都没挪到就不换封面。合并时对方名字或生日和主人物不同就整个人跳过，主人物名字为空也算冲突。检测旧框宽或高为 0 时分母按 1。识别任务在关闭、找不到、非机器学习来源、没嵌入、已有人物时跳过或失败。非核心且未延期会再排队并跳过。已有人物组只改挂脸；没有组且是核心脸时新建组和个人、把这张脸设成封面并排队缩略图，然后再改挂。 |
@@ -256,19 +256,19 @@
 | `user.dto.ts` | 逻辑未对 |
 | `workflow.dto.ts` | 逻辑未对 |
 
-### emails（9，已读逻辑 0）
+### emails（9，已读逻辑 5）
 
 | 文件 | 状态 |
 |------|------|
-| `album-invite.email.tsx` | 逻辑未对 |
-| `album-update.email.tsx` | 逻辑未对 |
-| `button.component.tsx` | 逻辑未对 |
-| `footer.template.tsx` | 逻辑未对 |
+| `album-invite.email.tsx` | 逻辑部分对 |
+| `album-update.email.tsx` | 逻辑部分对 |
+| `button.component.tsx` | 逻辑部分对 |
+| `footer.template.tsx` | 逻辑部分对 |
 | `futo.layout.tsx` | 逻辑未对 |
-| `immich.layout.tsx` | 逻辑未对 |
+| `immich.layout.tsx` | 逻辑部分对 |
 | `license.email.tsx` | 逻辑未对 |
-| `test.email.tsx` | 逻辑未对 |
-| `welcome.email.tsx` | 逻辑未对 |
+| `test.email.tsx` | 逻辑部分对 |
+| `welcome.email.tsx` | 逻辑部分对 |
 
 ### maintenance（5，已读逻辑 0）
 
@@ -461,8 +461,8 @@
 
 按文件读函数体，不要只核对有没有这个函数。建议顺序：
 
-1. `services/hls.service.ts` / `transcoding.service.ts` 的 HW 编码链（nvenc/vaapi/qsv）其余 ffmpeg 参数
-2. `emails/` Immich footer / preheader / plain-text 排版
-3. 服务逻辑对过之后，再读对应的 `controllers/` 状态码
-4. `utils/` 剩余纯逻辑（request/database helpers）与 middleware 未读分支
+1. `utils/media.ts` 剩余配置分支：`twoPass` / `temporalAQ` / `cqMode=icq` / VP9 HW flags；离线转码 `gopSize=0→256`、QSV 默认 bf/refs
+2. 服务逻辑对过之后，再读对应的 `controllers/` 状态码与权限注解
+3. `utils/` 剩余纯逻辑（request/database helpers）与 middleware 未读分支
+4. `emails/license.email.tsx`（FutoLayout，若启用许可证邮件再对）
 

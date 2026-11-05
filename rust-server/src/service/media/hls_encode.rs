@@ -126,19 +126,54 @@ fn build_software_hls_args(
     seek_seconds: f64,
 ) -> Vec<String> {
     let video_encoder = software_encoder(variant.codec);
-    let mut args = base_hls_args(seek_seconds, input_path);
+    let mut args = base_hls_args(seek_seconds, input_path, &[]);
     append_output_maps(&mut args, asset, video_encoder, "aac");
     append_gop(&mut args, gop);
-    args.extend([
-        "-preset".into(),
-        settings.preset.clone(),
-        "-crf".into(),
-        hls_crf(variant.codec).to_string(),
-        "-maxrate".into(),
-        format!("{}k", variant.bitrate / 1000),
-        "-bufsize".into(),
-        format!("{}k", variant.bitrate / 500),
-    ]);
+    match variant.codec {
+        "av1" => {
+            // AV1Config: preset = index+4, bitrate via -crf + svtav1 mbr= under lowLatency.
+            let speed = software_preset_index(&settings.preset).map(|i| i + 4).unwrap_or(12);
+            args.extend([
+                "-preset".into(),
+                speed.to_string(),
+                "-crf".into(),
+                hls_crf(variant.codec).to_string(),
+                "-svtav1-params".into(),
+                format!(
+                    "hierarchical-levels=3:lookahead=0:enable-tf=0:mbr={}k",
+                    variant.bitrate / 1000
+                ),
+            ]);
+        }
+        "hevc" => {
+            args.extend([
+                "-preset".into(),
+                settings.preset.clone(),
+                "-crf".into(),
+                hls_crf(variant.codec).to_string(),
+                "-maxrate".into(),
+                format!("{}k", variant.bitrate / 1000),
+                "-bufsize".into(),
+                format!("{}k", variant.bitrate / 500),
+                "-x265-params".into(),
+                "no-scenecut=1:no-open-gop=1".into(),
+            ]);
+        }
+        _ => {
+            args.extend([
+                "-preset".into(),
+                settings.preset.clone(),
+                "-crf".into(),
+                hls_crf(variant.codec).to_string(),
+                "-maxrate".into(),
+                format!("{}k", variant.bitrate / 1000),
+                "-bufsize".into(),
+                format!("{}k", variant.bitrate / 500),
+                "-sc_threshold:v".into(),
+                "0".into(),
+            ]);
+        }
+    }
     append_vf(&mut args, build_cpu_vf(settings, asset, variant.resolution));
     append_hls_muxer(
         &mut args,
@@ -161,35 +196,27 @@ fn build_nvenc_hls_args(
     seek_seconds: f64,
 ) -> Result<Vec<String>, String> {
     let encoder = nvenc_encoder(variant.codec);
-    let mut args = base_hls_args(seek_seconds, input_path);
-    if settings.accel_decode {
-        args.extend([
-            "-hwaccel".into(),
-            "cuda".into(),
-            "-hwaccel_output_format".into(),
-            "cuda".into(),
-            "-noautorotate".into(),
-        ]);
-    } else {
-        args.extend([
-            "-init_hw_device".into(),
-            "cuda=cuda:0".into(),
-            "-filter_hw_device".into(),
-            "cuda".into(),
-        ]);
-    }
+    let input_opts = nvenc_input_options(settings.accel_decode);
+    let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
+    // Match NvencSwDecodeConfig.getBaseOutputOptions quality flags + strictGop.
+    args.extend([
+        "-tune".into(),
+        "hq".into(),
+        "-qmin".into(),
+        "0".into(),
+        "-rc-lookahead".into(),
+        "20".into(),
+        "-i_qfactor".into(),
+        "0.75".into(),
+    ]);
     append_output_maps(&mut args, asset, encoder, "aac");
     append_gop(&mut args, gop);
     append_nvenc_rate(&mut args, variant, hls_crf(variant.codec));
-    args.extend([
-        "-preset".into(),
-        "p4".into(),
-        "-tune".into(),
-        "hq".into(),
-        "-forced-idr".into(),
-        "1".into(),
-    ]);
+    if let Some(preset) = nvenc_preset_flag(&settings.preset) {
+        args.extend(["-preset".into(), preset]);
+    }
+    args.extend(["-forced-idr".into(), "1".into()]);
 
     append_vf(
         &mut args,
@@ -224,30 +251,16 @@ fn build_vaapi_hls_args(
 ) -> Result<Vec<String>, String> {
     let device = resolve_hw_device(interfaces, &settings.preferred_hw_device)?;
     let encoder = vaapi_encoder(variant.codec);
-    let mut args = base_hls_args(seek_seconds, input_path);
-
-    if settings.accel_decode {
-        args.extend([
-            "-hwaccel".into(),
-            "vaapi".into(),
-            "-hwaccel_output_format".into(),
-            "vaapi".into(),
-            "-noautorotate".into(),
-            "-hwaccel_device".into(),
-            device.clone(),
-        ]);
-    } else {
-        args.extend([
-            "-init_hw_device".into(),
-            format!("vaapi=accel:{device}"),
-            "-filter_hw_device".into(),
-            "accel".into(),
-        ]);
-    }
+    let input_opts = vaapi_input_options(settings.accel_decode, &device);
+    let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
     append_output_maps(&mut args, asset, encoder, "aac");
-    append_gop_and_rate(&mut args, gop, variant, settings.preset.as_str(), hls_crf(variant.codec));
-    args.extend(["-forced-idr".into(), "1".into()]);
+    append_gop(&mut args, gop);
+    if let Some(level) = qsv_vaapi_preset_index(&settings.preset) {
+        args.extend(["-compression_level".into(), level.to_string()]);
+    }
+    append_vaapi_rate(&mut args, variant, hls_crf(variant.codec));
+    args.extend(["-idr_interval".into(), "0".into()]);
 
     append_vf(
         &mut args,
@@ -282,32 +295,18 @@ fn build_qsv_hls_args(
 ) -> Result<Vec<String>, String> {
     let device = resolve_hw_device(interfaces, &settings.preferred_hw_device)?;
     let encoder = qsv_encoder(variant.codec);
-    let mut args = base_hls_args(seek_seconds, input_path);
-
-    if settings.accel_decode {
-        args.extend([
-            "-hwaccel".into(),
-            "qsv".into(),
-            "-hwaccel_output_format".into(),
-            "qsv".into(),
-            "-async_depth".into(),
-            "4".into(),
-            "-noautorotate".into(),
-            "-qsv_device".into(),
-            device.clone(),
-        ]);
-    } else {
-        args.extend([
-            "-init_hw_device".into(),
-            format!("qsv=hw,child_device={device}"),
-            "-filter_hw_device".into(),
-            "hw".into(),
-        ]);
-    }
+    let input_opts = qsv_input_options(settings.accel_decode, &device);
+    let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
     append_output_maps(&mut args, asset, encoder, "aac");
-    append_gop_and_rate(&mut args, gop, variant, "4", hls_crf(variant.codec));
-    args.extend(["-forced-idr".into(), "0".into()]);
+    // QSV defaults when bframes/refs are unset: 7 / 5.
+    args.extend(["-bf".into(), "7".into(), "-refs".into(), "5".into()]);
+    append_gop(&mut args, gop);
+    if let Some(level) = qsv_vaapi_preset_index(&settings.preset) {
+        args.extend(["-preset".into(), level.to_string()]);
+    }
+    append_qsv_rate(&mut args, variant, hls_crf(variant.codec));
+    args.extend(["-idr_interval".into(), "0".into()]);
 
     append_vf(
         &mut args,
@@ -348,9 +347,8 @@ fn build_rkmpp_hls_args(
     }
 
     let encoder = rkmpp_encoder(variant.codec);
-    let mut args = base_hls_args(seek_seconds, input_path);
-    if settings.accel_decode {
-        args.extend([
+    let input_opts = if settings.accel_decode {
+        vec![
             "-hwaccel".into(),
             "rkmpp".into(),
             "-hwaccel_output_format".into(),
@@ -358,14 +356,16 @@ fn build_rkmpp_hls_args(
             "-afbc".into(),
             "rga".into(),
             "-noautorotate".into(),
-        ]);
-    }
+        ]
+    } else {
+        Vec::new()
+    };
+    let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
     append_output_maps(&mut args, asset, encoder, "aac");
     append_gop(&mut args, gop);
     append_rkmpp_level(&mut args, variant.codec);
     append_rkmpp_rate(&mut args, variant, settings.crf);
-    args.extend(["-forced-idr".into(), "1".into()]);
 
     append_vf(
         &mut args,
@@ -406,10 +406,12 @@ fn build_v4l2m2m_hls_args(
     }
 
     let encoder = v4l2m2m_encoder(variant.codec);
-    let mut args = base_hls_args(seek_seconds, input_path);
-    if settings.accel_decode {
-        args.extend(["-hwaccel".into(), "v4l2m2m".into()]);
-    }
+    let input_opts = if settings.accel_decode {
+        vec!["-hwaccel".into(), "v4l2m2m".into()]
+    } else {
+        Vec::new()
+    };
+    let mut args = base_hls_args(seek_seconds, input_path, &input_opts);
 
     append_output_maps(&mut args, asset, encoder, "aac");
     append_gop(&mut args, gop);
@@ -462,30 +464,32 @@ fn build_nvenc_vf(
     target_res: u32,
     hw_decode: bool,
 ) -> String {
-    let scale = scale_expression(asset, target_res);
+    let scale = scale_expression(asset, target_res, 2);
+    let tone_map = should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer);
     let mut filters = Vec::new();
 
     if hw_decode {
         if should_scale(asset, target_res)
-            || (!should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) && !asset.pixel_format.ends_with("420p"))
+            || (!tone_map && !asset.pixel_format.ends_with("420p"))
         {
             filters.push(format!("scale_cuda={scale}"));
         }
-        if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
+        if tone_map {
             filters.push(tonemap_cuda_filter(&settings.tonemap));
-        } else if !filters.is_empty() {
+        }
+        if !filters.is_empty() {
             let last = filters.len() - 1;
             if !filters[last].contains("format=") {
                 filters[last] = format!("{}:format=nv12", filters[last]);
             }
         }
     } else {
+        // NvencSwDecodeConfig: CPU tonemapx → hwupload_cuda → optional scale_cuda.
+        if tone_map {
+            filters.push(tonemapx_filter(&settings.tonemap));
+        }
         filters.push("hwupload_cuda".into());
         if should_scale(asset, target_res) {
-            filters.push(format!("scale_cuda={scale}:format=nv12"));
-        } else if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
-            filters.push(tonemap_cuda_filter(&settings.tonemap));
-        } else {
             filters.push(format!("scale_cuda={scale}:format=nv12"));
         }
     }
@@ -499,22 +503,23 @@ fn build_vaapi_vf(
     target_res: u32,
     hw_decode: bool,
 ) -> String {
-    let scale = scale_expression(asset, target_res);
+    let scale = scale_expression(asset, target_res, 2);
+    let tone_map = should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer);
     let mut filters = Vec::new();
 
     if hw_decode {
-        if !should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) && !asset.pixel_format.ends_with("420p") {
+        if !tone_map && !asset.pixel_format.ends_with("420p") {
             filters.push(format!(
                 "scale_vaapi={scale}:mode=hq:out_range=pc:format=nv12"
             ));
         } else if should_scale(asset, target_res) {
             filters.push(format!("scale_vaapi={scale}:mode=hq:out_range=pc"));
         }
-        if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
+        if tone_map {
             filters.push(tonemap_opencl_vaapi_chain(&settings.tonemap));
         }
     } else {
-        if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
+        if tone_map {
             filters.push(tonemapx_filter(&settings.tonemap));
         }
         filters.push("hwupload=extra_hw_frames=64".into());
@@ -534,22 +539,23 @@ fn build_qsv_vf(
     target_res: u32,
     hw_decode: bool,
 ) -> String {
-    let scale = scale_expression(asset, target_res);
+    let scale = scale_expression(asset, target_res, 1);
+    let tone_map = should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer);
     let mut filters = Vec::new();
 
     if hw_decode {
-        if !should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) && !asset.pixel_format.ends_with("420p") {
+        if !tone_map && !asset.pixel_format.ends_with("420p") {
             filters.push(format!(
                 "scale_qsv={scale}:async_depth=4:mode=hq:format=nv12"
             ));
         } else if should_scale(asset, target_res) {
             filters.push(format!("scale_qsv={scale}:async_depth=4:mode=hq"));
         }
-        if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
+        if tone_map {
             filters.push(tonemap_opencl_qsv_chain(&settings.tonemap));
         }
     } else {
-        if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
+        if tone_map {
             filters.push(tonemapx_filter(&settings.tonemap));
         }
         filters.push("hwupload=extra_hw_frames=64".into());
@@ -572,7 +578,7 @@ fn build_rkmpp_vf(
         return build_cpu_vf(settings, asset, target_res);
     }
 
-    let scale = scale_expression(asset, target_res);
+    let scale = scale_expression(asset, target_res, 2);
     if should_tone_map_i32(settings.tonemap.as_str(), asset.color_transfer) {
         if interfaces.mali {
             return Some(format!(
@@ -607,7 +613,7 @@ fn append_vf(args: &mut Vec<String>, filter: Option<String>) {
     }
 }
 
-fn base_hls_args(seek_seconds: f64, input_path: &str) -> Vec<String> {
+fn base_hls_args(seek_seconds: f64, input_path: &str, input_options: &[String]) -> Vec<String> {
     let mut args = vec![
         "ffmpeg".into(),
         "-hide_banner".into(),
@@ -616,12 +622,83 @@ fn base_hls_args(seek_seconds: f64, input_path: &str) -> Vec<String> {
         "-nostdin".into(),
         "-nostats".into(),
     ];
+    // HW input options must precede -ss/-i (ffmpeg input options).
+    args.extend(input_options.iter().cloned());
     if seek_seconds > 0.0 {
         args.push("-ss".into());
         args.push(format!("{seek_seconds}"));
     }
     args.extend(["-i".into(), input_path.into()]);
     args
+}
+
+fn nvenc_input_options(accel_decode: bool) -> Vec<String> {
+    if accel_decode {
+        vec![
+            "-hwaccel".into(),
+            "cuda".into(),
+            "-hwaccel_output_format".into(),
+            "cuda".into(),
+            "-noautorotate".into(),
+            "-threads".into(),
+            "1".into(),
+        ]
+    } else {
+        vec![
+            "-init_hw_device".into(),
+            "cuda=cuda:0".into(),
+            "-filter_hw_device".into(),
+            "cuda".into(),
+        ]
+    }
+}
+
+fn vaapi_input_options(accel_decode: bool, device: &str) -> Vec<String> {
+    if accel_decode {
+        vec![
+            "-hwaccel".into(),
+            "vaapi".into(),
+            "-hwaccel_output_format".into(),
+            "vaapi".into(),
+            "-noautorotate".into(),
+            "-hwaccel_device".into(),
+            device.into(),
+            "-threads".into(),
+            "1".into(),
+        ]
+    } else {
+        vec![
+            "-init_hw_device".into(),
+            format!("vaapi=accel:{device}"),
+            "-filter_hw_device".into(),
+            "accel".into(),
+        ]
+    }
+}
+
+fn qsv_input_options(accel_decode: bool, device: &str) -> Vec<String> {
+    if accel_decode {
+        vec![
+            "-hwaccel".into(),
+            "qsv".into(),
+            "-hwaccel_output_format".into(),
+            "qsv".into(),
+            "-async_depth".into(),
+            "4".into(),
+            "-noautorotate".into(),
+            "-qsv_device".into(),
+            device.into(),
+            "-threads".into(),
+            "1".into(),
+        ]
+    } else {
+        vec![
+            "-init_hw_device".into(),
+            format!("qsv=hw,child_device={device}"),
+            "-filter_hw_device".into(),
+            "hw".into(),
+        ]
+    }
 }
 
 fn append_output_maps(
@@ -661,14 +738,95 @@ fn append_gop(args: &mut Vec<String>, gop: i32) {
 
 fn append_nvenc_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
     let max_k = variant.bitrate / 1000;
+    let target_k = ((max_k as f64) / 1.45).ceil() as u64;
     args.extend([
         "-cq:v".into(),
         crf.to_string(),
         "-maxrate".into(),
         format!("{max_k}k"),
+        // Nvenc: bufsize is the target (ceil(max/1.45)), not 2*max.
         "-bufsize".into(),
-        format!("{}k", max_k * 2),
+        format!("{target_k}k"),
     ]);
+}
+
+fn append_vaapi_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
+    let max_k = variant.bitrate / 1000;
+    if max_k > 0 {
+        let target_k = ((max_k as f64) / 1.45).ceil() as u64;
+        let min_k = target_k as f64 / 2.0;
+        let min = if min_k.fract() == 0.0 {
+            format!("{}", min_k as u64)
+        } else {
+            format!("{min_k}")
+        };
+        args.extend([
+            "-b:v".into(),
+            format!("{target_k}k"),
+            "-maxrate".into(),
+            format!("{max_k}k"),
+            "-minrate".into(),
+            format!("{min}k"),
+            "-rc_mode".into(),
+            "3".into(),
+        ]);
+    } else {
+        // Default cqMode=auto → CQP for VAAPI.
+        args.extend([
+            "-qp:v".into(),
+            crf.to_string(),
+            "-global_quality:v".into(),
+            crf.to_string(),
+            "-rc_mode".into(),
+            "1".into(),
+        ]);
+    }
+}
+
+fn append_qsv_rate(args: &mut Vec<String>, variant: &HlsVariant, crf: u32) {
+    let max_k = variant.bitrate / 1000;
+    // Default cqMode=auto is not CQP → global_quality + -b:v when max > 0.
+    args.extend(["-global_quality:v".into(), crf.to_string()]);
+    if max_k > 0 {
+        let target_k = ((max_k as f64) / 1.45).ceil() as u64;
+        args.extend([
+            "-b:v".into(),
+            format!("{target_k}k"),
+            "-maxrate".into(),
+            format!("{max_k}k"),
+            "-bufsize".into(),
+            format!("{}k", max_k * 2),
+        ]);
+    }
+}
+
+fn nvenc_preset_flag(preset: &str) -> Option<String> {
+    software_preset_index(preset).map(|index| {
+        let mapped = 7 - index.min(6);
+        format!("p{mapped}")
+    })
+}
+
+fn qsv_vaapi_preset_index(preset: &str) -> Option<u32> {
+    software_preset_index(preset).map(|index| index.min(6) + 1)
+}
+
+fn software_preset_index(preset: &str) -> Option<u32> {
+    const PRESETS: [&str; 9] = [
+        "veryslow",
+        "slower",
+        "slow",
+        "medium",
+        "fast",
+        "faster",
+        "veryfast",
+        "superfast",
+        "ultrafast",
+    ];
+    PRESETS
+        .iter()
+        .position(|value| value.eq_ignore_ascii_case(preset))
+        .map(|index| index as u32)
 }
 
 fn append_rkmpp_level(args: &mut Vec<String>, codec: &str) {
@@ -715,33 +873,6 @@ fn should_scale(asset: &VideoStreamAssetRow, target_res: u32) -> bool {
     min_dim > target_res as i32 || odd
 }
 
-fn append_gop_and_rate(
-    args: &mut Vec<String>,
-    gop: i32,
-    variant: &HlsVariant,
-    preset: &str,
-    crf: u32,
-) {
-    if gop > 0 {
-        args.extend([
-            "-g".into(),
-            gop.to_string(),
-            "-keyint_min".into(),
-            gop.to_string(),
-        ]);
-    }
-    args.extend([
-        "-preset".into(),
-        preset.into(),
-        "-crf".into(),
-        crf.to_string(),
-        "-maxrate".into(),
-        format!("{}k", variant.bitrate / 1000),
-        "-bufsize".into(),
-        format!("{}k", variant.bitrate / 500),
-    ]);
-}
-
 fn append_hls_muxer(
     args: &mut Vec<String>,
     asset: &VideoStreamAssetRow,
@@ -785,14 +916,6 @@ fn append_hls_muxer(
     ]);
 }
 
-fn software_encoder(codec: &str) -> &'static str {
-    match codec {
-        "hevc" => "libx265",
-        "av1" => "libsvtav1",
-        _ => "libx264",
-    }
-}
-
 fn nvenc_encoder(codec: &str) -> &'static str {
     match codec {
         "hevc" => "hevc_nvenc",
@@ -817,21 +940,36 @@ fn qsv_encoder(codec: &str) -> &'static str {
     }
 }
 
-fn scale_expression(asset: &VideoStreamAssetRow, target_res: u32) -> String {
-    let (width, height) = crate::models::db::video_stream::output_size(
+fn scale_expression(asset: &VideoStreamAssetRow, target_res: u32, mult: u32) -> String {
+    // Match BaseConfig.getScaling: vertical → `{target}:-{mult}`, else `-{mult}:{target}`.
+    if crate::models::db::video_stream::is_video_vertical(
         asset.width,
         asset.height,
         asset.orientation,
-        target_res,
-    );
-    format!("{width}:{height}")
+    ) {
+        format!("{target_res}:-{mult}")
+    } else {
+        format!("-{mult}:{target_res}")
+    }
 }
 
 fn build_scale_filter(asset: &VideoStreamAssetRow, target_res: u32) -> Option<String> {
     if !should_scale(asset, target_res) {
         return None;
     }
-    Some(format!("scale={}", scale_expression(asset, target_res)))
+    Some(format!(
+        "scale={}",
+        scale_expression(asset, target_res, 2)
+    ))
+}
+
+fn software_encoder(codec: &str) -> &'static str {
+    // Match BaseConfig.getVideoCodec / AV1Config: short names, except libsvtav1.
+    match codec {
+        "hevc" => "hevc",
+        "av1" => "libsvtav1",
+        _ => "h264",
+    }
 }
 
 #[cfg(test)]
@@ -906,7 +1044,8 @@ mod tests {
         );
         let joined = args.join(" ");
         assert!(joined.contains("tonemapx=tonemap=hable"));
-        assert!(joined.contains("libx264"));
+        assert!(joined.contains("-c:v h264") || joined.contains("h264"));
+        assert!(joined.contains("-sc_threshold:v"));
     }
 
     #[test]
@@ -929,6 +1068,13 @@ mod tests {
         assert!(joined.contains("tonemap_cuda=desat=0"));
         assert!(joined.contains("h264_nvenc"));
         assert!(joined.contains("-cq:v"));
+        // HW input options must precede -i.
+        let hwaccel = args.iter().position(|a| a == "-hwaccel").expect("hwaccel");
+        let input = args.iter().position(|a| a == "-i").expect("-i");
+        assert!(hwaccel < input);
+        assert!(joined.contains("-qmin"));
+        assert!(joined.contains("-rc-lookahead"));
+        assert!(joined.contains("p1")); // ultrafast → p1
     }
 
     #[test]

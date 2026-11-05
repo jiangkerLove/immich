@@ -383,3 +383,5 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 上传 multipart 校验 | 必填时间戳；asset/sidecar 类型与空文件；visibility/UUID/duration | 非法字段返回 400 |
 | 已改 | library exclusion glob | picomatch：`*` 不跨 `/`、`**` 可跨、`dot:true` 匹配点文件；watch/crawl `nobrace` | watcher/crawl 排除与官方一致 |
 | 已改 | HLS muxer `-r` / 音频 | `packetCount*timeBase/totalDuration`；`-ac 2` | 与官方 ffmpeg 参数一致 |
+| 已改 | HLS / 离线 HW 编码 | 输入选项在 `-i` 前；NVENC `-cq/-bufsize=target/p1-p7/-qmin/-rc-lookahead`；VAAPI `-b:v/-rc_mode 3/-compression_level/-idr_interval`；QSV `-global_quality/-b:v/-bf 7/-refs 5`；SW tonemap→upload；scale `-2`/`-1` | 与 `utils/media.ts` HW 类一致 |
+| 已改 | 邮件 footer / preheader / 纯文本 | 商店徽章 + AGPL；隐藏 Preview；自定义模板作 preview；纯文本从整页 HTML 生成 | 与 ImmichLayout / react-email 一致 |
