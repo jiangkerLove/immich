@@ -8,12 +8,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::db::assets;
+use crate::models::db::auth_permission::Permission;
 use crate::models::db::integrity;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::file_response::{FileResponse, file_response};
-use crate::models::db::auth_permission::Permission;
 use crate::utils::permission::{require_admin, require_permission};
 
 pub const INTEGRITY_TYPE_UNTRACKED: &str = "untracked_file";
@@ -146,7 +146,7 @@ impl IntegrityService {
             path: row.path,
             content_type: "application/octet-stream".to_string(),
             file_name: Some(file_name),
-            cache_control: Some("private, no-cache, no-transform".to_string()),
+            cache_control: crate::utils::file_response::CacheControl::PrivateWithoutCache,
             range: None,
         })
         .await

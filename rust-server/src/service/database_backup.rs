@@ -4,11 +4,11 @@ use axum::body::Body;
 use axum::http::Response;
 use serde::{Deserialize, Serialize};
 
+use crate::models::db::auth_permission::Permission;
 use crate::models::dto::auth::AuthDto;
 use crate::models::response::response::ErrorResp;
 use crate::utils::database_backups::is_valid_database_backup_name;
 use crate::utils::file_response::{FileResponse, file_response};
-use crate::models::db::auth_permission::Permission;
 use crate::utils::permission::{require_admin, require_permission};
 use crate::utils::storage::StoragePaths;
 
@@ -159,7 +159,7 @@ impl DatabaseBackupService {
             path: path.to_string_lossy().to_string(),
             content_type: content_type.to_string(),
             file_name: Some(filename.to_string()),
-            cache_control: Some("private, no-cache, no-transform".to_string()),
+            cache_control: crate::utils::file_response::CacheControl::PrivateWithoutCache,
             range: None,
         })
         .await

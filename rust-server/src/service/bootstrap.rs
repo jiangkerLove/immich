@@ -96,10 +96,13 @@ pub async fn run(mode: ServerMode) {
         }
     }
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("server error");
 
     lifecycle::on_shutdown().await;
     tracing::info!("rust-server stopped");

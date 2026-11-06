@@ -280,15 +280,15 @@
 | `maintenance-worker.controller.ts` | 逻辑未对 |
 | `maintenance-worker.service.ts` | 逻辑未对 |
 
-### middleware（7，已读逻辑 2）
+### middleware（7，已读逻辑 4）
 
 | 文件 | 状态 |
 |------|------|
 | `asset-upload.interceptor.ts` | 逻辑部分对（checksum 短路已对） |
 | `auth.guard.ts` | 逻辑部分对（elevated + setup） |
-| `error.interceptor.ts` | 逻辑未对 |
+| `error.interceptor.ts` | 逻辑部分对（非 HTTP → 500；路由级文案仍可再细） |
 | `file-upload.interceptor.ts` | 逻辑未对 |
-| `global-exception.filter.ts` | 逻辑未对 |
+| `global-exception.filter.ts` | 逻辑部分对（message-only + correlation 头） |
 | `logging.interceptor.ts` | 逻辑未对 |
 | `websocket.adapter.ts` | 逻辑未对 |
 
@@ -412,7 +412,7 @@
 | `workflow-execution.service.ts` | 逻辑部分对 |
 | `workflow.service.ts` | 逻辑部分对 |
 
-### utils（32，已读逻辑 10）
+### utils（32，已读逻辑 13）
 
 | 文件 | 状态 |
 |------|------|
@@ -427,18 +427,18 @@
 | `editor.ts` | 逻辑未对 |
 | `event.ts` | 逻辑未对 |
 | `fetch.ts` | 逻辑未对 |
-| `file.ts` | 逻辑未对 |
+| `file.ts` | 逻辑部分对（CacheControl / sendFile 404 / 点文件扩展名） |
 | `logger.ts` | 逻辑未对 |
 | `maintenance.ts` | 逻辑部分对（detectPriorInstall） |
 | `media.ts` | 逻辑部分对（HW 已对） |
-| `mime-types.ts` | 逻辑部分对 |
+| `mime-types.ts` | 逻辑部分对（lookup 含 RAW） |
 | `misc.ts` | 逻辑部分对（离线检测改用 Rust picomatch） |
 | `object.ts` | 逻辑未对 |
 | `pagination.ts` | 逻辑未对 |
 | `preferences.ts` | 逻辑部分对 |
 | `profile-image.ts` | 逻辑未对 |
 | `replace-template-tags.ts` | 逻辑部分对 |
-| `request.ts` | 逻辑未对 |
+| `request.ts` | 逻辑部分对（UA deviceType + trust proxy IP） |
 | `response.ts` | 逻辑部分对（cookie Max-Age） |
 | `search-cursor.ts` | 逻辑未对 |
 | `search-filter.ts` | 逻辑部分对 |
@@ -461,8 +461,8 @@
 
 按文件读函数体，不要只核对有没有这个函数。建议顺序：
 
-1. middleware 错误体（`global-exception.filter` / `error.interceptor`：message-only、correlation 头、勿泄漏 SQL）
-2. `utils/request.ts` 客户端 IP（trust proxy）与 `deviceType` 回退；`utils/file.ts` RAW mime / Cache-Control
-3. `emails/license.email.tsx`（FutoLayout，若启用许可证邮件再对）
-4. DTO `map*` 字段与搜索/同步未读 SQL 边角
+1. `emails/license.email.tsx`（FutoLayout，若启用许可证邮件再对）
+2. DTO `map*` 字段与搜索/同步未读 SQL 边角
+3. `utils/` 剩余：`bytes` / `pagination` / `object` / `profile-image` 编码选项
+4. maintenance worker 其余未读文件；repositories 大批未读 SQL
 

@@ -7,12 +7,34 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
 use crate::models::response::response::ErrorResp;
+use crate::utils::mime_types;
+
+/// Matches `CacheControl` in `server/src/enum.ts` + `utils/file.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheControl {
+    PrivateWithCache,
+    PrivateWithoutCache,
+    /// Omit the Cache-Control header entirely (profile images).
+    None,
+}
+
+impl CacheControl {
+    pub fn header_value(self) -> Option<&'static str> {
+        match self {
+            Self::PrivateWithCache => Some(
+                "private, max-age=86400, no-transform, stale-while-revalidate=2592000, stale-if-error=2592000",
+            ),
+            Self::PrivateWithoutCache => Some("private, no-cache, no-transform"),
+            Self::None => None,
+        }
+    }
+}
 
 pub struct FileResponse {
     pub path: String,
     pub content_type: String,
     pub file_name: Option<String>,
-    pub cache_control: Option<String>,
+    pub cache_control: CacheControl,
     /// Raw `Range` request header value, e.g. `bytes=0-1023`.
     pub range: Option<String>,
 }
@@ -25,18 +47,16 @@ pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorRe
     let content_type = file.content_type;
     let metadata = tokio::fs::metadata(&file.path)
         .await
-        .map_err(|_| ErrorResp::ServerError("Unable to read file".to_string()))?;
+        .map_err(|_| ErrorResp::NotFound("Not Found".to_string()))?;
     let file_len = metadata.len();
-
-    let cache_control = file.cache_control.unwrap_or_else(|| {
-        "private, max-age=86400, no-transform, stale-while-revalidate=2592000, stale-if-error=2592000"
-            .to_string()
-    });
 
     let mut builder = Response::builder()
         .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, cache_control)
         .header(header::ACCEPT_RANGES, "bytes");
+
+    if let Some(cache_control) = file.cache_control.header_value() {
+        builder = builder.header(header::CACHE_CONTROL, cache_control);
+    }
 
     if let Some(name) = file.file_name {
         builder = builder.header(
@@ -66,13 +86,14 @@ pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorRe
         }
 
         let length = end - start + 1;
+        // Headers not yet sent: open/read failures become 404 like TS `sendFile`.
         let mut handle = tokio::fs::File::open(&file.path)
             .await
-            .map_err(|_| ErrorResp::ServerError("Unable to read file".to_string()))?;
+            .map_err(|_| ErrorResp::NotFound("Not Found".to_string()))?;
         handle
             .seek(SeekFrom::Start(start))
             .await
-            .map_err(|_| ErrorResp::ServerError("Unable to read file".to_string()))?;
+            .map_err(|_| ErrorResp::NotFound("Not Found".to_string()))?;
         let limited = handle.take(length);
         let stream = ReaderStream::new(limited);
         let body = Body::from_stream(stream);
@@ -90,7 +111,7 @@ pub async fn file_response(file: FileResponse) -> Result<Response<Body>, ErrorRe
 
     let handle = tokio::fs::File::open(&file.path)
         .await
-        .map_err(|_| ErrorResp::ServerError("Unable to read file".to_string()))?;
+        .map_err(|_| ErrorResp::NotFound("Not Found".to_string()))?;
     let stream = ReaderStream::new(handle);
     let body = Body::from_stream(stream);
 
@@ -119,13 +140,21 @@ fn parse_bytes_range(header: &str) -> Option<(u64, Option<u64>)> {
     Some((start, end))
 }
 
+/// Content-Type from Immich mime map (first type), else `mime_guess`, else octet-stream.
 pub fn guess_mime(path: &str) -> String {
-    mime_guess::from_path(path)
-        .first_or_octet_stream()
-        .to_string()
+    mime_types::lookup(path)
 }
 
 pub fn file_stem(path: &str) -> String {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    // Node `basename(path, extname(path))`: leading-dot names with no second
+    // dot have empty stem (`.jpg` → `""`).
+    if name.starts_with('.') && !name[1..].contains('.') {
+        return String::new();
+    }
     Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -134,6 +163,14 @@ pub fn file_stem(path: &str) -> String {
 }
 
 pub fn file_extension(path: &str) -> String {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    // Node `extname('.gitignore')` is `""`, then Immich returns the whole name.
+    if name.starts_with('.') && !name[1..].contains('.') {
+        return name.to_string();
+    }
     Path::new(path)
         .extension()
         .and_then(|s| s.to_str())
@@ -143,7 +180,7 @@ pub fn file_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_bytes_range;
+    use super::{CacheControl, file_extension, file_stem, parse_bytes_range};
 
     #[test]
     fn parses_open_and_closed_byte_ranges() {
@@ -151,5 +188,26 @@ mod tests {
         assert_eq!(parse_bytes_range("bytes=100-"), Some((100, None)));
         assert_eq!(parse_bytes_range("bytes=0-0,1-2"), Some((0, Some(0))));
         assert_eq!(parse_bytes_range("bytes=-500"), None);
+    }
+
+    #[test]
+    fn cache_control_none_omits_header() {
+        assert!(CacheControl::None.header_value().is_none());
+        assert!(
+            CacheControl::PrivateWithCache
+                .header_value()
+                .unwrap()
+                .contains("max-age=86400")
+        );
+    }
+
+    #[test]
+    fn dotfile_extension_matches_node_extname_helper() {
+        assert_eq!(file_extension(".gitignore"), ".gitignore");
+        assert_eq!(file_stem(".gitignore"), "");
+        assert_eq!(file_extension(".jpg"), ".jpg");
+        assert_eq!(file_stem(".jpg"), "");
+        assert_eq!(file_extension("photo.jpg"), ".jpg");
+        assert_eq!(file_stem("photo.jpg"), "photo");
     }
 }

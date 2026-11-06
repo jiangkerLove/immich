@@ -1,3 +1,4 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
@@ -117,45 +118,68 @@ pub fn handler_err(error_dto: ErrorResp) -> Response {
 
 impl IntoResponse for ErrorResp {
     fn into_response(self) -> Response {
+        // Match GlobalExceptionFilter: body is `{ message }` only (plus `errors`
+        // for Zod). Nest's `error` / `statusCode` are stripped; correlation is a
+        // header, not a body field.
         let (code, body) = match self {
             ErrorResp::Validation(issues) => (
                 StatusCode::BAD_REQUEST,
                 json!({
                     "message": "Validation failed",
                     "errors": issues.iter().map(ConfigIssue::to_json).collect::<Vec<_>>(),
-                })
-                .to_string(),
+                }),
             ),
             other => {
-                let (code, msg, error) = match other {
-                    ErrorResp::Unauthorized(err) => (StatusCode::UNAUTHORIZED, err, "Unauthorized"),
-                    ErrorResp::Forbidden(err) => (StatusCode::FORBIDDEN, err, "Forbidden"),
-                    ErrorResp::BadRequest(err) => (StatusCode::BAD_REQUEST, err, "Bad Request"),
-                    ErrorResp::ReqParamError(err) => (StatusCode::BAD_REQUEST, err, ""),
-                    ErrorResp::DatabaseError(err) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        err.to_string(),
-                        "Internal Server Error",
-                    ),
-                    ErrorResp::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err, ""),
-                    ErrorResp::NotFound(err) => (StatusCode::NOT_FOUND, err, "Not Found"),
-                    ErrorResp::NotImplemented(err) => {
-                        (StatusCode::NOT_IMPLEMENTED, err, "Not Implemented")
+                let (code, msg) = match other {
+                    ErrorResp::Unauthorized(err) => (StatusCode::UNAUTHORIZED, err),
+                    ErrorResp::Forbidden(err) => (StatusCode::FORBIDDEN, err),
+                    ErrorResp::BadRequest(err) => (StatusCode::BAD_REQUEST, err),
+                    ErrorResp::ReqParamError(err) => (StatusCode::BAD_REQUEST, err),
+                    ErrorResp::DatabaseError(err) => {
+                        tracing::error!(error = %err, "database error");
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Internal server error".to_string(),
+                        )
                     }
+                    ErrorResp::ServerError(err) => (StatusCode::INTERNAL_SERVER_ERROR, err),
+                    ErrorResp::NotFound(err) => (StatusCode::NOT_FOUND, err),
+                    ErrorResp::NotImplemented(err) => (StatusCode::NOT_IMPLEMENTED, err),
                     ErrorResp::Validation(_) => unreachable!(),
                 };
-                (
-                    code,
-                    json!({
-                        "message": msg,
-                        "error": error,
-                        "statusCode": code.as_u16(),
-                        "correlationId": "tp700cb8"
-                    })
-                    .to_string(),
-                )
+                (code, json!({ "message": msg }))
             }
         };
-        (code, body).into_response()
+        (code, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ErrorResp;
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn http_errors_are_message_only() {
+        let response = ErrorResp::BadRequest("nope".into()).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, serde_json::json!({ "message": "nope" }));
+    }
+
+    #[tokio::test]
+    async fn database_errors_do_not_leak_sql() {
+        let response =
+            ErrorResp::DatabaseError(sqlx::Error::Protocol("SELECT boom".into())).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({ "message": "Internal server error" })
+        );
     }
 }

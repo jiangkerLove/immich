@@ -214,8 +214,6 @@ fn not_acceptable(path: &str, accept: &str) -> Response {
         )],
         serde_json::json!({
             "message": format!("The route {path} was requested as {accept}, but only returns text/html"),
-            "error": "Not Acceptable",
-            "statusCode": 406,
         })
         .to_string(),
     )

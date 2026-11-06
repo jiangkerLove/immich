@@ -98,11 +98,9 @@ impl AssetFileService {
 
         file_response(FileResponse {
             path: row.path,
-            content_type: mime_guess::from_path(&file_name)
-                .first_or_octet_stream()
-                .to_string(),
+            content_type: crate::utils::mime_types::lookup(&file_name),
             file_name: Some(file_name),
-            cache_control: Some("private".to_string()),
+            cache_control: crate::utils::file_response::CacheControl::PrivateWithCache,
             range: None,
         })
         .await

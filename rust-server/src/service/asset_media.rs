@@ -16,7 +16,7 @@ use crate::service::job::JobService;
 use crate::service::websocket::WebSocketHub;
 use crate::utils::checksum::{decode_checksum, from_checksum, sha1_bytes};
 use crate::utils::file_response::{
-    FileResponse, file_extension, file_response, file_stem, guess_mime,
+    CacheControl, FileResponse, file_extension, file_response, file_stem, guess_mime,
 };
 use crate::utils::storage::StoragePaths;
 
@@ -326,7 +326,7 @@ impl AssetMediaService {
             path,
             content_type: guess_mime(&file_name),
             file_name: Some(file_name),
-            cache_control: None,
+            cache_control: CacheControl::PrivateWithCache,
             range,
         })
         .await
@@ -382,7 +382,7 @@ impl AssetMediaService {
             path,
             content_type: guess_mime(&file_name),
             file_name: Some(file_name),
-            cache_control: None,
+            cache_control: CacheControl::PrivateWithCache,
             range,
         })
         .await
@@ -404,7 +404,7 @@ impl AssetMediaService {
             path: path.clone(),
             content_type: guess_mime(&path),
             file_name: None,
-            cache_control: None,
+            cache_control: CacheControl::PrivateWithCache,
             range,
         })
         .await

@@ -401,3 +401,6 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 库离线检测 | 导入前缀不裁尾 `/`；排除用 picomatch 语义；不写 `updatedAt` | `*` 不再跨目录误标离线 |
 | 已改 | 重复建议 EXIF 计数 | `0`/`false`/`""`/`null` 不计（JS Boolean） | 同分时保留候选与客户端一致 |
 | 已改 | 边车时区 | Luxon 名 `UTC-7`/`UTC+5:30`；无 zone 用本机时区 | 固定偏移照片写得出 DateTimeOriginal |
+| 已改 | 错误响应体 | 仅 `{ message }`（校验另带 `errors`）；DB 错不泄 SQL；`X-Correlation-ID` 头 | 对齐 GlobalExceptionFilter |
+| 已改 | 客户端 IP / 设备 | trust proxy 跳可信跳；`deviceType`=`browser\|\|mobile/tablet\|\|devicemodel` | 对齐 Express + request.ts |
+| 已改 | 文件响应 | Immich mime lookup（含 RAW `image/dng`）；CacheControl None/Private*；读失败 404 | 对齐 mime-types + sendFile |

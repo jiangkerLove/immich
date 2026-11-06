@@ -22,6 +22,24 @@ pub fn setup_allowed() -> bool {
         .unwrap_or(true)
 }
 
+/// `IMMICH_TRUSTED_PROXIES` (comma-separated), defaulting to Immich's
+/// `linklocal,uniquelocal`. `app.common.ts` also always trusts loopback.
+pub fn trusted_proxies() -> Vec<String> {
+    RUNTIME_ENV
+        .get()
+        .and_then(|env| env.immich_trusted_proxies.as_ref())
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .filter(|list: &Vec<String>| !list.is_empty())
+        .unwrap_or_else(|| vec!["linklocal".into(), "uniquelocal".into()])
+}
+
 fn set_runtime_jobs(jobs: &JobService) {
     let _ = RUNTIME_JOBS.set(jobs.clone());
 }

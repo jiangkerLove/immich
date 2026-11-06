@@ -10,7 +10,7 @@ use crate::models::response::response::ErrorResp;
 use crate::models::response::user::{UserAdminResponse, UserResponse};
 use crate::service::db::DbService;
 use crate::service::job::JobService;
-use crate::utils::file_response::{FileResponse, file_response, guess_mime};
+use crate::utils::file_response::{CacheControl, FileResponse, file_response, guess_mime};
 use crate::utils::permission::require_permission;
 use crate::utils::preferences::{merge_preferences, resolve_preferences};
 use crate::utils::profile_image;
@@ -309,7 +309,7 @@ impl UserService {
             path,
             content_type,
             file_name: None,
-            cache_control: Some("no-store".to_string()),
+            cache_control: CacheControl::None,
             range: None,
         })
         .await

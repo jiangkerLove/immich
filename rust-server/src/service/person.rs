@@ -15,7 +15,7 @@ use crate::service::access::require_assets_access;
 use crate::service::album::{BulkIdErrorReason, BulkIdResponse};
 use crate::service::job::JobService;
 use crate::service::media::visibility::asset_dimensions_from_exif;
-use crate::utils::file_response::{FileResponse, file_response, guess_mime};
+use crate::utils::file_response::{CacheControl, FileResponse, file_response, guess_mime};
 use crate::utils::permission::require_permission;
 use crate::utils::query::parse_query_bool;
 use crate::utils::transform::{ImageDimensions, Point, transform_points};
@@ -244,7 +244,7 @@ impl PersonService {
             path,
             content_type: guess_mime(&row.thumbnail_path),
             file_name: None,
-            cache_control: Some("private, no-cache, no-transform".to_string()),
+            cache_control: CacheControl::PrivateWithoutCache,
             range: None,
         })
         .await
