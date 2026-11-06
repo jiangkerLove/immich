@@ -374,7 +374,7 @@ async fn map_memories(
         .flat_map(|ids| ids.iter().copied())
         .collect();
     let asset_rows = assets::get_details_by_ids(pool, &all_asset_ids).await?;
-    let mapped_assets = map_assets(pool, &asset_rows, auth, false).await?;
+    let mapped_assets = map_assets(pool, &asset_rows, auth, false, false).await?;
     let asset_map: HashMap<Uuid, _> = mapped_assets
         .into_iter()
         .map(|asset| (asset.id, asset))
@@ -410,7 +410,7 @@ async fn map_memory(
         .flat_map(|ids| ids.iter().copied())
         .collect();
     let asset_rows = assets::get_details_by_ids(pool, &all_asset_ids).await?;
-    let mapped_assets = map_assets(pool, &asset_rows, auth, false).await?;
+    let mapped_assets = map_assets(pool, &asset_rows, auth, false, false).await?;
     let asset_map: HashMap<Uuid, _> = mapped_assets
         .into_iter()
         .map(|asset| (asset.id, asset))

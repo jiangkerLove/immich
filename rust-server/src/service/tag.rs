@@ -19,8 +19,7 @@ pub struct TagService {
     jobs: JobService,
 }
 
-#[derive(Debug, Serialize, FromRow, Clone)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, FromRow, Clone)]
 pub struct TagResponse {
     pub id: Uuid,
     pub value: String,
@@ -28,6 +27,31 @@ pub struct TagResponse {
     pub updated_at: DateTime<Utc>,
     pub color: Option<String>,
     pub parent_id: Option<Uuid>,
+}
+
+impl TagResponse {
+    pub fn name(&self) -> &str {
+        self.value.rsplit('/').next().unwrap_or(self.value.as_str())
+    }
+}
+
+impl Serialize for TagResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("TagResponse", 6)?;
+        state.serialize_field("id", &self.id)?;
+        if let Some(parent_id) = &self.parent_id {
+            state.serialize_field("parentId", parent_id)?;
+        }
+        state.serialize_field("name", &self.name())?;
+        state.serialize_field("value", &self.value)?;
+        state.serialize_field("createdAt", &self.created_at)?;
+        state.serialize_field("updatedAt", &self.updated_at)?;
+        if let Some(color) = &self.color {
+            state.serialize_field("color", color)?;
+        }
+        state.end()
+    }
 }
 
 #[derive(serde::Deserialize)]

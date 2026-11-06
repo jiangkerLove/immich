@@ -404,3 +404,13 @@ cd rust-server && cargo +stable test --offline --lib
 | 已改 | 错误响应体 | 仅 `{ message }`（校验另带 `errors`）；DB 错不泄 SQL；`X-Correlation-ID` 头 | 对齐 GlobalExceptionFilter |
 | 已改 | 客户端 IP / 设备 | trust proxy 跳可信跳；`deviceType`=`browser\|\|mobile/tablet\|\|devicemodel` | 对齐 Express + request.ts |
 | 已改 | 文件响应 | Immich mime lookup（含 RAW `image/dng`）；CacheControl None/Private*；读失败 404 | 对齐 mime-types + sendFile |
+| 已改 | 共享链接 stripMetadata | 只序列化 10 个安全字段，不含 stack/owner/路径 | 关元数据时不再泄漏 |
+| 已改 | mapExif | 固定字段集；`fileSizeInByte` 0→null；时间戳毫秒 `Z` | 与 exif.dto mapExif 一致 |
+| 已改 | TagResponse.name | 取 `value` 最后一段；null 的 parentId/color 省略 | 与 mapTag 一致 |
+| 已改 | 同步 duration / int8 | duration 为整数；fileSize/quota 同步流用十进制字符串 | 对齐 node-pg 同步 NDJSON |
+| 已改 | AssetEditReadyV2.sequence | 选出并下发 sequence | 客户端按序应用编辑 |
+| 已改 | withStack / originalMimeType / avatarColor | 仅单资源 GET 带 stack；mime lookup；邮箱推算头像色 | 与 mapAsset 选项一致 |
+| 已改 | 搜索 nextPage/nextCursor | 始终输出键，无下一页为 null | 与 mapResponse 一致 |
+| 已改 | OAuth / 共享链接登录 201 | authorize、callback、shared-link login | Nest POST 默认 |
+| 已改 | 维护登录 URL | 用 `externalDomain`，空则 `https://my.immich.app` | 与 getExternalDomain 一致 |
+| 已改 | 同步 User/Person 可空列 | `avatarColor`/`color` 为 Option；`birthDate`→`…T00:00:00.000Z` | 空头像色/人物色不再 panic |

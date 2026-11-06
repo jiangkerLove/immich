@@ -191,13 +191,13 @@ impl StackService {
     ) -> Result<StackResponse, ErrorResp> {
         let asset_ids = stack::list_asset_ids(&self.pool, stack_id).await?;
         let rows = assets::get_details_by_ids(&self.pool, &asset_ids).await?;
-        let mut mapped = map_assets(&self.pool, &rows, auth, false).await?;
+        let mut mapped = map_assets(&self.pool, &rows, auth, false, false).await?;
 
         mapped.sort_by_key(|asset| asset.id != *primary_asset_id);
         if !mapped.iter().any(|asset| asset.id == *primary_asset_id) {
             if let Some(row) = assets::get_detail_by_id(&self.pool, primary_asset_id).await? {
                 let mut single =
-                    map_assets(&self.pool, std::slice::from_ref(&row), auth, false).await?;
+                    map_assets(&self.pool, std::slice::from_ref(&row), auth, false, false).await?;
                 mapped.splice(0..0, single.drain(..));
             }
         }

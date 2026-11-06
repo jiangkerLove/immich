@@ -262,11 +262,20 @@ impl MaintenanceWorkerRuntime {
     }
 
     async fn log_secret(&self, secret: &str) {
-        let host = self.env.immich_host.as_deref().unwrap_or("localhost");
-        let port = self.env.immich_port.unwrap_or(2283);
         if let Ok(jwt) = sign_maintenance_jwt(secret, "immich-admin") {
+            let base = match crate::utils::system_config::get_merged(&self.pool).await {
+                Ok(config) => config
+                    .get("server")
+                    .and_then(|server| server.get("externalDomain"))
+                    .and_then(|domain| domain.as_str())
+                    .filter(|domain| !domain.is_empty())
+                    .unwrap_or("https://my.immich.app")
+                    .trim_end_matches('/')
+                    .to_string(),
+                Err(_) => "https://my.immich.app".to_string(),
+            };
             tracing::info!(
-                "\n\n🚧 Immich is in maintenance mode, you can log in using the following URL:\nhttp://{host}:{port}/maintenance?token={jwt}\n"
+                "\n\n🚧 Immich is in maintenance mode, you can log in using the following URL:\n{base}/maintenance?token={jwt}\n"
             );
         }
     }

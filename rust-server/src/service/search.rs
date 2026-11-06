@@ -729,7 +729,7 @@ impl SearchService {
         }
         let rows = assets::get_details_by_ids(&self.pool, ids).await?;
         let hide_exif = auth.shared_link.as_ref().is_some_and(|sl| !sl.show_exif);
-        map_assets(&self.pool, &rows, auth, hide_exif)
+        map_assets(&self.pool, &rows, auth, hide_exif, false)
             .await
             .map_err(ErrorResp::from)
     }

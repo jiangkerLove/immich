@@ -234,8 +234,14 @@ impl AssetService {
             .as_ref()
             .is_some_and(|link| !link.show_exif);
 
-        let mut responses =
-            map_assets(&self.pool, std::slice::from_ref(&row), auth, strip_metadata).await?;
+        let mut responses = map_assets(
+            &self.pool,
+            std::slice::from_ref(&row),
+            auth,
+            strip_metadata,
+            true,
+        )
+        .await?;
         responses
             .pop()
             .ok_or_else(|| ErrorResp::BadRequest("Asset not found".to_string()))

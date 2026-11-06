@@ -72,7 +72,7 @@ impl DuplicateService {
             }
 
             let rows = assets::get_details_by_ids(&self.pool, &asset_ids).await?;
-            let mapped = map_assets(&self.pool, &rows, auth, false).await?;
+            let mapped = map_assets(&self.pool, &rows, auth, false, false).await?;
             responses.push(DuplicateResponse {
                 duplicate_id: group.duplicate_id,
                 suggested_keep_asset_ids: suggest_duplicate_keep_asset_ids(&mapped),
@@ -213,7 +213,7 @@ impl DuplicateService {
                     };
                 }
             };
-            let mapped = match map_assets(&self.pool, &rows, auth, false).await {
+            let mapped = match map_assets(&self.pool, &rows, auth, false, false).await {
                 Ok(items) => items,
                 Err(_) => {
                     return BulkIdResponse {

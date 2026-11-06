@@ -55,7 +55,8 @@ pub fn respond_with_oauth_state_cookies<T: Serialize>(
     state: &str,
     code_verifier: Option<&str>,
 ) -> Response<Body> {
-    let mut response = json_response(body);
+    // Nest @Post() without @HttpCode → 201.
+    let mut response = json_response_with_status(StatusCode::CREATED, body);
     let headers = response.headers_mut();
     headers.append(
         header::SET_COOKIE,
@@ -126,7 +127,8 @@ pub fn respond_with_auth_cookies<T: Serialize>(
     access_token: &str,
     auth_type: &str,
 ) -> Response<Body> {
-    let mut response = json_response(body);
+    // Nest @Post() without @HttpCode → 201 (login / oauth callback).
+    let mut response = json_response_with_status(StatusCode::CREATED, body);
     let headers = response.headers_mut();
     headers.append(
         header::SET_COOKIE,
@@ -166,7 +168,8 @@ pub fn respond_with_shared_link_cookie<T: Serialize>(
     is_secure: bool,
     token_value: &str,
 ) -> Response<Body> {
-    let mut response = json_response(body);
+    // Nest @Post() without @HttpCode → 201.
+    let mut response = json_response_with_status(StatusCode::CREATED, body);
     response.headers_mut().append(
         header::SET_COOKIE,
         HeaderValue::from_str(&build_cookie(

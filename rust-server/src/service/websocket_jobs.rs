@@ -214,6 +214,7 @@ async fn handle_asset_edit_ready(pool: &PgPool, websocket: &WebSocketHub, asset_
                 asset_id,
                 action: edit.action,
                 parameters: edit.parameters,
+                sequence: edit.sequence,
             })
             .collect(),
     };

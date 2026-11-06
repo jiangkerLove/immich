@@ -508,7 +508,8 @@ impl SharedLinkService {
     ) -> Result<SharedLinkResponse, ErrorResp> {
         let asset_ids = shared_links::list_asset_ids(&self.pool, &row.id, asset_limit).await?;
         let asset_rows = assets::get_details_by_ids(&self.pool, &asset_ids).await?;
-        let mapped_assets = map_assets(&self.pool, &asset_rows, auth, strip_asset_metadata).await?;
+        let mapped_assets =
+            map_assets(&self.pool, &asset_rows, auth, strip_asset_metadata, false).await?;
 
         let album = if let Some(album_id) = row.album_id {
             Some(self.load_album(auth, &album_id).await?)

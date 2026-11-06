@@ -10,9 +10,8 @@ pub struct SearchAssetBucketResponse {
     pub count: i64,
     pub items: Vec<AssetResponse>,
     pub facets: Vec<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always present (JSON `null` when no next page), matching TS `mapResponse`.
     pub next_page: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
 
@@ -87,7 +86,10 @@ pub fn map_person(row: &crate::models::db::person::PersonRow) -> PersonResponse 
         birth_date: row.birth_date.map(|d| d.format("%Y-%m-%d").to_string()),
         thumbnail_path: row.thumbnail_path.clone(),
         is_hidden: row.is_hidden,
-        updated_at: Some(row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        updated_at: Some(
+            row.updated_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        ),
         is_favorite: Some(row.is_favorite),
         color: row.color.clone(),
     }

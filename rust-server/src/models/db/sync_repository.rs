@@ -67,9 +67,10 @@ fn parse_real_text(row: &sqlx::postgres::PgRow, column: &str) -> f64 {
     row.get::<String, _>(column).parse::<f64>().unwrap_or(0.0)
 }
 
+/// node-pg `date` → `Date` → `JSON.stringify` → UTC midnight ISO datetime.
 fn opt_date(v: Option<NaiveDate>) -> Value {
     match v {
-        Some(v) => Value::String(v.to_string()),
+        Some(v) => Value::String(format!("{v}T00:00:00.000Z")),
         None => Value::Null,
     }
 }
@@ -94,7 +95,7 @@ fn map_asset_fields(
     asset_type: String,
     deleted_at: Option<DateTime<Utc>>,
     visibility: String,
-    duration: Option<String>,
+    duration: Option<i32>,
     live_photo_video_id: Option<Uuid>,
     stack_id: Option<Uuid>,
     library_id: Option<Uuid>,
@@ -135,7 +136,10 @@ fn map_asset_exif_upsert(row: &sqlx::postgres::PgRow, update_id_col: &str) -> Sy
             "description": row.get::<Option<String>, _>("description"),
             "exifImageWidth": row.get::<Option<i32>, _>("exifImageWidth"),
             "exifImageHeight": row.get::<Option<i32>, _>("exifImageHeight"),
-            "fileSizeInByte": row.get::<Option<i64>, _>("fileSizeInByte"),
+            // node-pg returns int8 as string on the sync stream.
+            "fileSizeInByte": row
+                .get::<Option<i64>, _>("fileSizeInByte")
+                .map(|n| n.to_string()),
             "orientation": row.get::<Option<String>, _>("orientation"),
             "dateTimeOriginal": opt_dt(row.get("dateTimeOriginal")),
             "modifyDate": opt_dt(row.get("modifyDate")),
@@ -430,7 +434,7 @@ fn map_user_data(row: &sqlx::postgres::PgRow) -> Value {
         "id": row.get::<Uuid, _>("id"),
         "name": row.get::<String, _>("name"),
         "email": row.get::<String, _>("email"),
-        "avatarColor": row.get::<String, _>("avatarColor"),
+        "avatarColor": row.get::<Option<String>, _>("avatarColor"),
         "deletedAt": opt_dt(row.get("deletedAt")),
         "profileImagePath": row.get::<Option<String>, _>("profileImagePath"),
         "profileChangedAt": opt_dt(row.get("profileChangedAt")),
@@ -1952,7 +1956,7 @@ pub async fn auth_user_get_upserts(
                 "id": row.get::<Uuid, _>("id"),
                 "name": row.get::<String, _>("name"),
                 "email": row.get::<String, _>("email"),
-                "avatarColor": row.get::<String, _>("avatarColor"),
+                "avatarColor": row.get::<Option<String>, _>("avatarColor"),
                 "deletedAt": opt_dt(row.get("deletedAt")),
                 "profileImagePath": row.get::<Option<String>, _>("profileImagePath"),
                 "profileChangedAt": opt_dt(row.get("profileChangedAt")),
@@ -1960,8 +1964,10 @@ pub async fn auth_user_get_upserts(
                 "pinCode": row.get::<Option<String>, _>("pinCode"),
                 "oauthId": row.get::<Option<String>, _>("oauthId"),
                 "storageLabel": row.get::<Option<String>, _>("storageLabel"),
-                "quotaSizeInBytes": row.get::<Option<i64>, _>("quotaSizeInBytes"),
-                "quotaUsageInBytes": row.get::<i64, _>("quotaUsageInBytes"),
+                "quotaSizeInBytes": row
+                    .get::<Option<i64>, _>("quotaSizeInBytes")
+                    .map(|n| n.to_string()),
+                "quotaUsageInBytes": row.get::<i64, _>("quotaUsageInBytes").to_string(),
             }),
         })
         .collect())
@@ -2959,7 +2965,7 @@ pub async fn person_get_upserts(
                 "birthDate": opt_date(row.get("birthDate")),
                 "isHidden": row.get::<bool, _>("isHidden"),
                 "isFavorite": row.get::<bool, _>("isFavorite"),
-                "color": row.get::<String, _>("color"),
+                "color": row.get::<Option<String>, _>("color"),
                 "faceAssetId": row.get::<Option<Uuid>, _>("faceAssetId"),
             }),
         })

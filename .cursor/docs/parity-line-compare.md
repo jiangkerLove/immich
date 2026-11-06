@@ -459,10 +459,10 @@
 
 ## 下次从这里继续
 
-按文件读函数体，不要只核对有没有这个函数。建议顺序：
+高影响 DTO/map/同步边角本批已对。剩余多为低优先级或需真库：
 
-1. `emails/license.email.tsx`（FutoLayout，若启用许可证邮件再对）
-2. DTO `map*` 字段与搜索/同步未读 SQL 边角
-3. `utils/` 剩余：`bytes` / `pagination` / `object` / `profile-image` 编码选项
-4. maintenance worker 其余未读文件；repositories 大批未读 SQL
+1. `profile-image` 色彩空间 / progressive / WebP quality（头像字节差异）
+2. repositories 大批未读 SQL（真库对比 Search/Sync/P4）
+3. `emails/license.email.tsx`（两端均未发送，可跳过）
+4. Cutover C1–C3（compose 冒烟 / schema 锁定 / AppRestart）
 

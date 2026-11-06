@@ -344,6 +344,7 @@ impl ThumbnailService {
                 "width": crop.width,
                 "height": crop.height,
             }),
+            sequence: 0,
         };
         let cropped = apply_edits(oriented, &[crop_edit]);
 

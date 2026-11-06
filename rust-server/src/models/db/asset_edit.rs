@@ -7,6 +7,7 @@ pub struct AssetEditRow {
     pub id: Uuid,
     pub action: String,
     pub parameters: Value,
+    pub sequence: i32,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -52,7 +53,7 @@ pub async fn list_by_asset(
 ) -> Result<Vec<AssetEditRow>, sqlx::Error> {
     sqlx::query_as::<_, AssetEditRow>(
         r#"
-            SELECT id, action, parameters
+            SELECT id, action, parameters, sequence
             FROM asset_edit
             WHERE "assetId" = $1
             ORDER BY sequence ASC
@@ -80,7 +81,7 @@ pub async fn replace_all(
             r#"
                 INSERT INTO asset_edit ("assetId", action, parameters, sequence)
                 VALUES ($1, $2, $3, $4)
-                RETURNING id, action, parameters
+                RETURNING id, action, parameters, sequence
             "#,
         )
         .bind(asset_id)

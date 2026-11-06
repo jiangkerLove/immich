@@ -50,10 +50,7 @@ impl From<&AssetDetailRow> for SyncAssetV2 {
             id: row.id,
             owner_id: row.owner_id,
             original_file_name: row.original_file_name.clone(),
-            thumbhash: row
-                .thumbhash
-                .as_deref()
-                .map(hex_or_buffer_to_base64),
+            thumbhash: row.thumbhash.as_deref().map(hex_or_buffer_to_base64),
             checksum: hex_or_buffer_to_base64(&row.checksum),
             file_created_at: format_dt(&row.file_created_at),
             file_modified_at: format_dt(&row.file_modified_at),
@@ -152,6 +149,7 @@ pub struct SyncAssetEditV1 {
     pub asset_id: Uuid,
     pub action: String,
     pub parameters: Value,
+    pub sequence: i32,
 }
 
 #[derive(Debug, Serialize)]
